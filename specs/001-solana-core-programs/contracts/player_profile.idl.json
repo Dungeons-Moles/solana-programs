@@ -1,0 +1,252 @@
+{
+  "version": "0.1.0",
+  "name": "player_profile",
+  "docs": ["Player Profile Program for Dungeons & Moles"],
+  "instructions": [
+    {
+      "name": "initializeProfile",
+      "docs": ["Creates a new player profile for the signer's wallet"],
+      "accounts": [
+        {
+          "name": "playerProfile",
+          "isMut": true,
+          "isSigner": false,
+          "docs": ["The player profile PDA to initialize"]
+        },
+        {
+          "name": "owner",
+          "isMut": true,
+          "isSigner": true,
+          "docs": ["The wallet owner who will own this profile"]
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false,
+          "docs": ["System program for account creation"]
+        }
+      ],
+      "args": [
+        {
+          "name": "name",
+          "type": "string",
+          "docs": ["Display name for the player (max 32 chars)"]
+        }
+      ]
+    },
+    {
+      "name": "updateProfileName",
+      "docs": ["Updates the display name of an existing profile"],
+      "accounts": [
+        {
+          "name": "playerProfile",
+          "isMut": true,
+          "isSigner": false,
+          "docs": ["The player profile to update"]
+        },
+        {
+          "name": "owner",
+          "isMut": false,
+          "isSigner": true,
+          "docs": ["The profile owner (must be signer)"]
+        }
+      ],
+      "args": [
+        {
+          "name": "name",
+          "type": "string",
+          "docs": ["New display name (max 32 chars)"]
+        }
+      ]
+    },
+    {
+      "name": "unlockCampaignTier",
+      "docs": ["Pays 0.05 SOL to unlock the next 40 campaign levels"],
+      "accounts": [
+        {
+          "name": "playerProfile",
+          "isMut": true,
+          "isSigner": false,
+          "docs": ["The player profile to upgrade"]
+        },
+        {
+          "name": "owner",
+          "isMut": true,
+          "isSigner": true,
+          "docs": ["The profile owner paying for the unlock"]
+        },
+        {
+          "name": "treasury",
+          "isMut": true,
+          "isSigner": false,
+          "docs": ["Treasury account to receive payment"]
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false,
+          "docs": ["System program for SOL transfer"]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "recordRunResult",
+      "docs": ["Records the result of a completed dungeon run"],
+      "accounts": [
+        {
+          "name": "playerProfile",
+          "isMut": true,
+          "isSigner": false,
+          "docs": ["The player profile to update"]
+        },
+        {
+          "name": "owner",
+          "isMut": false,
+          "isSigner": true,
+          "docs": ["The profile owner (must be signer)"]
+        }
+      ],
+      "args": [
+        {
+          "name": "levelReached",
+          "type": "u8",
+          "docs": ["The campaign level reached in this run"]
+        },
+        {
+          "name": "victory",
+          "type": "bool",
+          "docs": ["Whether the player won (defeated the boss)"]
+        }
+      ]
+    },
+    {
+      "name": "initializeTreasury",
+      "docs": ["Initializes the treasury account (admin only, one-time)"],
+      "accounts": [
+        {
+          "name": "treasury",
+          "isMut": true,
+          "isSigner": false,
+          "docs": ["The treasury PDA to initialize"]
+        },
+        {
+          "name": "admin",
+          "isMut": true,
+          "isSigner": true,
+          "docs": ["The admin who will control the treasury"]
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false,
+          "docs": ["System program for account creation"]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "withdrawTreasury",
+      "docs": ["Withdraws SOL from the treasury (admin only)"],
+      "accounts": [
+        {
+          "name": "treasury",
+          "isMut": true,
+          "isSigner": false,
+          "docs": ["The treasury PDA"]
+        },
+        {
+          "name": "admin",
+          "isMut": true,
+          "isSigner": true,
+          "docs": ["The treasury admin"]
+        },
+        {
+          "name": "recipient",
+          "isMut": true,
+          "isSigner": false,
+          "docs": ["Account to receive withdrawn funds"]
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false,
+          "docs": ["System program for SOL transfer"]
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64",
+          "docs": ["Amount of lamports to withdraw"]
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "PlayerProfile",
+      "docs": ["Stores player identity and progression data"],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "owner", "type": "publicKey", "docs": ["Wallet that owns this profile"] },
+          { "name": "name", "type": "string", "docs": ["Display name (max 32 chars)"] },
+          { "name": "totalRuns", "type": "u32", "docs": ["Total dungeon runs completed"] },
+          { "name": "currentLevel", "type": "u8", "docs": ["Current campaign level (0-80+)"] },
+          { "name": "unlockedTier", "type": "u8", "docs": ["Highest tier unlocked (0=free)"] },
+          { "name": "createdAt", "type": "i64", "docs": ["Unix timestamp of creation"] },
+          { "name": "bump", "type": "u8", "docs": ["PDA bump seed"] }
+        ]
+      }
+    },
+    {
+      "name": "Treasury",
+      "docs": ["Holds collected SOL from tier unlocks"],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "admin", "type": "publicKey", "docs": ["Withdrawal authority"] },
+          { "name": "totalCollected", "type": "u64", "docs": ["Total SOL collected"] },
+          { "name": "bump", "type": "u8", "docs": ["PDA bump seed"] }
+        ]
+      }
+    }
+  ],
+  "events": [
+    {
+      "name": "ProfileCreated",
+      "fields": [
+        { "name": "owner", "type": "publicKey", "index": true },
+        { "name": "timestamp", "type": "i64", "index": false }
+      ]
+    },
+    {
+      "name": "TierUnlocked",
+      "fields": [
+        { "name": "owner", "type": "publicKey", "index": true },
+        { "name": "tier", "type": "u8", "index": false },
+        { "name": "amountPaid", "type": "u64", "index": false },
+        { "name": "timestamp", "type": "i64", "index": false }
+      ]
+    },
+    {
+      "name": "RunCompleted",
+      "fields": [
+        { "name": "owner", "type": "publicKey", "index": true },
+        { "name": "totalRuns", "type": "u32", "index": false },
+        { "name": "levelReached", "type": "u8", "index": false },
+        { "name": "victory", "type": "bool", "index": false },
+        { "name": "timestamp", "type": "i64", "index": false }
+      ]
+    }
+  ],
+  "errors": [
+    { "code": 6000, "name": "ProfileAlreadyExists", "msg": "Player profile already exists for this wallet" },
+    { "code": 6001, "name": "NameTooLong", "msg": "Display name exceeds 32 character limit" },
+    { "code": 6002, "name": "TierNotReached", "msg": "Must complete current tier before unlocking next" },
+    { "code": 6003, "name": "InsufficientFunds", "msg": "Insufficient SOL balance for tier unlock" },
+    { "code": 6004, "name": "Unauthorized", "msg": "Signer is not the profile owner" },
+    { "code": 6005, "name": "InvalidLevel", "msg": "Level exceeds unlocked tier maximum" }
+  ]
+}

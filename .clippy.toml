@@ -1,0 +1,5 @@
+# Clippy configuration for Solana/Anchor programs
+# See: https://rust-lang.github.io/rust-clippy/
+
+# No configuration needed - using defaults
+# Lints are configured per-file using #[allow(...)] and #[deny(...)] attributes

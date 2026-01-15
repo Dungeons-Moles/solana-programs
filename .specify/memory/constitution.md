@@ -1,50 +1,110 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+<!--
+Sync Impact Report
+==================
+Version change: 0.0.0 → 1.0.0
+Added sections:
+  - I. Security-First
+  - II. Test-Driven Development
+  - III. Program Composability
+  - IV. Anchor Framework
+  - V. MagicBlock Ephemeral Rollups
+  - Security & Verification Standards
+  - Development Workflow
+  - Governance
+Templates requiring updates:
+  - .specify/templates/plan-template.md ✅ (no changes needed - generic)
+  - .specify/templates/spec-template.md ✅ (no changes needed - generic)
+  - .specify/templates/tasks-template.md ✅ (no changes needed - generic)
+Follow-up TODOs: None
+-->
+
+# Solana Programs Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Security-First
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+All Solana programs MUST be developed with security as the primary concern. This is non-negotiable for on-chain code handling user assets.
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+- All programs MUST pass security review before deployment
+- All account validation MUST use Anchor's constraint system (`#[account(...)]`)
+- All arithmetic MUST use checked operations or explicitly handle overflow
+- All PDAs MUST have deterministic, collision-resistant seeds
+- Signer and ownership checks MUST be explicit and documented
+- No unsafe Rust operations in program code
+- All external CPI calls MUST validate the target program ID
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+### II. Test-Driven Development
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+Tests MUST be written before implementation. Red-Green-Refactor cycle is strictly enforced.
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+- Tests MUST be written and fail before implementation begins
+- Unit tests MUST cover all instruction handlers
+- Integration tests MUST cover all user flows using Bankrun or similar local validator
+- Test coverage MUST reach minimum 80% for all programs
+- Tests MUST include edge cases: invalid accounts, unauthorized signers, arithmetic boundaries
+- Fuzz testing SHOULD be applied to complex logic
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+### III. Program Composability
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+Programs MUST be designed for composability with the broader Solana ecosystem.
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+- All programs MUST expose a clean IDL via Anchor
+- CPIs (Cross-Program Invocations) MUST use typed CpiContext where possible
+- Account structures MUST be documented with clear serialization format
+- Programs MUST NOT assume exclusive ownership of shared resources
+- Event emission MUST follow standard patterns for indexer compatibility
+
+### IV. Anchor Framework
+
+Anchor MUST be used for all program development to ensure type safety and security.
+
+- All programs MUST use Anchor framework (latest stable version)
+- Account validation MUST use Anchor constraints, not manual checks
+- Error handling MUST use custom Anchor error enums with descriptive messages
+- IDL MUST be generated and version-controlled
+- Anchor's `declare_id!` MUST match deployed program addresses
+
+### V. MagicBlock Ephemeral Rollups
+
+Programs MUST support MagicBlock's Ephemeral Rollup infrastructure for high-performance gaming sessions.
+
+- Game session programs MUST be compatible with ephemeral rollup delegation
+- State MUST be designed for efficient delegation and undelegation
+- Programs MUST handle the ephemeral → permanent state commit pattern
+- Session-scoped state MUST be clearly separated from persistent state
+- Programs MUST validate delegation authority correctly
+
+## Security & Verification Standards
+
+Programs handling critical game logic or player assets MUST meet enhanced verification standards.
+
+- Critical arithmetic logic SHOULD be formally verifiable where tooling permits
+- All programs MUST pass `cargo clippy` with no warnings
+- All programs MUST pass `cargo audit` with no known vulnerabilities
+- Upgrade authority MUST be documented and follow multisig or DAO governance
+- State migration paths MUST be defined before any upgrade
+- Breaking changes MUST include migration instructions and backward compatibility period
+
+## Development Workflow
+
+All development MUST follow a structured workflow ensuring quality and traceability.
+
+- All changes MUST go through pull request review
+- PRs MUST include test coverage for new functionality
+- PRs MUST pass all CI checks: build, test, lint, audit
+- Documentation MUST be updated alongside code changes
+- All instructions MUST have IDL documentation describing purpose, accounts, and behavior
+- Usage examples MUST be provided for complex instructions
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+This constitution supersedes all other development practices for the Solana programs repository.
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+- Amendments require documented rationale, team review, and migration plan
+- All PRs and code reviews MUST verify compliance with these principles
+- Exceptions MUST be documented in code with explicit justification
+- Version changes follow semantic versioning: MAJOR for breaking changes, MINOR for new features, PATCH for fixes
+- Runtime development guidance is maintained in `CLAUDE.md` at repository root
+
+**Version**: 1.0.0 | **Ratified**: 2025-01-15 | **Last Amended**: 2025-01-15

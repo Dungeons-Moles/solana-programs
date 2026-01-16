@@ -1,0 +1,49 @@
+# Rust build artifacts
+target/
+debug/
+release/
+*.rs.bk
+*.rlib
+
+# Anchor build artifacts
+.anchor/
+*.so
+
+# Node.js dependencies
+node_modules/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
+
+# Test outputs
+coverage/
+.nyc_output/
+
+# Keypairs (never commit!)
+*.json
+!package.json
+!tsconfig.json
+!Anchor.toml
+
+# Allow spec files
+!specs/**/*.json
+
+# Temp files
+*.tmp
+*.temp

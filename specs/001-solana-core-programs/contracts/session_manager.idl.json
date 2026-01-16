@@ -1,0 +1,309 @@
+{
+  "version": "0.1.0",
+  "name": "session_manager",
+  "docs": ["Session Manager Program for MagicBlock Ephemeral Rollup integration"],
+  "instructions": [
+    {
+      "name": "startSession",
+      "docs": ["Starts a new game session for the player"],
+      "accounts": [
+        {
+          "name": "gameSession",
+          "isMut": true,
+          "isSigner": false,
+          "docs": ["The session PDA to initialize"]
+        },
+        {
+          "name": "sessionCounter",
+          "isMut": true,
+          "isSigner": false,
+          "docs": ["Global session counter for unique IDs"]
+        },
+        {
+          "name": "playerProfile",
+          "isMut": false,
+          "isSigner": false,
+          "docs": ["Player's profile (must exist)"]
+        },
+        {
+          "name": "player",
+          "isMut": true,
+          "isSigner": true,
+          "docs": ["The player starting the session"]
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false,
+          "docs": ["System program for account creation"]
+        }
+      ],
+      "args": [
+        {
+          "name": "campaignLevel",
+          "type": "u8",
+          "docs": ["The campaign level to play"]
+        }
+      ]
+    },
+    {
+      "name": "delegateSession",
+      "docs": ["Delegates the session state to MagicBlock ephemeral rollup"],
+      "accounts": [
+        {
+          "name": "gameSession",
+          "isMut": true,
+          "isSigner": false,
+          "docs": ["The session to delegate"]
+        },
+        {
+          "name": "player",
+          "isMut": true,
+          "isSigner": true,
+          "docs": ["The session owner"]
+        },
+        {
+          "name": "ownerProgram",
+          "isMut": false,
+          "isSigner": false,
+          "docs": ["This program (owner of the PDA)"]
+        },
+        {
+          "name": "delegationBuffer",
+          "isMut": true,
+          "isSigner": false,
+          "docs": ["MagicBlock delegation buffer"]
+        },
+        {
+          "name": "delegationRecord",
+          "isMut": true,
+          "isSigner": false,
+          "docs": ["MagicBlock delegation record"]
+        },
+        {
+          "name": "delegationMetadata",
+          "isMut": true,
+          "isSigner": false,
+          "docs": ["MagicBlock delegation metadata"]
+        },
+        {
+          "name": "delegationProgram",
+          "isMut": false,
+          "isSigner": false,
+          "docs": ["MagicBlock delegation program"]
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false,
+          "docs": ["System program"]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "commitSession",
+      "docs": ["Commits current session state from ephemeral rollup (keeps delegated)"],
+      "accounts": [
+        {
+          "name": "gameSession",
+          "isMut": true,
+          "isSigner": false,
+          "docs": ["The session to commit"]
+        },
+        {
+          "name": "player",
+          "isMut": true,
+          "isSigner": true,
+          "docs": ["The session owner"]
+        },
+        {
+          "name": "magicContext",
+          "isMut": true,
+          "isSigner": false,
+          "docs": ["MagicBlock context account"]
+        },
+        {
+          "name": "magicProgram",
+          "isMut": false,
+          "isSigner": false,
+          "docs": ["MagicBlock program"]
+        }
+      ],
+      "args": [
+        {
+          "name": "stateHash",
+          "type": { "array": ["u8", 32] },
+          "docs": ["Hash of the current game state"]
+        }
+      ]
+    },
+    {
+      "name": "endSession",
+      "docs": ["Ends the session, undelegates from rollup, and closes account"],
+      "accounts": [
+        {
+          "name": "gameSession",
+          "isMut": true,
+          "isSigner": false,
+          "docs": ["The session to end"]
+        },
+        {
+          "name": "player",
+          "isMut": true,
+          "isSigner": true,
+          "docs": ["The session owner (receives rent refund)"]
+        },
+        {
+          "name": "magicContext",
+          "isMut": true,
+          "isSigner": false,
+          "docs": ["MagicBlock context account"]
+        },
+        {
+          "name": "magicProgram",
+          "isMut": false,
+          "isSigner": false,
+          "docs": ["MagicBlock program"]
+        }
+      ],
+      "args": [
+        {
+          "name": "finalStateHash",
+          "type": { "array": ["u8", 32] },
+          "docs": ["Final hash of the game state"]
+        }
+      ]
+    },
+    {
+      "name": "forceCloseSession",
+      "docs": ["Force closes a timed-out session (anyone can call after 1 hour idle)"],
+      "accounts": [
+        {
+          "name": "gameSession",
+          "isMut": true,
+          "isSigner": false,
+          "docs": ["The session to force close"]
+        },
+        {
+          "name": "player",
+          "isMut": true,
+          "isSigner": false,
+          "docs": ["The session owner (receives rent refund)"]
+        },
+        {
+          "name": "caller",
+          "isMut": false,
+          "isSigner": true,
+          "docs": ["Anyone can call this if session is timed out"]
+        },
+        {
+          "name": "magicContext",
+          "isMut": true,
+          "isSigner": false,
+          "docs": ["MagicBlock context account"]
+        },
+        {
+          "name": "magicProgram",
+          "isMut": false,
+          "isSigner": false,
+          "docs": ["MagicBlock program"]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "initializeCounter",
+      "docs": ["Initializes the global session counter (one-time setup)"],
+      "accounts": [
+        {
+          "name": "sessionCounter",
+          "isMut": true,
+          "isSigner": false,
+          "docs": ["The counter PDA to initialize"]
+        },
+        {
+          "name": "admin",
+          "isMut": true,
+          "isSigner": true,
+          "docs": ["Admin initializing the counter"]
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false,
+          "docs": ["System program"]
+        }
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "GameSession",
+      "docs": ["Represents an active game session"],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "player", "type": "publicKey", "docs": ["Player wallet address"] },
+          { "name": "sessionId", "type": "u64", "docs": ["Unique session identifier"] },
+          { "name": "campaignLevel", "type": "u8", "docs": ["Campaign level being played"] },
+          { "name": "startedAt", "type": "i64", "docs": ["Session start timestamp"] },
+          { "name": "lastActivity", "type": "i64", "docs": ["Last activity timestamp"] },
+          { "name": "isDelegated", "type": "bool", "docs": ["Whether delegated to rollup"] },
+          { "name": "stateHash", "type": { "array": ["u8", 32] }, "docs": ["Current state hash"] },
+          { "name": "bump", "type": "u8", "docs": ["PDA bump seed"] }
+        ]
+      }
+    },
+    {
+      "name": "SessionCounter",
+      "docs": ["Global counter for unique session IDs"],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "count", "type": "u64", "docs": ["Current counter value"] },
+          { "name": "bump", "type": "u8", "docs": ["PDA bump seed"] }
+        ]
+      }
+    }
+  ],
+  "events": [
+    {
+      "name": "SessionStarted",
+      "fields": [
+        { "name": "player", "type": "publicKey", "index": true },
+        { "name": "sessionId", "type": "u64", "index": true },
+        { "name": "campaignLevel", "type": "u8", "index": false },
+        { "name": "timestamp", "type": "i64", "index": false }
+      ]
+    },
+    {
+      "name": "SessionDelegated",
+      "fields": [
+        { "name": "player", "type": "publicKey", "index": true },
+        { "name": "sessionId", "type": "u64", "index": true },
+        { "name": "timestamp", "type": "i64", "index": false }
+      ]
+    },
+    {
+      "name": "SessionEnded",
+      "fields": [
+        { "name": "player", "type": "publicKey", "index": true },
+        { "name": "sessionId", "type": "u64", "index": true },
+        { "name": "finalStateHash", "type": { "array": ["u8", 32] }, "index": false },
+        { "name": "timestamp", "type": "i64", "index": false }
+      ]
+    }
+  ],
+  "errors": [
+    { "code": 6000, "name": "SessionAlreadyActive", "msg": "Player already has an active session" },
+    { "code": 6001, "name": "SessionNotFound", "msg": "No active session found for player" },
+    { "code": 6002, "name": "SessionNotDelegated", "msg": "Session must be delegated first" },
+    { "code": 6003, "name": "SessionAlreadyDelegated", "msg": "Session is already delegated" },
+    { "code": 6004, "name": "SessionNotTimedOut", "msg": "Session has not timed out yet" },
+    { "code": 6005, "name": "Unauthorized", "msg": "Signer is not the session owner" },
+    { "code": 6006, "name": "InvalidCampaignLevel", "msg": "Campaign level exceeds player's unlocked tier" },
+    { "code": 6007, "name": "ProfileNotFound", "msg": "Player profile does not exist" }
+  ]
+}

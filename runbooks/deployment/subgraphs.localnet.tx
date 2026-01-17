@@ -1,0 +1,27 @@
+
+action "session_manager_session_delegated" "svm::deploy_subgraph" {
+    program_id = action.deploy_session_manager.program_id
+    program_idl = action.deploy_session_manager.program_idl
+    block_height = 0 // action.deploy_session_manager.block_height
+    event {
+        name = "SessionDelegated"
+    }
+}
+
+action "session_manager_session_ended" "svm::deploy_subgraph" {
+    program_id = action.deploy_session_manager.program_id
+    program_idl = action.deploy_session_manager.program_idl
+    block_height = 0 // action.deploy_session_manager.block_height
+    event {
+        name = "SessionEnded"
+    }
+}
+
+action "session_manager_session_started" "svm::deploy_subgraph" {
+    program_id = action.deploy_session_manager.program_id
+    program_idl = action.deploy_session_manager.program_idl
+    block_height = 0 // action.deploy_session_manager.block_height
+    event {
+        name = "SessionStarted"
+    }
+}

@@ -18,8 +18,8 @@ pub struct PlayerProfile {
     /// Current campaign level (0-80+)
     pub current_level: u8,
 
-    /// Highest tier unlocked (0=free tier, 1=first paid tier, etc.)
-    pub unlocked_tier: u8,
+    /// Remaining available dungeon runs
+    pub available_runs: u32,
 
     /// Unix timestamp of profile creation
     pub created_at: i64,
@@ -31,24 +31,4 @@ pub struct PlayerProfile {
 impl PlayerProfile {
     /// Seed prefix for PDA derivation
     pub const SEED_PREFIX: &'static [u8] = b"player";
-}
-
-/// Treasury account holding collected SOL from tier unlocks.
-/// PDA Seeds: [b"treasury"]
-#[account]
-#[derive(InitSpace)]
-pub struct Treasury {
-    /// Authority that can withdraw funds
-    pub admin: Pubkey,
-
-    /// Total SOL collected (in lamports)
-    pub total_collected: u64,
-
-    /// PDA bump seed
-    pub bump: u8,
-}
-
-impl Treasury {
-    /// Seed prefix for PDA derivation
-    pub const SEED_PREFIX: &'static [u8] = b"treasury";
 }

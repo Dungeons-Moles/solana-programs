@@ -15,7 +15,7 @@ describe("session-manager", () => {
   const getSessionPDA = (player: anchor.web3.PublicKey) => {
     return anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("session"), player.toBuffer()],
-      program.programId
+      program.programId,
     );
   };
 
@@ -23,7 +23,7 @@ describe("session-manager", () => {
   const getCounterPDA = () => {
     return anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("session_counter")],
-      program.programId
+      program.programId,
     );
   };
 
@@ -40,7 +40,7 @@ describe("session-manager", () => {
           sessionCounter: counterPDA,
           admin: admin.publicKey,
           systemProgram: SystemProgram.programId,
-        })
+        } as any)
         .rpc();
     } catch (error: any) {
       // Counter might already exist from previous test run
@@ -62,7 +62,7 @@ describe("session-manager", () => {
             sessionCounter: counterPDA,
             admin: admin.publicKey,
             systemProgram: SystemProgram.programId,
-          })
+          } as any)
           .rpc();
 
         const counter = await program.account.sessionCounter.fetch(counterPDA);
@@ -87,7 +87,7 @@ describe("session-manager", () => {
       // Airdrop SOL
       const airdropSig = await provider.connection.requestAirdrop(
         user.publicKey,
-        2 * LAMPORTS_PER_SOL
+        2 * LAMPORTS_PER_SOL,
       );
       await provider.connection.confirmTransaction(airdropSig);
 
@@ -100,7 +100,7 @@ describe("session-manager", () => {
           sessionCounter: counterPDA,
           player: user.publicKey,
           systemProgram: SystemProgram.programId,
-        })
+        } as any)
         .signers([user])
         .rpc();
 
@@ -118,7 +118,7 @@ describe("session-manager", () => {
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
-        })
+        } as any)
         .signers([user])
         .rpc();
     });
@@ -133,7 +133,7 @@ describe("session-manager", () => {
       // Airdrop SOL
       const airdropSig = await provider.connection.requestAirdrop(
         user.publicKey,
-        2 * LAMPORTS_PER_SOL
+        2 * LAMPORTS_PER_SOL,
       );
       await provider.connection.confirmTransaction(airdropSig);
 
@@ -147,7 +147,7 @@ describe("session-manager", () => {
           sessionCounter: counterPDA,
           player: user.publicKey,
           systemProgram: SystemProgram.programId,
-        })
+        } as any)
         .signers([user])
         .rpc();
 
@@ -160,7 +160,7 @@ describe("session-manager", () => {
             sessionCounter: counterPDA,
             player: user.publicKey,
             systemProgram: SystemProgram.programId,
-          })
+          } as any)
           .signers([user])
           .rpc();
         expect.fail("Should have thrown an error");
@@ -175,7 +175,7 @@ describe("session-manager", () => {
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
-        })
+        } as any)
         .signers([user])
         .rpc();
     });
@@ -190,7 +190,7 @@ describe("session-manager", () => {
       // Airdrop SOL
       const airdropSig = await provider.connection.requestAirdrop(
         user.publicKey,
-        2 * LAMPORTS_PER_SOL
+        2 * LAMPORTS_PER_SOL,
       );
       await provider.connection.confirmTransaction(airdropSig);
 
@@ -204,7 +204,7 @@ describe("session-manager", () => {
           sessionCounter: counterPDA,
           player: user.publicKey,
           systemProgram: SystemProgram.programId,
-        })
+        } as any)
         .signers([user])
         .rpc();
 
@@ -214,7 +214,7 @@ describe("session-manager", () => {
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
-        })
+        } as any)
         .signers([user])
         .rpc();
 
@@ -227,7 +227,7 @@ describe("session-manager", () => {
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
-        })
+        } as any)
         .signers([user])
         .rpc();
     });
@@ -242,7 +242,7 @@ describe("session-manager", () => {
       // Airdrop SOL
       const airdropSig = await provider.connection.requestAirdrop(
         user.publicKey,
-        2 * LAMPORTS_PER_SOL
+        2 * LAMPORTS_PER_SOL,
       );
       await provider.connection.confirmTransaction(airdropSig);
 
@@ -256,7 +256,7 @@ describe("session-manager", () => {
           sessionCounter: counterPDA,
           player: user.publicKey,
           systemProgram: SystemProgram.programId,
-        })
+        } as any)
         .signers([user])
         .rpc();
 
@@ -265,7 +265,7 @@ describe("session-manager", () => {
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
-        })
+        } as any)
         .signers([user])
         .rpc();
 
@@ -278,7 +278,7 @@ describe("session-manager", () => {
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
-        })
+        } as any)
         .signers([user])
         .rpc();
 
@@ -291,7 +291,7 @@ describe("session-manager", () => {
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
-        })
+        } as any)
         .signers([user])
         .rpc();
     });
@@ -306,7 +306,7 @@ describe("session-manager", () => {
       // Airdrop SOL
       const airdropSig = await provider.connection.requestAirdrop(
         user.publicKey,
-        2 * LAMPORTS_PER_SOL
+        2 * LAMPORTS_PER_SOL,
       );
       await provider.connection.confirmTransaction(airdropSig);
 
@@ -320,7 +320,7 @@ describe("session-manager", () => {
           sessionCounter: counterPDA,
           player: user.publicKey,
           systemProgram: SystemProgram.programId,
-        })
+        } as any)
         .signers([user])
         .rpc();
 
@@ -329,7 +329,9 @@ describe("session-manager", () => {
       expect(session.player.toString()).to.equal(user.publicKey.toString());
 
       // Get user balance before ending
-      const balanceBefore = await provider.connection.getBalance(user.publicKey);
+      const balanceBefore = await provider.connection.getBalance(
+        user.publicKey,
+      );
 
       // End session
       await program.methods
@@ -337,12 +339,13 @@ describe("session-manager", () => {
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
-        })
+        } as any)
         .signers([user])
         .rpc();
 
       // Verify session account is closed
-      const sessionAccount = await provider.connection.getAccountInfo(sessionPDA);
+      const sessionAccount =
+        await provider.connection.getAccountInfo(sessionPDA);
       expect(sessionAccount).to.be.null;
 
       // Verify rent was returned to user
@@ -351,8 +354,8 @@ describe("session-manager", () => {
     });
   });
 
-  describe("T052: Force Close Timed-Out Session", () => {
-    it("rejects force close before timeout", async () => {
+  describe("T052: Force Close Session", () => {
+    it("allows force close without timeout", async () => {
       await ensureCounterExists();
 
       const user = Keypair.generate();
@@ -361,13 +364,13 @@ describe("session-manager", () => {
       // Airdrop SOL
       const airdropSig = await provider.connection.requestAirdrop(
         user.publicKey,
-        2 * LAMPORTS_PER_SOL
+        2 * LAMPORTS_PER_SOL,
       );
       await provider.connection.confirmTransaction(airdropSig);
 
       const airdropSig2 = await provider.connection.requestAirdrop(
         anyoneElse.publicKey,
-        2 * LAMPORTS_PER_SOL
+        2 * LAMPORTS_PER_SOL,
       );
       await provider.connection.confirmTransaction(airdropSig2);
 
@@ -381,43 +384,27 @@ describe("session-manager", () => {
           sessionCounter: counterPDA,
           player: user.publicKey,
           systemProgram: SystemProgram.programId,
-        })
+        } as any)
         .signers([user])
         .rpc();
 
-      // Try to force close immediately (should fail - not timed out)
-      try {
-        await program.methods
-          .forceCloseSession()
-          .accounts({
-            gameSession: sessionPDA,
-            sessionOwner: user.publicKey,
-            recipient: anyoneElse.publicKey,
-          })
-          .signers([])
-          .rpc();
-        expect.fail("Should have thrown SessionNotTimedOut error");
-      } catch (error: any) {
-        expect(error.toString()).to.include("SessionNotTimedOut");
-      }
-
-      // Clean up - owner can still end their own session
+      // Force close immediately (no timeout restriction)
       await program.methods
-        .endSession()
+        .forceCloseSession()
         .accounts({
           gameSession: sessionPDA,
-          player: user.publicKey,
-        })
-        .signers([user])
+          sessionOwner: user.publicKey,
+          recipient: anyoneElse.publicKey,
+        } as any)
+        .signers([])
         .rpc();
+
+      const sessionAccount =
+        await provider.connection.getAccountInfo(sessionPDA);
+      expect(sessionAccount).to.be.null;
     });
 
-    // Note: Testing actual timeout would require time manipulation
-    // which is complex in the Solana test environment
-    it("force close structure is valid (timeout test skipped)", async () => {
-      // This test validates that the force_close_session instruction exists
-      // and has the correct account structure. Actual timeout testing would
-      // require manipulating the cluster clock or waiting 1 hour.
+    it("force close structure is valid", async () => {
       expect(program.methods.forceCloseSession).to.exist;
     });
   });

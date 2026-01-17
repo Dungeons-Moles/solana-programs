@@ -5,7 +5,7 @@
 **Status**: Draft
 **Input**: User description: "Implement foundational Solana programs: Player Profile (progression, payments), Session Manager (MagicBlock ephemeral rollups), and Map Generation (deterministic procedural generation)"
 
-## User Scenarios & Testing *(mandatory)*
+## User Scenarios & Testing _(mandatory)_
 
 ### User Story 1 - New Player Registration (Priority: P1)
 
@@ -17,26 +17,25 @@ A new player connects their Solana wallet to Dungeons & Moles for the first time
 
 **Acceptance Scenarios**:
 
-1. **Given** a player with a Solana wallet who has never played, **When** they connect their wallet and request profile creation, **Then** a new profile is created with their wallet address, empty name, 0 total runs, and campaign level 0.
+1. **Given** a player with a Solana wallet who has never played, **When** they connect their wallet and request profile creation, **Then** a new profile is created with their wallet address, provided name, 0 total runs, and campaign level 0.
 2. **Given** a player with an existing profile, **When** they attempt to create a new profile, **Then** the system rejects the request and returns the existing profile.
 3. **Given** a player with a profile, **When** they update their display name, **Then** the name is stored and persisted (max 32 characters).
 
 ---
 
-### User Story 2 - Campaign Tier Unlocking (Priority: P2)
+### User Story 2 - Available Run Tracking (Priority: P2)
 
-A player has completed campaign levels 0-39 and wants to continue to levels 40-79. They pay 0.05 SOL to unlock the next tier of 40 campaign levels. The payment is processed and their profile is updated to allow access to the new levels.
+A player starts with 40 available dungeon runs. Each time they complete a run (win or lose), one available run is consumed. Players can continue playing until they run out of available runs.
 
-**Why this priority**: This is the primary monetization mechanism. It enables sustainable game development while keeping initial gameplay free.
+**Why this priority**: This replaces the tier-based gating with a simple run-based allowance that is easy to reason about and maintain.
 
-**Independent Test**: Can be tested by having a player at campaign level 39, attempting to advance to level 40, making the payment, and verifying access is granted.
+**Independent Test**: Can be tested by creating a profile, recording run completions, and verifying available runs decrement while total runs increment.
 
 **Acceptance Scenarios**:
 
-1. **Given** a player at campaign level 39 (end of free tier), **When** they pay 0.05 SOL to unlock the next tier, **Then** their max campaign level increases to 79 and the payment is transferred to the game treasury.
-2. **Given** a player who has not yet completed levels 0-39, **When** they attempt to pay for the next tier, **Then** the system rejects the payment (cannot skip tiers).
-3. **Given** a player at campaign level 79, **When** they pay 0.05 SOL, **Then** their max campaign level increases to 119 (system supports future expansion).
-4. **Given** a player attempting to unlock with insufficient SOL balance, **When** the transaction is submitted, **Then** the system rejects the transaction and no state changes occur.
+1. **Given** a new player profile, **When** the profile is created, **Then** available_runs is initialized to 40.
+2. **Given** a player who completes a run, **When** the run result is submitted, **Then** available_runs decrements by 1 and total_runs increments by 1.
+3. **Given** a player with zero available_runs, **When** they attempt to record a run result, **Then** the transaction is rejected.
 
 ---
 
@@ -53,7 +52,7 @@ A player starts a game session. Their game state is delegated to the MagicBlock 
 1. **Given** a player with a valid profile, **When** they start a new game session, **Then** a session account is created and their game state is delegated to the ephemeral rollup.
 2. **Given** a player with an active session, **When** they end their session, **Then** the final game state is committed back to mainnet and the session is marked complete.
 3. **Given** a player with an active session, **When** they attempt to start another session, **Then** the system rejects the request (one active session per player).
-4. **Given** a session that has been idle for more than 1 hour, **When** the timeout is checked, **Then** the session can be forcibly closed and state committed.
+4. **Given** a session that should be closed manually, **When** force close is invoked, **Then** the session can be forcibly closed and state committed.
 
 ---
 
@@ -76,7 +75,7 @@ A player starts a campaign level. The system generates a deterministic 50x50 dun
 
 ### User Story 5 - Run Completion Tracking (Priority: P5)
 
-A player completes a dungeon run (win or lose). Their total run count is incremented. If they completed a new campaign level, their progress is updated.
+A player completes a dungeon run (win or lose). Their total run count is incremented, their available_runs decrements, and their campaign level advances on victory.
 
 **Why this priority**: This provides progression tracking and feeds into future features like leaderboards and achievements.
 
@@ -84,21 +83,20 @@ A player completes a dungeon run (win or lose). Their total run count is increme
 
 **Acceptance Scenarios**:
 
-1. **Given** a player who completes a run, **When** the run result is submitted, **Then** their total_runs counter increments by 1.
-2. **Given** a player who defeats a boss on campaign level N, **When** the victory is recorded, **Then** their current_campaign_level advances to N+1 (if within their unlocked tier).
-3. **Given** a player who loses a run, **When** the defeat is recorded, **Then** total_runs increments but campaign level does not advance.
+1. **Given** a player who completes a run, **When** the run result is submitted, **Then** total_runs increments by 1 and available_runs decrements by 1.
+2. **Given** a player who defeats a boss on campaign level N, **When** the victory is recorded, **Then** their current_campaign_level advances to N+1.
+3. **Given** a player who loses a run, **When** the defeat is recorded, **Then** total_runs increments, available_runs decrements, and campaign level does not advance.
 
 ---
 
 ### Edge Cases
 
 - What happens when a player's profile account runs out of rent? System should ensure minimum rent-exempt balance at creation.
-- How does the system handle network interruptions during session undelegation? Session timeout mechanism allows recovery.
+- How does the system handle network interruptions during session undelegation? Manual force-close allows recovery.
 - What happens if map generation is called with an invalid level number (>80)? System should reject with clear error.
-- What if the treasury account is not initialized when a player tries to pay? Transaction should fail gracefully.
 - What happens if the seed-to-level mapping is not initialized? System should use level number as default seed.
 
-## Requirements *(mandatory)*
+## Requirements _(mandatory)_
 
 ### Functional Requirements
 
@@ -108,10 +106,10 @@ A player completes a dungeon run (win or lose). Their total run count is increme
 - **FR-002**: System MUST enforce uniqueness of player profiles (one profile per wallet address).
 - **FR-003**: System MUST allow players to update their display name (max 32 characters, UTF-8 encoded).
 - **FR-004**: System MUST track total_runs as a cumulative counter that only increments.
-- **FR-005**: System MUST track current_campaign_level (0-80+) representing the highest level unlocked.
-- **FR-006**: System MUST accept 0.05 SOL payment to unlock the next 40 campaign levels.
-- **FR-007**: System MUST transfer payments to a designated treasury account.
-- **FR-008**: System MUST prevent tier unlocking if player has not reached the tier boundary (multiples of 40).
+- **FR-005**: System MUST track current_campaign_level (0-80+) representing the highest level reached.
+- **FR-006**: System MUST initialize available_runs to 40 on profile creation.
+- **FR-007**: System MUST decrement available_runs by 1 on every run completion.
+- **FR-008**: System MUST reject run completion when available_runs is 0.
 
 **Session Manager Program**
 
@@ -119,8 +117,8 @@ A player completes a dungeon run (win or lose). Their total run count is increme
 - **FR-010**: System MUST delegate session state to MagicBlock ephemeral rollup on session start.
 - **FR-011**: System MUST commit session state back to mainnet on session end.
 - **FR-012**: System MUST enforce one active session per player.
-- **FR-013**: System MUST track session start time for timeout purposes.
-- **FR-014**: System MUST allow forced session closure after 1 hour of inactivity.
+- **FR-013**: System MUST track session start time for analytics and ordering.
+- **FR-014**: System MUST allow forced session closure without a timeout.
 - **FR-015**: System MUST validate delegation authority on all session operations.
 
 **Map Generation Program**
@@ -138,7 +136,7 @@ A player completes a dungeon run (win or lose). Their total run count is increme
 
 ### Key Entities
 
-- **PlayerProfile**: Represents a player's on-chain identity and progression. Contains wallet address (owner), display name, total run count, current campaign level, and unlocked tier indicator.
+- **PlayerProfile**: Represents a player's on-chain identity and progression. Contains wallet address (owner), display name, total run count, current campaign level, and available run count.
 
 - **GameSession**: Represents an active gameplay session. Contains player reference, session start timestamp, delegation status, and session state hash.
 
@@ -146,14 +144,11 @@ A player completes a dungeon run (win or lose). Their total run count is increme
 
 - **GeneratedMap**: Output structure for map generation. Contains dimensions, tile grid, POI positions with types, enemy spawn positions with tiers, and boss spawn location.
 
-- **Treasury**: Receives payment for campaign tier unlocks. Contains accumulated SOL and withdrawal authority.
-
-## Success Criteria *(mandatory)*
+## Success Criteria _(mandatory)_
 
 ### Measurable Outcomes
 
 - **SC-001**: Players can create a profile and start playing within 30 seconds of connecting their wallet.
-- **SC-002**: Payment transactions for tier unlocking complete within 5 seconds on mainnet.
 - **SC-003**: Session delegation completes within 2 seconds, enabling immediate gameplay.
 - **SC-004**: Map generation produces consistent results 100% of the time for the same seed (determinism verified).
 - **SC-005**: System supports 10,000+ concurrent player profiles without degradation.
@@ -164,8 +159,7 @@ A player completes a dungeon run (win or lose). Their total run count is increme
 ## Assumptions
 
 - MagicBlock ephemeral rollup infrastructure is available and compatible with Anchor programs.
-- Treasury account will be initialized before any players attempt tier unlocking.
-- Campaign will initially have 81 levels (0-80), with tiers at 0-39 (free), 40-79 (paid), 80+ (future expansion).
+- Campaign will initially have 81 levels (0-80).
 - Default seed mapping uses level number as seed (level 0 = seed 0, level 1 = seed 1, etc.).
-- Session timeout of 1 hour is acceptable for the game's session length expectations.
+- Sessions can remain open indefinitely until manually closed.
 - Display names do not require uniqueness enforcement (multiple players can have same name).

@@ -15,7 +15,7 @@ describe("map-generator", () => {
   const getMapConfigPDA = () => {
     return anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("map_config")],
-      program.programId
+      program.programId,
     );
   };
 
@@ -32,7 +32,7 @@ describe("map-generator", () => {
           mapConfig: configPDA,
           admin: admin.publicKey,
           systemProgram: SystemProgram.programId,
-        })
+        } as any)
         .rpc();
     } catch (error: any) {
       // Config might already exist from previous test run
@@ -54,7 +54,7 @@ describe("map-generator", () => {
             mapConfig: configPDA,
             admin: admin.publicKey,
             systemProgram: SystemProgram.programId,
-          })
+          } as any)
           .rpc();
 
         const config = await program.account.mapConfig.fetch(configPDA);
@@ -272,7 +272,7 @@ describe("map-generator", () => {
       // First, fund the new admin
       const airdropSig = await provider.connection.requestAirdrop(
         newAdmin.publicKey,
-        LAMPORTS_PER_SOL
+        LAMPORTS_PER_SOL,
       );
       await provider.connection.confirmTransaction(airdropSig);
 
@@ -297,7 +297,7 @@ describe("map-generator", () => {
       // Fund the non-admin
       const airdropSig = await provider.connection.requestAirdrop(
         nonAdmin.publicKey,
-        LAMPORTS_PER_SOL
+        LAMPORTS_PER_SOL,
       );
       await provider.connection.confirmTransaction(airdropSig);
 

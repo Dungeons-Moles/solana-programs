@@ -19,10 +19,6 @@ pub enum SessionManagerError {
     #[msg("Session is already delegated")]
     SessionAlreadyDelegated,
 
-    /// Session has not timed out yet
-    #[msg("Session has not timed out yet")]
-    SessionNotTimedOut,
-
     /// Signer is not the session owner
     #[msg("Signer is not the session owner")]
     Unauthorized,

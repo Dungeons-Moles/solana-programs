@@ -15,46 +15,34 @@ This document defines the on-chain account structures for the three Solana progr
 
 **PDA Seeds**: `[b"player", owner.key()]`
 
-| Field | Type | Size | Description |
-|-------|------|------|-------------|
-| owner | Pubkey | 32 | Wallet address that owns this profile |
-| name | String (max 32) | 36 | Display name (4-byte length prefix + 32 chars) |
-| total_runs | u32 | 4 | Cumulative count of all dungeon runs |
-| current_level | u8 | 1 | Current campaign level (0-80+) |
-| unlocked_tier | u8 | 1 | Highest tier unlocked (0=free, 1=paid tier 1, etc.) |
-| created_at | i64 | 8 | Unix timestamp of profile creation |
-| bump | u8 | 1 | PDA bump seed |
+| Field          | Type            | Size | Description                                    |
+| -------------- | --------------- | ---- | ---------------------------------------------- |
+| owner          | Pubkey          | 32   | Wallet address that owns this profile          |
+| name           | String (max 32) | 36   | Display name (4-byte length prefix + 32 chars) |
+| total_runs     | u32             | 4    | Cumulative count of all dungeon runs           |
+| current_level  | u8              | 1    | Current campaign level (0-80+)                 |
+| available_runs | u32             | 4    | Remaining available dungeon runs               |
+| created_at     | i64             | 8    | Unix timestamp of profile creation             |
+| bump           | u8              | 1    | PDA bump seed                                  |
 
-**Total Size**: 8 (discriminator) + 83 = **91 bytes**
+**Total Size**: 8 (discriminator) + 86 = **94 bytes**
 
 **Validation Rules**:
+
 - `owner` must be a signer for all mutations
 - `name` max length 32 UTF-8 characters
-- `current_level` cannot exceed `(unlocked_tier + 1) * 40 - 1`
 - `total_runs` only increments, never decrements
+- `available_runs` only decrements on run completion (reject when zero)
 
 **State Transitions**:
+
 ```
 [Not Exists] --initialize--> [Active]
 [Active] --update_name--> [Active]
 [Active] --increment_run--> [Active]
-[Active] --unlock_tier--> [Active]
+[Active] --consume_run--> [Active]
 [Active] --close--> [Not Exists]
 ```
-
-### Treasury Account
-
-**PDA Seeds**: `[b"treasury"]`
-
-| Field | Type | Size | Description |
-|-------|------|------|-------------|
-| admin | Pubkey | 32 | Authority that can withdraw funds |
-| total_collected | u64 | 8 | Total SOL collected from tier unlocks |
-| bump | u8 | 1 | PDA bump seed |
-
-**Total Size**: 8 + 41 = **49 bytes**
-
-**Note**: The Treasury PDA holds lamports directly. `total_collected` is for accounting purposes.
 
 ---
 
@@ -64,42 +52,43 @@ This document defines the on-chain account structures for the three Solana progr
 
 **PDA Seeds**: `[b"session", player.key()]`
 
-| Field | Type | Size | Description |
-|-------|------|------|-------------|
-| player | Pubkey | 32 | Player profile owner's wallet |
-| session_id | u64 | 8 | Unique session identifier (incrementing) |
-| campaign_level | u8 | 1 | Level being played in this session |
-| started_at | i64 | 8 | Unix timestamp when session started |
-| last_activity | i64 | 8 | Unix timestamp of last action |
-| is_delegated | bool | 1 | Whether state is delegated to ephemeral rollup |
-| state_hash | [u8; 32] | 32 | Hash of current game state (for verification) |
-| bump | u8 | 1 | PDA bump seed |
+| Field          | Type     | Size | Description                                    |
+| -------------- | -------- | ---- | ---------------------------------------------- |
+| player         | Pubkey   | 32   | Player profile owner's wallet                  |
+| session_id     | u64      | 8    | Unique session identifier (incrementing)       |
+| campaign_level | u8       | 1    | Level being played in this session             |
+| started_at     | i64      | 8    | Unix timestamp when session started            |
+| last_activity  | i64      | 8    | Unix timestamp of last action                  |
+| is_delegated   | bool     | 1    | Whether state is delegated to ephemeral rollup |
+| state_hash     | [u8; 32] | 32   | Hash of current game state (for verification)  |
+| bump           | u8       | 1    | PDA bump seed                                  |
 
 **Total Size**: 8 + 91 = **99 bytes**
 
 **Validation Rules**:
+
 - One active session per player (enforced via PDA uniqueness)
 - `is_delegated` must be true before ephemeral rollup operations
-- Session timeout: `last_activity` older than 1 hour allows forced close
 
 **State Transitions**:
+
 ```
 [Not Exists] --start_session--> [Active, Not Delegated]
 [Active, Not Delegated] --delegate--> [Active, Delegated]
 [Active, Delegated] --commit--> [Active, Delegated] (state updated)
 [Active, Delegated] --undelegate--> [Active, Not Delegated]
 [Active, *] --end_session--> [Not Exists]
-[Active, *] --force_close (timeout)--> [Not Exists]
+[Active, *] --force_close--> [Not Exists]
 ```
 
 ### SessionCounter Account
 
 **PDA Seeds**: `[b"session_counter"]`
 
-| Field | Type | Size | Description |
-|-------|------|------|-------------|
-| count | u64 | 8 | Global session counter for unique IDs |
-| bump | u8 | 1 | PDA bump seed |
+| Field | Type | Size | Description                           |
+| ----- | ---- | ---- | ------------------------------------- |
+| count | u64  | 8    | Global session counter for unique IDs |
+| bump  | u8   | 1    | PDA bump seed                         |
 
 **Total Size**: 8 + 9 = **17 bytes**
 
@@ -111,16 +100,17 @@ This document defines the on-chain account structures for the three Solana progr
 
 **PDA Seeds**: `[b"map_config"]`
 
-| Field | Type | Size | Description |
-|-------|------|------|-------------|
-| admin | Pubkey | 32 | Authority that can update seed mappings |
-| seeds | [u64; 81] | 648 | Seed values for campaign levels 0-80 |
-| version | u8 | 1 | Config version for migrations |
-| bump | u8 | 1 | PDA bump seed |
+| Field   | Type      | Size | Description                             |
+| ------- | --------- | ---- | --------------------------------------- |
+| admin   | Pubkey    | 32   | Authority that can update seed mappings |
+| seeds   | [u64; 81] | 648  | Seed values for campaign levels 0-80    |
+| version | u8        | 1    | Config version for migrations           |
+| bump    | u8        | 1    | PDA bump seed                           |
 
 **Total Size**: 8 + 682 = **690 bytes**
 
 **Validation Rules**:
+
 - Only `admin` can call `update_map_config`
 - Default seeds: `seeds[i] = i` for all levels
 - Seed value 0 is valid (uses level number as fallback)
@@ -189,11 +179,6 @@ pub struct MapEnemy {
 │    MapConfig    │
 │   (singleton)   │
 └─────────────────┘
-
-┌─────────────────┐
-│    Treasury     │
-│   (singleton)   │
-└─────────────────┘
 ```
 
 ---
@@ -210,17 +195,10 @@ pub struct ProfileCreated {
 }
 
 #[event]
-pub struct TierUnlocked {
-    pub owner: Pubkey,
-    pub tier: u8,
-    pub amount_paid: u64,
-    pub timestamp: i64,
-}
-
-#[event]
 pub struct RunCompleted {
     pub owner: Pubkey,
     pub total_runs: u32,
+    pub available_runs: u32,
     pub level_reached: u8,
     pub victory: bool,
     pub timestamp: i64,
@@ -263,6 +241,13 @@ pub struct MapConfigUpdated {
     pub level: u8,
     pub old_seed: u64,
     pub new_seed: u64,
+    pub timestamp: i64,
+}
+
+#[event]
+pub struct AdminTransferred {
+    pub old_admin: Pubkey,
+    pub new_admin: Pubkey,
     pub timestamp: i64,
 }
 ```

@@ -9,7 +9,7 @@ use constants::*;
 use errors::MapGeneratorError;
 use state::{MapConfig, SeedUpdate};
 
-declare_id!("Cp1zAXtNCYhGnjNeLJqkJFzkHtoDo4hFHzAAKCnLprFq");
+declare_id!("BYdGuEGf8NqtLnHpSRuZFrPGEgvdxMfGfTt71QVBxYHa");
 
 #[program]
 pub mod map_generator {
@@ -29,11 +29,7 @@ pub mod map_generator {
     }
 
     /// Updates the seed for a single level (admin only).
-    pub fn update_map_config(
-        ctx: Context<UpdateMapConfig>,
-        level: u8,
-        seed: u64,
-    ) -> Result<()> {
+    pub fn update_map_config(ctx: Context<UpdateMapConfig>, level: u8, seed: u64) -> Result<()> {
         require!(level <= MAX_LEVEL, MapGeneratorError::InvalidLevel);
 
         let config = &mut ctx.accounts.map_config;
@@ -149,17 +145,17 @@ pub mod map_generator {
 /// Uses the same XorShift RNG as map generation for consistency.
 fn compute_map_hash(seed: u64) -> [u8; 32] {
     use crate::rng::SeededRNG;
-    
+
     let mut rng = SeededRNG::new(seed);
     let mut hash = [0u8; 32];
-    
+
     // Generate 32 bytes from RNG (4 u64 values = 32 bytes)
     for i in 0..4 {
         let value = rng.next();
         let bytes = value.to_le_bytes();
         hash[i * 8..(i + 1) * 8].copy_from_slice(&bytes);
     }
-    
+
     hash
 }
 

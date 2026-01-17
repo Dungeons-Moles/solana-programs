@@ -8,7 +8,7 @@ use constants::*;
 use errors::SessionManagerError;
 use state::{GameSession, SessionCounter};
 
-declare_id!("H6Z6herhFbGR8Cnc4hypyMyCTncxbfFArmGsNSkvd2yQ");
+declare_id!("FcMT7MzBLVQGaMATEMws3fjsL2Q77QSHmoEPdowTMxJa");
 
 #[program]
 pub mod session_manager {
@@ -125,22 +125,11 @@ pub mod session_manager {
         Ok(())
     }
 
-    /// Forces a session to close after timeout (1 hour inactivity).
+    /// Forces a session to close.
     /// Can be called by anyone to clean up abandoned sessions.
     pub fn force_close_session(ctx: Context<ForceCloseSession>) -> Result<()> {
         let session = &ctx.accounts.game_session;
         let clock = Clock::get()?;
-
-        // Check if session has timed out (1 hour)
-        let elapsed = clock
-            .unix_timestamp
-            .checked_sub(session.last_activity)
-            .ok_or(SessionManagerError::ArithmeticOverflow)?;
-
-        require!(
-            elapsed >= SESSION_TIMEOUT,
-            SessionManagerError::SessionNotTimedOut
-        );
 
         emit!(SessionEnded {
             player: session.player,

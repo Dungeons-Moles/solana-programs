@@ -3,14 +3,14 @@ seeds = false
 skip-lint = false
 
 [programs.localnet]
-player_profile = "3iAgDo4LeSkpqPo9G73ymaGwvdvPVKNYUjzoySVrGaYn"
-session_manager = "H6Z6herhFbGR8Cnc4hypyMyCTncxbfFArmGsNSkvd2yQ"
-map_generator = "Cp1zAXtNCYhGnjNeLJqkJFzkHtoDo4hFHzAAKCnLprFq"
+player_profile = "29DPbP1zuCCRg63PiShMjxAmZos97BR5TmhpijUYQzze"
+session_manager = "FcMT7MzBLVQGaMATEMws3fjsL2Q77QSHmoEPdowTMxJa"
+map_generator = "BYdGuEGf8NqtLnHpSRuZFrPGEgvdxMfGfTt71QVBxYHa"
 
 [programs.devnet]
-player_profile = "3iAgDo4LeSkpqPo9G73ymaGwvdvPVKNYUjzoySVrGaYn"
-session_manager = "H6Z6herhFbGR8Cnc4hypyMyCTncxbfFArmGsNSkvd2yQ"
-map_generator = "Cp1zAXtNCYhGnjNeLJqkJFzkHtoDo4hFHzAAKCnLprFq"
+player_profile = "29DPbP1zuCCRg63PiShMjxAmZos97BR5TmhpijUYQzze"
+session_manager = "FcMT7MzBLVQGaMATEMws3fjsL2Q77QSHmoEPdowTMxJa"
+map_generator = "BYdGuEGf8NqtLnHpSRuZFrPGEgvdxMfGfTt71QVBxYHa"
 
 [registry]
 url = "https://api.apr.dev"

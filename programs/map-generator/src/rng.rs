@@ -101,7 +101,7 @@ mod tests {
     #[test]
     fn test_next_int_range() {
         let mut rng = SeededRNG::new(42);
-        
+
         for _ in 0..1000 {
             let val = rng.next_int(10, 20);
             assert!(val >= 10 && val <= 20);
@@ -117,7 +117,7 @@ mod tests {
     #[test]
     fn test_next_float_range() {
         let mut rng = SeededRNG::new(42);
-        
+
         for _ in 0..1000 {
             let val = rng.next_float();
             assert!(val >= 0.0 && val < 1.0);
@@ -142,13 +142,13 @@ mod tests {
     fn test_shuffle_determinism() {
         let mut rng1 = SeededRNG::new(42);
         let mut rng2 = SeededRNG::new(42);
-        
+
         let mut items1 = vec![1, 2, 3, 4, 5];
         let mut items2 = vec![1, 2, 3, 4, 5];
-        
+
         rng1.shuffle(&mut items1);
         rng2.shuffle(&mut items2);
-        
+
         assert_eq!(items1, items2);
     }
 
@@ -157,12 +157,12 @@ mod tests {
         // Verify the XorShift 13-7-17 variant produces consistent values
         // These are the actual values from Rust XorShift with seed=1
         let mut rng = SeededRNG::new(1);
-        
+
         // First few values from XorShift with seed=1
         let first = rng.next();
         let second = rng.next();
         let third = rng.next();
-        
+
         // The exact values for the 13-7-17 XorShift variant
         // TypeScript implementation should produce these same values
         assert_eq!(first, 1082269761);

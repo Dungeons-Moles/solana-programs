@@ -1,14 +1,14 @@
 # Quickstart: Solana Core Programs
 
 **Feature**: 001-solana-core-programs
-**Date**: 2025-01-15
+**Date**: 2026-01-16 (validated)
 
 ## Prerequisites
 
-- Rust 1.75+ with `rustup`
-- Solana CLI 1.18+
-- Anchor CLI 0.30+
-- Node.js 18+
+- Rust 1.75+ with `rustup` (tested with 1.91.1)
+- Solana CLI 2.0+ (tested with 2.3.13)
+- Anchor CLI 0.32+ (tested with 0.32.1)
+- Node.js 18+ (tested with 24.11.1)
 - Yarn or npm
 
 ## Project Setup
@@ -34,9 +34,14 @@ seeds = false
 skip-lint = false
 
 [programs.localnet]
-player_profile = "Prof1LeXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-session_manager = "Sess1onXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-map_generator = "MapGenXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+player_profile = "29DPbP1zuCCRg63PiShMjxAmZos97BR5TmhpijUYQzze"
+session_manager = "FcMT7MzBLVQGaMATEMws3fjsL2Q77QSHmoEPdowTMxJa"
+map_generator = "BYdGuEGf8NqtLnHpSRuZFrPGEgvdxMfGfTt71QVBxYHa"
+
+[programs.devnet]
+player_profile = "29DPbP1zuCCRg63PiShMjxAmZos97BR5TmhpijUYQzze"
+session_manager = "FcMT7MzBLVQGaMATEMws3fjsL2Q77QSHmoEPdowTMxJa"
+map_generator = "BYdGuEGf8NqtLnHpSRuZFrPGEgvdxMfGfTt71QVBxYHa"
 
 [registry]
 url = "https://api.apr.dev"
@@ -54,16 +59,18 @@ test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
 ```bash
 # In programs/player-profile/Cargo.toml
 [dependencies]
-anchor-lang = "0.30.0"
+anchor-lang = "0.32.0"
 
 # In programs/session-manager/Cargo.toml
 [dependencies]
-anchor-lang = "0.30.0"
-ephemeral_rollups_sdk = "0.1.0"
+anchor-lang = "0.32.0"
+# NOTE: ephemeral-rollups-sdk is temporarily disabled due to blake3 requiring
+# Rust edition 2024 which is not yet supported by Solana platform tools.
+# ephemeral-rollups-sdk = { version = "0.8.0", features = ["anchor"] }
 
 # In programs/map-generator/Cargo.toml
 [dependencies]
-anchor-lang = "0.30.0"
+anchor-lang = "0.32.0"
 ```
 
 ## Build & Test
@@ -113,7 +120,7 @@ import { PlayerProfile } from "../target/types/player_profile";
 // Initialize profile
 const [profilePda] = anchor.web3.PublicKey.findProgramAddressSync(
   [Buffer.from("player"), wallet.publicKey.toBuffer()],
-  program.programId
+  program.programId,
 );
 
 await program.methods
@@ -135,10 +142,25 @@ console.log("Profile:", profile);
 ```typescript
 import { SessionManager } from "../target/types/session_manager";
 
+// First initialize counter (one-time admin operation)
+const [counterPda] = anchor.web3.PublicKey.findProgramAddressSync(
+  [Buffer.from("session_counter")],
+  sessionProgram.programId,
+);
+
+await sessionProgram.methods
+  .initializeCounter()
+  .accounts({
+    sessionCounter: counterPda,
+    admin: wallet.publicKey,
+    systemProgram: anchor.web3.SystemProgram.programId,
+  })
+  .rpc();
+
 // Start session
 const [sessionPda] = anchor.web3.PublicKey.findProgramAddressSync(
   [Buffer.from("session"), wallet.publicKey.toBuffer()],
-  sessionProgram.programId
+  sessionProgram.programId,
 );
 
 await sessionProgram.methods
@@ -146,7 +168,6 @@ await sessionProgram.methods
   .accounts({
     gameSession: sessionPda,
     sessionCounter: counterPda,
-    playerProfile: profilePda,
     player: wallet.publicKey,
     systemProgram: anchor.web3.SystemProgram.programId,
   })
@@ -189,14 +210,15 @@ solana-programs/
 │   │       ├── lib.rs
 │   │       ├── state.rs
 │   │       ├── errors.rs
-│   │       └── delegation.rs
+│   │       └── constants.rs
 │   └── map-generator/
 │       ├── Cargo.toml
 │       └── src/
 │           ├── lib.rs
 │           ├── state.rs
-│           ├── rng.rs
-│           └── generator.rs
+│           ├── errors.rs
+│           ├── constants.rs
+│           └── rng.rs
 ├── tests/
 │   ├── player-profile.ts
 │   ├── session-manager.ts
@@ -244,17 +266,23 @@ anchor upgrade target/deploy/player_profile.so --program-id <PROGRAM_ID>
 ## Troubleshooting
 
 ### "Account not found" Error
+
 - Ensure the PDA seeds match exactly between client and program
 - Check that prerequisite accounts (e.g., profile before session) exist
 
 ### "Insufficient funds" Error
+
 - Run `solana airdrop 2` on devnet
 - Check rent exemption requirements
 
 ### Build Errors
+
 - Run `anchor clean` then `anchor build`
-- Update Anchor: `avm install 0.30.0 && avm use 0.30.0`
+- Update Anchor: `avm install 0.32.1 && avm use 0.32.1`
 
 ### MagicBlock Delegation Fails
-- Ensure program is marked with `#[ephemeral]` attribute
+
+- MagicBlock SDK is currently disabled due to Rust edition 2024 requirement
+- Delegation instructions use stub implementations until SDK tooling is updated
+- Ensure program is marked with `#[ephemeral]` attribute when SDK is enabled
 - Verify MagicBlock accounts are passed correctly

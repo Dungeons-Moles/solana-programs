@@ -1,5 +1,5 @@
-use anchor_lang::prelude::*;
 use crate::constants::LEVEL_COUNT;
+use anchor_lang::prelude::*;
 
 /// Configuration for map generation, storing seed values for each level.
 #[account]

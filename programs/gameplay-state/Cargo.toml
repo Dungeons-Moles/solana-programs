@@ -1,0 +1,20 @@
+[package]
+name = "gameplay-state"
+version = "0.1.0"
+description = "Gameplay State Tracking Program for on-chain game state management"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "gameplay_state"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build"]
+
+[dependencies]
+anchor-lang = "0.32.0"

@@ -2,7 +2,8 @@
 members = [
     "programs/player-profile",
     "programs/session-manager",
-    "programs/map-generator"
+    "programs/map-generator",
+    "programs/gameplay-state"
 ]
 resolver = "2"
 

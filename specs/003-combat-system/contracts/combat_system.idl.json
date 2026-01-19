@@ -1,0 +1,323 @@
+{
+  "version": "0.1.0",
+  "name": "combat_system",
+  "instructions": [
+    {
+      "name": "initializeCombat",
+      "docs": [
+        "Initializes a new combat encounter between player and enemy.",
+        "Creates CombatState PDA and sets up initial combatant stats."
+      ],
+      "accounts": [
+        {
+          "name": "combatState",
+          "isMut": true,
+          "isSigner": false,
+          "docs": ["PDA: [\"combat_state\", game_state.key()]"]
+        },
+        {
+          "name": "gameState",
+          "isMut": false,
+          "isSigner": false,
+          "docs": ["GameState account from gameplay-state program"]
+        },
+        {
+          "name": "player",
+          "isMut": true,
+          "isSigner": true,
+          "docs": ["Player wallet, pays for account creation"]
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "playerStats",
+          "type": {
+            "defined": "CombatantInput"
+          }
+        },
+        {
+          "name": "enemyStats",
+          "type": {
+            "defined": "CombatantInput"
+          }
+        }
+      ]
+    },
+    {
+      "name": "executeTurn",
+      "docs": [
+        "Executes a single turn of combat.",
+        "Processes triggers, strikes, status effects, and checks for combat end."
+      ],
+      "accounts": [
+        {
+          "name": "combatState",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "player",
+          "isMut": false,
+          "isSigner": true
+        }
+      ],
+      "args": [
+        {
+          "name": "playerEffects",
+          "type": {
+            "vec": {
+              "defined": "ItemEffect"
+            }
+          }
+        },
+        {
+          "name": "enemyEffects",
+          "type": {
+            "vec": {
+              "defined": "ItemEffect"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "resolveCombat",
+      "docs": [
+        "Runs combat to completion in a single transaction.",
+        "Iterates turns until one combatant is defeated or Turn 50 failsafe."
+      ],
+      "accounts": [
+        {
+          "name": "combatState",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "player",
+          "isMut": false,
+          "isSigner": true
+        }
+      ],
+      "args": [
+        {
+          "name": "playerEffects",
+          "type": {
+            "vec": {
+              "defined": "ItemEffect"
+            }
+          }
+        },
+        {
+          "name": "enemyEffects",
+          "type": {
+            "vec": {
+              "defined": "ItemEffect"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "closeCombat",
+      "docs": [
+        "Closes the CombatState account after combat ends.",
+        "Returns rent to player."
+      ],
+      "accounts": [
+        {
+          "name": "combatState",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "player",
+          "isMut": true,
+          "isSigner": true
+        }
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "CombatState",
+      "docs": ["Tracks the state of an active combat encounter"],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "gameState", "type": "publicKey" },
+          { "name": "player", "type": "publicKey" },
+          { "name": "turn", "type": "u8" },
+          { "name": "playerHp", "type": "i16" },
+          { "name": "playerMaxHp", "type": "u16" },
+          { "name": "playerAtk", "type": "i16" },
+          { "name": "playerArm", "type": "i16" },
+          { "name": "playerSpd", "type": "i16" },
+          { "name": "playerStrikes", "type": "u8" },
+          { "name": "playerStatus", "type": { "defined": "StatusEffects" } },
+          { "name": "enemyHp", "type": "i16" },
+          { "name": "enemyMaxHp", "type": "u16" },
+          { "name": "enemyAtk", "type": "i16" },
+          { "name": "enemyArm", "type": "i16" },
+          { "name": "enemySpd", "type": "i16" },
+          { "name": "enemyStrikes", "type": "u8" },
+          { "name": "enemyStatus", "type": { "defined": "StatusEffects" } },
+          { "name": "suddenDeathBonus", "type": "i16" },
+          { "name": "combatEnded", "type": "bool" },
+          { "name": "playerWon", "type": "bool" },
+          { "name": "bump", "type": "u8" }
+        ]
+      }
+    }
+  ],
+  "types": [
+    {
+      "name": "StatusEffects",
+      "docs": ["Active status effects on a combatant"],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "chill", "type": "u8", "docs": ["Reduces strikes, decays 1/turn"] },
+          { "name": "shrapnel", "type": "u8", "docs": ["Damage on hit, clears at turn end"] },
+          { "name": "rust", "type": "u8", "docs": ["Armor decay at turn end, persists"] },
+          { "name": "bleed", "type": "u8", "docs": ["DoT at turn end, decays 1/turn"] }
+        ]
+      }
+    },
+    {
+      "name": "CombatantInput",
+      "docs": ["Input data for initializing a combatant"],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "hp", "type": "i16" },
+          { "name": "maxHp", "type": "u16" },
+          { "name": "atk", "type": "i16" },
+          { "name": "arm", "type": "i16" },
+          { "name": "spd", "type": "i16" },
+          { "name": "dig", "type": "i16" },
+          { "name": "strikes", "type": "u8" }
+        ]
+      }
+    },
+    {
+      "name": "ItemEffect",
+      "docs": ["An item's combat effect"],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "trigger", "type": { "defined": "TriggerType" } },
+          { "name": "oncePerTurn", "type": "bool" },
+          { "name": "effectType", "type": { "defined": "EffectType" } },
+          { "name": "value", "type": "i16" }
+        ]
+      }
+    },
+    {
+      "name": "TriggerType",
+      "docs": ["When an effect triggers during combat"],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          { "name": "BattleStart" },
+          { "name": "FirstTurn" },
+          { "name": "TurnStart" },
+          { "name": "EveryOtherTurn" },
+          { "name": "OnHit" },
+          { "name": "Exposed" },
+          { "name": "Wounded" }
+        ]
+      }
+    },
+    {
+      "name": "EffectType",
+      "docs": ["Types of effects items can have"],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          { "name": "DealDamage" },
+          { "name": "DealNonWeaponDamage" },
+          { "name": "Heal" },
+          { "name": "GainArmor" },
+          { "name": "GainAtk" },
+          { "name": "GainSpd" },
+          { "name": "ApplyChill" },
+          { "name": "ApplyShrapnel" },
+          { "name": "ApplyRust" },
+          { "name": "ApplyBleed" },
+          { "name": "RemoveArmor" }
+        ]
+      }
+    },
+    {
+      "name": "ResolutionType",
+      "docs": ["How combat was resolved"],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          { "name": "PlayerDefeated" },
+          { "name": "EnemyDefeated" },
+          { "name": "SuddenDeathPlayerWin" },
+          { "name": "SuddenDeathEnemyWin" },
+          { "name": "FailsafePlayerWin" },
+          { "name": "FailsafeEnemyWin" }
+        ]
+      }
+    }
+  ],
+  "events": [
+    {
+      "name": "CombatInitialized",
+      "fields": [
+        { "name": "gameState", "type": "publicKey", "index": false },
+        { "name": "player", "type": "publicKey", "index": false },
+        { "name": "playerHp", "type": "i16", "index": false },
+        { "name": "enemyHp", "type": "i16", "index": false }
+      ]
+    },
+    {
+      "name": "TurnExecuted",
+      "fields": [
+        { "name": "turn", "type": "u8", "index": false },
+        { "name": "playerHp", "type": "i16", "index": false },
+        { "name": "enemyHp", "type": "i16", "index": false },
+        { "name": "playerDamageDealt", "type": "i16", "index": false },
+        { "name": "enemyDamageDealt", "type": "i16", "index": false }
+      ]
+    },
+    {
+      "name": "StatusApplied",
+      "fields": [
+        { "name": "target", "type": "string", "index": false },
+        { "name": "effectType", "type": "string", "index": false },
+        { "name": "stacks", "type": "u8", "index": false }
+      ]
+    },
+    {
+      "name": "CombatResult",
+      "fields": [
+        { "name": "gameState", "type": "publicKey", "index": false },
+        { "name": "player", "type": "publicKey", "index": false },
+        { "name": "playerWon", "type": "bool", "index": false },
+        { "name": "finalTurn", "type": "u8", "index": false },
+        { "name": "playerRemainingHp", "type": "i16", "index": false },
+        { "name": "enemyRemainingHp", "type": "i16", "index": false },
+        { "name": "resolutionType", "type": { "defined": "ResolutionType" }, "index": false }
+      ]
+    }
+  ],
+  "errors": [
+    { "code": 6000, "name": "CombatAlreadyEnded", "msg": "Combat has already ended" },
+    { "code": 6001, "name": "CombatNotEnded", "msg": "Combat has not ended yet" },
+    { "code": 6002, "name": "Unauthorized", "msg": "Unauthorized: signer is not the combat owner" },
+    { "code": 6003, "name": "InvalidCombatant", "msg": "Invalid combatant stats provided" },
+    { "code": 6004, "name": "ArithmeticOverflow", "msg": "Arithmetic operation overflowed" },
+    { "code": 6005, "name": "MaxTurnsExceeded", "msg": "Combat exceeded maximum turns" },
+    { "code": 6006, "name": "InvalidTrigger", "msg": "Invalid trigger type for this context" }
+  ]
+}

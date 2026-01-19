@@ -3,7 +3,8 @@ members = [
     "programs/player-profile",
     "programs/session-manager",
     "programs/map-generator",
-    "programs/gameplay-state"
+    "programs/gameplay-state",
+    "programs/combat-system"
 ]
 resolver = "2"
 

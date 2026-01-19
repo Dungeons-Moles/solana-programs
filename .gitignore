@@ -4,6 +4,7 @@ debug/
 release/
 *.rs.bk
 *.rlib
+*.prof*
 
 # Anchor build artifacts
 .anchor/

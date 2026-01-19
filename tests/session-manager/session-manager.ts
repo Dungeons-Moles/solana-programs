@@ -1,6 +1,6 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import { SessionManager } from "../target/types/session_manager";
+import { SessionManager } from "../../target/types/session_manager";
 import { expect } from "chai";
 import { Keypair, LAMPORTS_PER_SOL, SystemProgram } from "@solana/web3.js";
 

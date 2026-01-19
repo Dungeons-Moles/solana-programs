@@ -5,13 +5,19 @@ Auto-generated from all feature plans. Last updated: 2026-01-15
 ## Active Technologies
 
 - Rust 1.75+ (Solana BPF target) + Anchor 0.32+, Solana CLI 2.3+, solana-program (001-solana-core-programs)
+- Field Enemies (005-field-enemies): Static lookup tables for stats/traits, on-chain RNG for spawns
 - MagicBlock integration is stubbed (SDK pending toolchain update)
 
 ## Project Structure
 
 ```text
-src/
+programs/
+  session-manager/
+  map-generator/
+  combat-system/
+  field-enemies/
 tests/
+  ...
 ```
 
 ## Commands
@@ -27,6 +33,7 @@ Rust 1.75+ (Solana BPF target): Follow standard conventions
 
 ## Recent Changes
 
+- 005-field-enemies: Implemented enemy spawning, combat reward logic, and static data for 12 archetypes
 - 001-solana-core-programs: Implemented session manager + map generator, added tests
 
 <!-- MANUAL ADDITIONS START -->

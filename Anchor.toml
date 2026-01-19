@@ -7,12 +7,14 @@ player_profile = "29DPbP1zuCCRg63PiShMjxAmZos97BR5TmhpijUYQzze"
 session_manager = "FcMT7MzBLVQGaMATEMws3fjsL2Q77QSHmoEPdowTMxJa"
 map_generator = "BYdGuEGf8NqtLnHpSRuZFrPGEgvdxMfGfTt71QVBxYHa"
 gameplay_state = "5VAaGSSoBP4UEt3RL2EXvDwpeDxAXMndsJn7QX96nc4n"
+combat_system = "ArfGqYVEMwX2GzLip1rWxCef4Ewf4imtZGjzEyEhSf6r"
 
 [programs.devnet]
 player_profile = "29DPbP1zuCCRg63PiShMjxAmZos97BR5TmhpijUYQzze"
 session_manager = "FcMT7MzBLVQGaMATEMws3fjsL2Q77QSHmoEPdowTMxJa"
 map_generator = "BYdGuEGf8NqtLnHpSRuZFrPGEgvdxMfGfTt71QVBxYHa"
 gameplay_state = "5VAaGSSoBP4UEt3RL2EXvDwpeDxAXMndsJn7QX96nc4n"
+combat_system = "ArfGqYVEMwX2GzLip1rWxCef4Ewf4imtZGjzEyEhSf6r"
 
 [registry]
 url = "https://api.apr.dev"

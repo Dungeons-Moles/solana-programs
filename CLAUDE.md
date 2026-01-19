@@ -6,6 +6,7 @@ Auto-generated from all feature plans. Last updated: 2026-01-15
 - Rust 2021 edition, Solana SDK 2.x + Anchor 0.31.1 (matching existing programs) (002-gameplay-state-tracking)
 - Solana accounts (PDA-based state) (002-gameplay-state-tracking)
 - Rust 2021 edition (Solana BPF target) + Anchor 0.31.1 (matching existing programs), solana-program (003-combat-system)
+- Solana accounts (PDA-based state) + on-chain item registry (004-item-system)
 
 - Rust 1.75+ (Solana BPF target) + Anchor 0.32+, Solana CLI 2.3+, solana-program (001-solana-core-programs)
 - MagicBlock integration is stubbed (SDK pending toolchain update)
@@ -29,10 +30,10 @@ cargo clippy
 Rust 1.75+ (Solana BPF target): Follow standard conventions
 
 ## Recent Changes
+- 004-item-system: Added Rust 2021 edition (Solana BPF target) + Anchor 0.31.1 (matching existing programs), solana-program
 - 003-combat-system: Added Rust 2021 edition (Solana BPF target) + Anchor 0.31.1 (matching existing programs), solana-program
 - 002-gameplay-state-tracking: Added Rust 2021 edition, Solana SDK 2.x + Anchor 0.31.1 (matching existing programs)
 
-- 001-solana-core-programs: Implemented session manager + map generator, added tests
 
 <!-- MANUAL ADDITIONS START -->
 <!-- MANUAL ADDITIONS END -->

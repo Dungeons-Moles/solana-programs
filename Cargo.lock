@@ -669,6 +669,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "player-inventory"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+]
+
+[[package]]
 name = "player-profile"
 version = "0.1.0"
 dependencies = [

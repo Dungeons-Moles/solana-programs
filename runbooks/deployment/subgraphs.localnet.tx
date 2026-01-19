@@ -25,3 +25,129 @@ action "session_manager_session_started" "svm::deploy_subgraph" {
         name = "SessionStarted"
     }
 }
+
+action "gameplay_state_initialized" "svm::deploy_subgraph" {
+    program_id = action.deploy_gameplay_state.program_id
+    program_idl = action.deploy_gameplay_state.program_idl
+    block_height = 0 // action.deploy_gameplay_state.block_height
+    event {
+        name = "GameStateInitialized"
+    }
+}
+
+action "gameplay_state_player_moved" "svm::deploy_subgraph" {
+    program_id = action.deploy_gameplay_state.program_id
+    program_idl = action.deploy_gameplay_state.program_idl
+    block_height = 0 // action.deploy_gameplay_state.block_height
+    event {
+        name = "PlayerMoved"
+    }
+}
+
+action "gameplay_state_phase_advanced" "svm::deploy_subgraph" {
+    program_id = action.deploy_gameplay_state.program_id
+    program_idl = action.deploy_gameplay_state.program_idl
+    block_height = 0 // action.deploy_gameplay_state.block_height
+    event {
+        name = "PhaseAdvanced"
+    }
+}
+
+action "gameplay_state_boss_ready" "svm::deploy_subgraph" {
+    program_id = action.deploy_gameplay_state.program_id
+    program_idl = action.deploy_gameplay_state.program_idl
+    block_height = 0 // action.deploy_gameplay_state.block_height
+    event {
+        name = "BossFightReady"
+    }
+}
+
+action "gameplay_state_stat_modified" "svm::deploy_subgraph" {
+    program_id = action.deploy_gameplay_state.program_id
+    program_idl = action.deploy_gameplay_state.program_idl
+    block_height = 0 // action.deploy_gameplay_state.block_height
+    event {
+        name = "StatModified"
+    }
+}
+
+action "gameplay_state_closed" "svm::deploy_subgraph" {
+    program_id = action.deploy_gameplay_state.program_id
+    program_idl = action.deploy_gameplay_state.program_idl
+    block_height = 0 // action.deploy_gameplay_state.block_height
+    event {
+        name = "GameStateClosed"
+    }
+}
+
+action "player_profile_created" "svm::deploy_subgraph" {
+    program_id = action.deploy_player_profile.program_id
+    program_idl = action.deploy_player_profile.program_idl
+    block_height = 0 // action.deploy_player_profile.block_height
+    event {
+        name = "ProfileCreated"
+    }
+}
+
+action "player_profile_run_completed" "svm::deploy_subgraph" {
+    program_id = action.deploy_player_profile.program_id
+    program_idl = action.deploy_player_profile.program_idl
+    block_height = 0 // action.deploy_player_profile.block_height
+    event {
+        name = "RunCompleted"
+    }
+}
+
+action "map_generator_config_updated" "svm::deploy_subgraph" {
+    program_id = action.deploy_map_generator.program_id
+    program_idl = action.deploy_map_generator.program_idl
+    block_height = 0 // action.deploy_map_generator.block_height
+    event {
+        name = "MapConfigUpdated"
+    }
+}
+
+action "map_generator_admin_transferred" "svm::deploy_subgraph" {
+    program_id = action.deploy_map_generator.program_id
+    program_idl = action.deploy_map_generator.program_idl
+    block_height = 0 // action.deploy_map_generator.block_height
+    event {
+        name = "AdminTransferred"
+    }
+}
+
+action "combat_system_initialized" "svm::deploy_subgraph" {
+    program_id = action.deploy_combat_system.program_id
+    program_idl = action.deploy_combat_system.program_idl
+    block_height = 0 // action.deploy_combat_system.block_height
+    event {
+        name = "CombatInitialized"
+    }
+}
+
+action "combat_system_turn_executed" "svm::deploy_subgraph" {
+    program_id = action.deploy_combat_system.program_id
+    program_idl = action.deploy_combat_system.program_idl
+    block_height = 0 // action.deploy_combat_system.block_height
+    event {
+        name = "TurnExecuted"
+    }
+}
+
+action "combat_system_status_applied" "svm::deploy_subgraph" {
+    program_id = action.deploy_combat_system.program_id
+    program_idl = action.deploy_combat_system.program_idl
+    block_height = 0 // action.deploy_combat_system.block_height
+    event {
+        name = "StatusApplied"
+    }
+}
+
+action "combat_system_result" "svm::deploy_subgraph" {
+    program_id = action.deploy_combat_system.program_id
+    program_idl = action.deploy_combat_system.program_idl
+    block_height = 0 // action.deploy_combat_system.block_height
+    event {
+        name = "CombatResult"
+    }
+}

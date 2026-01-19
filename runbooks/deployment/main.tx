@@ -39,3 +39,17 @@ action "deploy_session_manager" "svm::deploy_program" {
     // This will make deployments instantaneous, but is deviating from how the deployments will take place on devnet/mainnet.
     // instant_surfnet_deployment = true
 }
+
+action "deploy_gameplay_state" "svm::deploy_program" {
+    description = "Deploy gameplay_state program"
+    program = svm::get_program_from_anchor_project("gameplay_state")
+    authority = signer.authority
+    payer = signer.payer
+}
+
+action "deploy_combat_system" "svm::deploy_program" {
+    description = "Deploy combat_system program"
+    program = svm::get_program_from_anchor_project("combat_system")
+    authority = signer.authority
+    payer = signer.payer
+}

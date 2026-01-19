@@ -4,7 +4,8 @@ members = [
     "programs/session-manager",
     "programs/map-generator",
     "programs/gameplay-state",
-    "programs/combat-system"
+    "programs/combat-system",
+    "programs/player-inventory"
 ]
 resolver = "2"
 

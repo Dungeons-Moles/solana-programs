@@ -338,6 +338,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "boss-system"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "combat-system",
+]
+
+[[package]]
 name = "bs58"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

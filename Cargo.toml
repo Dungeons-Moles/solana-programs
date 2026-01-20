@@ -6,7 +6,8 @@ members = [
     "programs/gameplay-state",
     "programs/combat-system",
     "programs/player-inventory",
-    "programs/field-enemies"
+    "programs/field-enemies",
+    "programs/boss-system"
 ]
 resolver = "2"
 

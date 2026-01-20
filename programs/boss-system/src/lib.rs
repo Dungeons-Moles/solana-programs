@@ -12,6 +12,9 @@ pub use scaling::*;
 pub use selection::*;
 pub use traits::*;
 
+// Re-export combat types from combat-system to avoid duplication
+pub use combat_system::{EffectType, ItemEffect, TriggerType};
+
 declare_id!("AjGZWfgKxaEx27YpnRxWqjbnANBDJSMHdJLWyrFWrvJY");
 
 /// Biome type for boss categorization
@@ -50,47 +53,6 @@ pub enum ItemTag {
     Rust,
     Blood,
     Tempo,
-}
-
-/// When an effect triggers
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TriggerType {
-    BattleStart,
-    FirstTurn,
-    TurnStart,
-    EveryOtherTurn,
-    OnHit,
-    Exposed,
-    Wounded,
-    Countdown { turns: u8 },
-}
-
-/// What an effect does
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EffectType {
-    DealDamage,
-    DealNonWeaponDamage,
-    Heal,
-    GainArmor,
-    GainAtk,
-    GainSpd,
-    ApplyChill,
-    ApplyShrapnel,
-    ApplyRust,
-    ApplyBleed,
-    RemoveArmor,
-    GainStrikes,
-    StealGold,
-    GoldToArmor,
-}
-
-/// Combat effect structure
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug)]
-pub struct ItemEffect {
-    pub trigger: TriggerType,
-    pub once_per_turn: bool,
-    pub effect_type: EffectType,
-    pub value: i16,
 }
 
 /// Summary information about a boss for external queries

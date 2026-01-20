@@ -19,7 +19,7 @@ pub struct CombatantInput {
     pub strikes: u8,
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace)]
 pub enum TriggerType {
     BattleStart,
     FirstTurn,
@@ -28,9 +28,10 @@ pub enum TriggerType {
     OnHit,
     Exposed,
     Wounded,
+    Countdown { turns: u8 },
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace)]
 pub enum EffectType {
     DealDamage,
     DealNonWeaponDamage,
@@ -43,6 +44,9 @@ pub enum EffectType {
     ApplyRust,
     ApplyBleed,
     RemoveArmor,
+    GainStrikes,
+    StealGold,
+    GoldToArmor,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, InitSpace)]

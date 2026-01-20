@@ -18,6 +18,7 @@ pub fn should_trigger(trigger_type: TriggerType, turn: u8, is_first_turn: bool) 
         TriggerType::EveryOtherTurn => turn % 2 == 0,
         TriggerType::OnHit => true,
         TriggerType::Exposed | TriggerType::Wounded => true,
+        TriggerType::Countdown { turns } => turn >= turns,
     }
 }
 
@@ -76,6 +77,10 @@ pub fn apply_effect(
         EffectType::RemoveArmor => {
             let reduced = stats.arm.checked_sub(value).unwrap_or(i16::MIN);
             stats.arm = reduced.max(0);
+        }
+        // Boss-specific effects (handled by boss-system or gameplay-state)
+        EffectType::GainStrikes | EffectType::StealGold | EffectType::GoldToArmor => {
+            // These effects are processed outside the combat system
         }
     }
 }

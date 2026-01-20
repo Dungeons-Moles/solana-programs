@@ -14,8 +14,11 @@ use effects::{
     apply_chill_to_strikes, decay_status_effects, process_bleed_damage, process_rust_decay,
 };
 use errors::CombatSystemError;
-use state::{CombatState, CombatantInput, ItemEffect, ResolutionType, StatusEffects, TriggerType};
+use state::{CombatState, CombatantInput, ResolutionType, StatusEffects};
 use triggers::{process_triggers_for_phase, reset_once_per_turn_flags, CombatantStats};
+
+// Re-export common types for use by other programs
+pub use state::{EffectType, ItemEffect, TriggerType};
 
 declare_id!("ArfGqYVEMwX2GzLip1rWxCef4Ewf4imtZGjzEyEhSf6r");
 

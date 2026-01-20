@@ -56,6 +56,7 @@ pub fn select_boss(stage: u8, week: Week) -> &'static BossDefinition {
     };
 
     // Get the boss from our registry
+    // Safe to unwrap: all 24 bosses exist, inputs validated at instruction level
     get_boss_by_index(biome, week, boss_index).expect("Boss should exist for valid stage and week")
 }
 

@@ -15,6 +15,7 @@ declare_id!("4cyqGxGRHBb1gR73ssCa53Hapv7UmmETsXYEC9Keg1PR");
 /// Map dimensions for enemy placement
 const MAP_WIDTH: u8 = 32;
 const MAP_HEIGHT: u8 = 32;
+const MAP_TILES: usize = (MAP_WIDTH as usize) * (MAP_HEIGHT as usize);
 
 /// Simple linear congruential generator for deterministic pseudo-random values
 /// Uses standard LCG parameters (multiplier and increment from Numerical Recipes)
@@ -56,6 +57,8 @@ pub mod field_enemies {
 
         // Spawn enemies
         let mut enemies = Vec::with_capacity(spawn_count as usize);
+        let mut occupied = [false; MAP_TILES];
+        occupied[0] = true;
 
         for i in 0..spawn_count {
             // Generate pseudo-random values from seed
@@ -71,12 +74,27 @@ pub mod field_enemies {
             let archetype_id = spawner::sample_archetype(arch_rand, act);
 
             // Calculate position - distribute enemies across the map grid
-            // Skip (0,0) which is typically spawn point
-            let x = ((pos_rand as u8).wrapping_add(i)) % MAP_WIDTH;
-            let y = (((pos_rand >> 8) as u8).wrapping_add(i.wrapping_mul(3))) % MAP_HEIGHT;
+            let mut idx = ((pos_rand as usize).wrapping_add(i as usize)) % MAP_TILES;
+            if idx == 0 {
+                idx = 1;
+            }
+            let mut final_x = 1u8;
+            let mut final_y = 1u8;
 
-            // Ensure we don't place at origin (0,0)
-            let (final_x, final_y) = if x == 0 && y == 0 { (1, 1) } else { (x, y) };
+            for _ in 0..MAP_TILES {
+                let x = (idx % MAP_WIDTH as usize) as u8;
+                let y = (idx / MAP_WIDTH as usize) as u8;
+                if !occupied[idx] {
+                    occupied[idx] = true;
+                    final_x = x;
+                    final_y = y;
+                    break;
+                }
+                idx = (idx + 1) % MAP_TILES;
+                if idx == 0 {
+                    idx = 1;
+                }
+            }
 
             enemies.push(EnemyInstance {
                 archetype_id,

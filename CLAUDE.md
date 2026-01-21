@@ -13,6 +13,8 @@ Auto-generated from all feature plans. Last updated: 2026-01-15
 - Compile-time constants for boss definitions; BossInstance computed at runtime (006-boss-system)
 - Rust 2021 edition (Solana BPF target) + Anchor 0.32.0, solana-program (007-poi-system)
 - PDA-based state for per-session POI instances (MapPois account) (007-poi-system)
+- Rust 2021 edition (Solana BPF target) + Anchor 0.32+, solana-program, combat-system crate (for ItemTag reuse), player-inventory crate (for ItemDefinition access), boss-system crate (for BossDefinition/weakness tags) (008-item-offer-generation)
+- PDA-based state via Anchor (`MapPois` extended with offer state, or new `ItemOffers` account) (008-item-offer-generation)
 
 - Rust 1.75+ (Solana BPF target) + Anchor 0.32+, Solana CLI 2.3+, solana-program (001-solana-core-programs)
 - MagicBlock integration is stubbed (SDK pending toolchain update)
@@ -36,9 +38,9 @@ cargo clippy
 Rust 1.75+ (Solana BPF target): Follow standard conventions
 
 ## Recent Changes
+- 008-item-offer-generation: Added Rust 2021 edition (Solana BPF target) + Anchor 0.32+, solana-program, combat-system crate (for ItemTag reuse), player-inventory crate (for ItemDefinition access), boss-system crate (for BossDefinition/weakness tags)
 - 007-poi-system: Added Rust 2021 edition (Solana BPF target) + Anchor 0.32.0, solana-program
 - 006-boss-system: Added Rust 2021 edition (Solana BPF target) + Anchor 0.31.1 + solana-program, anchor-lang, combat-system crate (for ItemEffect/TriggerType reuse)
-- 005-field-enemies: Added Rust 1.75+ (Solana BPF target) + Anchor 0.32+, anchor-lang, solana-program
 
 
 <!-- MANUAL ADDITIONS START -->

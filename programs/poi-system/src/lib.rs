@@ -1087,3 +1087,13 @@ pub struct RestCompleted {
     pub heal_amount: u8,
     pub full_heal: bool,
 }
+
+/// Emitted when a cache offer is generated for pick-item POIs.
+#[event]
+pub struct CacheOfferGenerated {
+    pub session: Pubkey,
+    pub poi_index: u8,
+    pub poi_type: u8,
+    /// Items as (item_id as bytes, rarity)
+    pub items: [([u8; 8], u8); 3],
+}

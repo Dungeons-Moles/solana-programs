@@ -1205,6 +1205,7 @@ mod tests {
             offers,
             reroll_count: 0,
             active,
+            rng_state: 0,
         }
     }
 

@@ -115,6 +115,26 @@ pub struct ItemOffer {
     pub purchased: bool,
 }
 
+/// Offer item for cache POIs (simplified, without price/purchased).
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, InitSpace, Default)]
+pub struct OfferItem {
+    /// Item definition ID (e.g., "G-ST-01\0")
+    pub item_id: [u8; 8],
+    /// Item rarity (0=Common, 1=Rare, 2=Heroic, 3=Mythic)
+    pub rarity: u8,
+}
+
+/// Cache offer for pick-item POIs (L2, L3, L12, L13).
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, InitSpace, Default)]
+pub struct CacheOffer {
+    /// Which POI this offer belongs to
+    pub poi_index: u8,
+    /// The 3 items offered
+    pub items: [OfferItem; 3],
+    /// Seed used to generate this offer (for verification)
+    pub generated_at_seed: u64,
+}
+
 /// Runtime POI placed on the map
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, InitSpace, Default)]
 pub struct PoiInstance {
@@ -143,6 +163,8 @@ pub struct ShopState {
     pub reroll_count: u8,
     /// Whether shop session is active
     pub active: bool,
+    /// RNG state for next reroll (for deterministic regeneration)
+    pub rng_state: u64,
 }
 
 impl ShopState {
@@ -174,6 +196,8 @@ pub struct MapPois {
     pub pois: Vec<PoiInstance>,
     /// Active shop session (if any)
     pub shop_state: ShopState,
+    /// Current cache offer (for pick-item POIs)
+    pub current_offer: Option<CacheOffer>,
 }
 
 impl MapPois {

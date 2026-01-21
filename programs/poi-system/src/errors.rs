@@ -70,4 +70,17 @@ pub enum PoiSystemError {
 
     #[msg("Invalid interaction for this POI type")]
     InvalidInteraction,
+
+    // New offer generation errors
+    #[msg("No POI interaction is currently active")]
+    NoActiveInteraction,
+
+    #[msg("No active shop to reroll")]
+    NoActiveShop,
+
+    #[msg("No items available for the selected tag and rarity")]
+    NoItemsAvailable,
+
+    #[msg("Invalid offer context")]
+    InvalidOfferContext,
 }

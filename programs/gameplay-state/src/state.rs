@@ -112,6 +112,9 @@ pub struct GameState {
     /// Boss fight triggered flag
     pub boss_fight_ready: bool,
 
+    /// Current gold amount (0-65535)
+    pub gold: u16,
+
     /// PDA bump seed
     pub bump: u8,
 }

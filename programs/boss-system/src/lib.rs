@@ -169,4 +169,8 @@ pub mod boss_system {
 }
 
 #[derive(Accounts)]
-pub struct Empty {}
+pub struct Empty<'info> {
+    /// CHECK: Empty accounts struct for view functions that don't need accounts
+    #[account()]
+    pub _placeholder: Option<AccountInfo<'info>>,
+}

@@ -11,6 +11,7 @@ combat_system = "ArfGqYVEMwX2GzLip1rWxCef4Ewf4imtZGjzEyEhSf6r"
 player_inventory = "8vNWjVvz8ZZvPLCKhNJcJH6vxCqNKJgq3hLYAqYdQmQZ"
 field_enemies = "4cyqGxGRHBb1gR73ssCa53Hapv7UmmETsXYEC9Keg1PR"
 boss_system = "AjGZWfgKxaEx27YpnRxWqjbnANBDJSMHdJLWyrFWrvJY"
+poi_system = "FJVnZE45hxcd7BJeci27BiTx23XD6inN4paiM2EkMaoB"
 
 [programs.devnet]
 player_profile = "29DPbP1zuCCRg63PiShMjxAmZos97BR5TmhpijUYQzze"
@@ -21,6 +22,7 @@ combat_system = "ArfGqYVEMwX2GzLip1rWxCef4Ewf4imtZGjzEyEhSf6r"
 player_inventory = "8vNWjVvz8ZZvPLCKhNJcJH6vxCqNKJgq3hLYAqYdQmQZ"
 field_enemies = "4cyqGxGRHBb1gR73ssCa53Hapv7UmmETsXYEC9Keg1PR"
 boss_system = "AjGZWfgKxaEx27YpnRxWqjbnANBDJSMHdJLWyrFWrvJY"
+poi_system = "FJVnZE45hxcd7BJeci27BiTx23XD6inN4paiM2EkMaoB"
 
 [registry]
 url = "https://api.apr.dev"

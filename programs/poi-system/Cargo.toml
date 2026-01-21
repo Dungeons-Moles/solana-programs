@@ -1,0 +1,23 @@
+[package]
+name = "poi-system"
+version = "0.1.0"
+description = "POI System Program for Points of Interest interactions"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "poi_system"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build"]
+
+[dependencies]
+anchor-lang = "0.32.0"
+player-inventory = { path = "../player-inventory", features = ["cpi"] }
+boss-system = { path = "../boss-system", features = ["cpi"] }
+gameplay-state = { path = "../gameplay-state", features = ["cpi"] }

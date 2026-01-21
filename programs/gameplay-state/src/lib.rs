@@ -53,6 +53,7 @@ pub mod gameplay_state {
         game_state.moves_remaining = DAY_MOVES;
         game_state.total_moves = 0;
         game_state.boss_fight_ready = false;
+        game_state.gold = 0;
         game_state.bump = ctx.bumps.game_state;
 
         emit!(GameStateInitialized {
@@ -268,6 +269,36 @@ pub mod gameplay_state {
 
         Ok(())
     }
+
+    /// Modifies the player's gold by a delta value.
+    pub fn modify_gold(ctx: Context<ModifyGold>, delta: i16) -> Result<()> {
+        let game_state = &mut ctx.accounts.game_state;
+
+        let new_gold = (game_state.gold as i32)
+            .checked_add(delta as i32)
+            .ok_or(GameplayStateError::ArithmeticOverflow)?;
+
+        // Gold cannot go below 0
+        require!(new_gold >= 0, GameplayStateError::GoldUnderflow);
+
+        // Gold cannot exceed u16::MAX
+        require!(
+            new_gold <= u16::MAX as i32,
+            GameplayStateError::StatOverflow
+        );
+
+        let old_gold = game_state.gold;
+        game_state.gold = new_gold as u16;
+
+        emit!(GoldModified {
+            player: game_state.player,
+            old_gold,
+            new_gold: game_state.gold,
+            delta,
+        });
+
+        Ok(())
+    }
 }
 
 /// Helper function to handle phase advancement when moves are exhausted
@@ -380,6 +411,17 @@ pub struct CloseGameState<'info> {
     pub player: Signer<'info>,
 }
 
+#[derive(Accounts)]
+pub struct ModifyGold<'info> {
+    #[account(
+        mut,
+        has_one = player @ GameplayStateError::Unauthorized,
+    )]
+    pub game_state: Account<'info, GameState>,
+
+    pub player: Signer<'info>,
+}
+
 // Events
 
 #[event]
@@ -429,4 +471,12 @@ pub struct GameStateClosed {
     pub total_moves: u32,
     pub final_phase: Phase,
     pub final_week: u8,
+}
+
+#[event]
+pub struct GoldModified {
+    pub player: Pubkey,
+    pub old_gold: u16,
+    pub new_gold: u16,
+    pub delta: i16,
 }

@@ -17,6 +17,9 @@ pub enum GameplayStateError {
     #[msg("HP cannot go below 0")]
     HpUnderflow,
 
+    #[msg("Gold cannot go below 0")]
+    GoldUnderflow,
+
     #[msg("Invalid stat modification")]
     InvalidStatModification,
 

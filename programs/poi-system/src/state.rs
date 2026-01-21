@@ -167,6 +167,8 @@ pub struct MapPois {
     pub act: u8,
     /// Current week (1-3)
     pub week: u8,
+    /// Seed for deterministic POI generation
+    pub seed: u64,
     /// All POIs on this map
     #[max_len(50)]
     pub pois: Vec<PoiInstance>,

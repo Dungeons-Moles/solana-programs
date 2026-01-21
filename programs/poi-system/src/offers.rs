@@ -458,16 +458,18 @@ fn select_gear_by_rarity_weighted(
 ) -> [u8; 8] {
     // Calculate total weight
     let total_weight: u64 = tag_weights.iter().map(|w| *w as u64).sum();
-    let roll = seed % total_weight;
 
-    // Select tag based on weights
-    let mut cumulative = 0u64;
-    let mut selected_tag = 0usize;
-    for (i, &weight) in tag_weights.iter().enumerate() {
-        cumulative += weight as u64;
-        if roll < cumulative {
-            selected_tag = i;
-            break;
+    // Select tag based on weights (fallback to last tag if weights sum to 0)
+    let mut selected_tag = 7usize;
+    if total_weight > 0 {
+        let roll = seed % total_weight;
+        let mut cumulative = 0u64;
+        for (i, &weight) in tag_weights.iter().enumerate() {
+            cumulative += weight as u64;
+            if roll < cumulative {
+                selected_tag = i;
+                break;
+            }
         }
     }
 

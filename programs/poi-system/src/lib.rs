@@ -22,7 +22,7 @@ pub mod poi_system {
         ctx: Context<InitializeMapPois>,
         act: u8,
         week: u8,
-        _seed: u64,
+        seed: u64,
     ) -> Result<()> {
         require!((1..=4).contains(&act), PoiSystemError::InvalidAct);
 
@@ -32,6 +32,7 @@ pub mod poi_system {
         map_pois.count = 0;
         map_pois.act = act;
         map_pois.week = week;
+        map_pois.seed = seed;
         map_pois.pois = Vec::new();
         map_pois.shop_state = ShopState::default();
 
@@ -75,8 +76,12 @@ pub mod poi_system {
     /// - L1: Full heal, repeatable, night-only
     /// - L5: Heal 10 HP, one-time, night-only
     ///
-    /// The instruction validates the interaction and emits a RestCompleted event.
-    /// The caller is responsible for updating GameState HP via CPI.
+    /// # Design Note
+    /// This instruction validates the interaction, marks the POI as used (if applicable),
+    /// and emits a `RestCompleted` event with `heal_amount`. The caller (client or
+    /// orchestrator program) must invoke `gameplay-state::modify_hp` with the heal amount
+    /// to actually update the player's HP. This separation keeps poi-system decoupled
+    /// from gameplay-state.
     pub fn interact_rest(
         ctx: Context<InteractRest>,
         poi_index: u8,
@@ -305,7 +310,12 @@ pub mod poi_system {
     /// Purchase an item from the active shop.
     ///
     /// Validates player has enough gold and marks the offer as purchased.
-    /// The caller is responsible for updating player gold and inventory via CPI.
+    ///
+    /// # Design Note
+    /// Emits `ItemPurchased` with `price`. The caller must invoke:
+    /// - `gameplay-state::modify_gold` with `-price` to deduct gold
+    /// - `player-inventory::add_item` to add the item
+    /// This keeps poi-system decoupled from other programs.
     pub fn shop_purchase(
         ctx: Context<ShopPurchase>,
         offer_index: u8,
@@ -332,7 +342,10 @@ pub mod poi_system {
     /// Reroll the shop offers for a gold cost.
     ///
     /// Cost increases with each reroll: 4, 6, 8, 10, ...
-    /// The caller is responsible for deducting gold via CPI.
+    ///
+    /// # Design Note
+    /// Emits `ShopRerolled` with `cost`. The caller must invoke
+    /// `gameplay-state::modify_gold` with `-cost` to deduct gold.
     pub fn shop_reroll(
         ctx: Context<ShopReroll>,
         player_gold: u16,
@@ -398,6 +411,11 @@ pub mod poi_system {
     ///
     /// Tier I -> II costs 8 Gold, II -> III costs 16 Gold.
     /// POI is one-time use.
+    ///
+    /// # Design Note
+    /// Emits `ToolUpgraded` with `cost`. The caller must invoke:
+    /// - `gameplay-state::modify_gold` with `-cost` to deduct gold
+    /// - `player-inventory::upgrade_item` to update the item tier
     pub fn interact_rusty_anvil(
         ctx: Context<InteractRustyAnvil>,
         poi_index: u8,

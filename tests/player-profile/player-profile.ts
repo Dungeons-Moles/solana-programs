@@ -49,8 +49,10 @@ describe("player-profile", () => {
       expect(profile.owner.toString()).to.equal(user.publicKey.toString());
       expect(profile.name).to.equal(testName);
       expect(profile.totalRuns).to.equal(0);
-      expect(profile.currentLevel).to.equal(0);
-      expect((profile as any).availableRuns).to.equal(40);
+      // Field renamed: currentLevel -> highestLevelUnlocked (starts at 1)
+      expect((profile as any).highestLevelUnlocked).to.equal(1);
+      // availableRuns initial value is now 20 (not 40)
+      expect((profile as any).availableRuns).to.equal(20);
       expect(profile.createdAt.toNumber()).to.be.greaterThan(0);
     });
   });
@@ -210,7 +212,8 @@ describe("player-profile", () => {
 
       const profile = await program.account.playerProfile.fetch(profilePDA);
       expect(profile.totalRuns).to.equal(1);
-      expect((profile as any).availableRuns).to.equal(39);
+      // availableRuns starts at 20, so after 1 run it's 19
+      expect((profile as any).availableRuns).to.equal(19);
     });
 
     it("T095: increments total_runs on completion", async () => {
@@ -250,7 +253,8 @@ describe("player-profile", () => {
 
       const profile = await program.account.playerProfile.fetch(profilePDA);
       expect(profile.totalRuns).to.equal(5);
-      expect((profile as any).availableRuns).to.equal(35);
+      // availableRuns starts at 20, so after 5 runs it's 15
+      expect((profile as any).availableRuns).to.equal(15);
     });
 
     it("T096: advances level on victory", async () => {
@@ -276,26 +280,11 @@ describe("player-profile", () => {
         .signers([user])
         .rpc();
 
-      // Verify starting level
+      // Verify starting level (field renamed: currentLevel -> highestLevelUnlocked, starts at 1)
       let profile = await program.account.playerProfile.fetch(profilePDA);
-      expect(profile.currentLevel).to.equal(0);
+      expect((profile as any).highestLevelUnlocked).to.equal(1);
 
-      // Record a victory
-      await program.methods
-        .recordRunResult(0, true)
-        .accounts({
-          playerProfile: profilePDA,
-          owner: user.publicKey,
-        } as any)
-        .signers([user])
-        .rpc();
-
-      // Verify level advanced
-      profile = await program.account.playerProfile.fetch(profilePDA);
-      expect(profile.currentLevel).to.equal(1);
-      expect((profile as any).availableRuns).to.equal(39);
-
-      // Record another victory
+      // Record a victory at level 1
       await program.methods
         .recordRunResult(1, true)
         .accounts({
@@ -305,9 +294,26 @@ describe("player-profile", () => {
         .signers([user])
         .rpc();
 
+      // Verify level advanced to 2
       profile = await program.account.playerProfile.fetch(profilePDA);
-      expect(profile.currentLevel).to.equal(2);
-      expect((profile as any).availableRuns).to.equal(38);
+      expect((profile as any).highestLevelUnlocked).to.equal(2);
+      // availableRuns starts at 20, so after 1 run it's 19
+      expect((profile as any).availableRuns).to.equal(19);
+
+      // Record another victory at level 2
+      await program.methods
+        .recordRunResult(2, true)
+        .accounts({
+          playerProfile: profilePDA,
+          owner: user.publicKey,
+        } as any)
+        .signers([user])
+        .rpc();
+
+      profile = await program.account.playerProfile.fetch(profilePDA);
+      expect((profile as any).highestLevelUnlocked).to.equal(3);
+      // After 2 runs it's 18
+      expect((profile as any).availableRuns).to.equal(18);
     });
 
     it("T097: does not advance level on defeat", async () => {
@@ -333,8 +339,8 @@ describe("player-profile", () => {
         .signers([user])
         .rpc();
 
-      // Advance to level 5
-      for (let i = 0; i < 5; i++) {
+      // Advance to level 6 (start at 1, win 5 times to get to level 6)
+      for (let i = 1; i <= 5; i++) {
         await program.methods
           .recordRunResult(i, true)
           .accounts({
@@ -346,11 +352,11 @@ describe("player-profile", () => {
       }
 
       let profile = await program.account.playerProfile.fetch(profilePDA);
-      expect(profile.currentLevel).to.equal(5);
+      expect((profile as any).highestLevelUnlocked).to.equal(6);
 
-      // Record a defeat
+      // Record a defeat at level 6
       await program.methods
-        .recordRunResult(5, false)
+        .recordRunResult(6, false)
         .accounts({
           playerProfile: profilePDA,
           owner: user.publicKey,
@@ -360,9 +366,10 @@ describe("player-profile", () => {
 
       // Verify level did NOT advance
       profile = await program.account.playerProfile.fetch(profilePDA);
-      expect(profile.currentLevel).to.equal(5);
+      expect((profile as any).highestLevelUnlocked).to.equal(6);
       expect(profile.totalRuns).to.equal(6);
-      expect((profile as any).availableRuns).to.equal(34);
+      // availableRuns starts at 20, after 6 runs it's 14
+      expect((profile as any).availableRuns).to.equal(14);
     });
   });
 });

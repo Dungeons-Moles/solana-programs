@@ -2,10 +2,15 @@ use anchor_lang::prelude::*;
 
 pub mod constants;
 pub mod errors;
+pub mod movement;
 pub mod state;
 
 use constants::*;
 use errors::GameplayStateError;
+use movement::{
+    calculate_move_cost, chebyshev_distance, get_boss_for_combat, get_boss_id, is_adjacent,
+    is_within_bounds, move_toward, resolve_combat_inline, InlineCombatStats,
+};
 use state::{GameState, Phase, StatType};
 
 declare_id!("5VAaGSSoBP4UEt3RL2EXvDwpeDxAXMndsJn7QX96nc4n");
@@ -17,6 +22,7 @@ pub mod gameplay_state {
     /// Initializes a new GameState account linked to an active GameSession.
     pub fn initialize_game_state(
         ctx: Context<InitializeGameState>,
+        campaign_level: u8,
         map_width: u8,
         map_height: u8,
         start_x: u8,
@@ -25,6 +31,12 @@ pub mod gameplay_state {
         // Validate starting position is within bounds
         require!(
             start_x < map_width && start_y < map_height,
+            GameplayStateError::OutOfBounds
+        );
+
+        // Validate campaign level is valid (1-40)
+        require!(
+            campaign_level >= 1 && campaign_level <= 40,
             GameplayStateError::OutOfBounds
         );
 
@@ -55,6 +67,12 @@ pub mod gameplay_state {
         game_state.boss_fight_ready = false;
         game_state.gold = 0;
         game_state.bump = ctx.bumps.game_state;
+
+        // Store campaign level for boss fight validation
+        game_state.campaign_level = campaign_level;
+
+        // Player starts alive
+        game_state.is_dead = false;
 
         emit!(GameStateInitialized {
             player: game_state.player,
@@ -131,6 +149,8 @@ pub mod gameplay_state {
             to_y: target_y,
             moves_remaining: game_state.moves_remaining,
             is_dig: is_wall,
+            combat_triggered: false,
+            enemies_moved: 0,
         });
 
         // Handle phase advancement if moves exhausted
@@ -299,6 +319,418 @@ pub mod gameplay_state {
 
         Ok(())
     }
+
+    /// Moves the player to an adjacent tile with automatic combat resolution.
+    ///
+    /// This instruction handles:
+    /// 1. Movement validation (bounds, adjacency, move cost)
+    /// 2. Night phase enemy movement (enemies within 3 tiles move toward player)
+    /// 3. Combat triggered by enemy moving into player's tile
+    /// 4. Combat triggered by player moving into enemy's tile
+    /// 5. Phase advancement when moves are exhausted
+    ///
+    /// Combat is resolved inline without CPI for compute efficiency.
+    pub fn move_with_combat(
+        ctx: Context<MoveWithCombat>,
+        target_x: u8,
+        target_y: u8,
+        is_wall: bool,
+    ) -> Result<()> {
+        let game_state = &mut ctx.accounts.game_state;
+        let map_enemies = &mut ctx.accounts.map_enemies;
+
+        // Check if player is dead
+        require!(!game_state.is_dead, GameplayStateError::PlayerDead);
+
+        // Check if boss fight already triggered
+        require!(
+            !game_state.boss_fight_ready,
+            GameplayStateError::BossFightAlreadyTriggered
+        );
+
+        // Validate target is within bounds
+        require!(
+            is_within_bounds(
+                target_x,
+                target_y,
+                game_state.map_width,
+                game_state.map_height
+            ),
+            GameplayStateError::OutOfBounds
+        );
+
+        // Validate target is adjacent (Manhattan distance = 1)
+        require!(
+            is_adjacent(
+                game_state.position_x,
+                game_state.position_y,
+                target_x,
+                target_y
+            ),
+            GameplayStateError::NotAdjacent
+        );
+
+        // Calculate move cost
+        let move_cost = calculate_move_cost(is_wall, game_state.dig);
+
+        // Check sufficient moves
+        require!(
+            game_state.moves_remaining >= move_cost,
+            GameplayStateError::InsufficientMoves
+        );
+
+        // Store old position for event
+        let from_x = game_state.position_x;
+        let from_y = game_state.position_y;
+
+        let mut enemies_moved: u8 = 0;
+        let mut combat_triggered = false;
+
+        // **Night Phase Enemy Movement**
+        // During night phases, enemies within 3 tiles (Chebyshev distance) move toward the player
+        if game_state.phase.is_night() {
+            let player_x = game_state.position_x;
+            let player_y = game_state.position_y;
+
+            for (enemy_idx, enemy) in map_enemies.enemies.iter_mut().enumerate() {
+                if enemy.defeated {
+                    continue;
+                }
+
+                let distance = chebyshev_distance(enemy.x, enemy.y, player_x, player_y);
+                if distance <= 3 && distance > 0 {
+                    let old_x = enemy.x;
+                    let old_y = enemy.y;
+
+                    let (new_x, new_y) = move_toward(enemy.x, enemy.y, player_x, player_y);
+                    enemy.x = new_x;
+                    enemy.y = new_y;
+                    enemies_moved += 1;
+
+                    emit!(EnemyMoved {
+                        enemy_index: enemy_idx as u8,
+                        from_x: old_x,
+                        from_y: old_y,
+                        to_x: new_x,
+                        to_y: new_y,
+                    });
+
+                    // Check if enemy moved into player's position
+                    if new_x == player_x && new_y == player_y {
+                        // Trigger combat - enemy attacks player
+                        let enemy_stats = field_enemies::archetypes::get_enemy_stats(
+                            enemy.archetype_id,
+                            enemy.tier,
+                        );
+
+                        if let Some(stats) = enemy_stats {
+                            emit!(CombatStarted {
+                                player: game_state.player,
+                                player_hp: game_state.hp as i16,
+                                player_atk: game_state.atk as i16,
+                                enemy_archetype: enemy.archetype_id,
+                                enemy_hp: stats.hp as i16,
+                                enemy_atk: stats.atk as i16,
+                            });
+
+                            let mut player_combat = InlineCombatStats {
+                                hp: game_state.hp as i16,
+                                max_hp: game_state.max_hp as u16,
+                                atk: game_state.atk as i16,
+                                arm: game_state.arm as i16,
+                                spd: game_state.spd as i16,
+                                strikes: 1,
+                            };
+                            let mut enemy_combat = InlineCombatStats {
+                                hp: stats.hp as i16,
+                                max_hp: stats.hp,
+                                atk: stats.atk as i16,
+                                arm: stats.arm as i16,
+                                spd: stats.spd as i16,
+                                strikes: 1,
+                            };
+
+                            let result =
+                                resolve_combat_inline(&mut player_combat, &mut enemy_combat);
+                            combat_triggered = true;
+
+                            // Get gold reward based on enemy tier
+                            let tier_enum = field_enemies::state::EnemyTier::from_u8(enemy.tier);
+                            require!(tier_enum.is_some(), GameplayStateError::InvalidEnemyTier);
+                            let gold_reward = tier_enum.unwrap().gold_reward() as u16;
+
+                            emit!(CombatEnded {
+                                player: game_state.player,
+                                player_won: result.player_won,
+                                final_player_hp: result.final_player_hp,
+                                final_enemy_hp: result.final_enemy_hp,
+                                gold_earned: if result.player_won { gold_reward } else { 0 },
+                                turns_taken: result.turns_taken,
+                            });
+
+                            // Update player HP
+                            game_state.hp = result.final_player_hp as i8;
+
+                            if result.player_won {
+                                // Mark enemy as defeated
+                                enemy.defeated = true;
+
+                                // Award gold
+                                game_state.gold =
+                                    game_state.gold.checked_add(gold_reward).unwrap_or(u16::MAX);
+                            } else {
+                                // Player defeated - persist death state and return Ok
+                                game_state.is_dead = true;
+                                game_state.hp = 0;
+
+                                emit!(PlayerDefeated {
+                                    player: game_state.player,
+                                    killed_by: DeathCause::Enemy,
+                                    final_hp: result.final_player_hp,
+                                });
+
+                                // Return Ok to persist the death state
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // **Move Player**
+        game_state.position_x = target_x;
+        game_state.position_y = target_y;
+        game_state.moves_remaining = game_state
+            .moves_remaining
+            .checked_sub(move_cost)
+            .ok_or(GameplayStateError::ArithmeticOverflow)?;
+        game_state.total_moves = game_state
+            .total_moves
+            .checked_add(1)
+            .ok_or(GameplayStateError::ArithmeticOverflow)?;
+
+        // **Check for enemy at target position**
+        // We need to check all enemies since we can't use the helper after borrowing mutably
+        let mut target_enemy_idx: Option<usize> = None;
+        for (idx, enemy) in map_enemies.enemies.iter().enumerate() {
+            if !enemy.defeated && enemy.x == target_x && enemy.y == target_y {
+                target_enemy_idx = Some(idx);
+                break;
+            }
+        }
+
+        if let Some(enemy_idx) = target_enemy_idx {
+            let enemy = &mut map_enemies.enemies[enemy_idx];
+
+            let enemy_stats =
+                field_enemies::archetypes::get_enemy_stats(enemy.archetype_id, enemy.tier);
+
+            if let Some(stats) = enemy_stats {
+                emit!(CombatStarted {
+                    player: game_state.player,
+                    player_hp: game_state.hp as i16,
+                    player_atk: game_state.atk as i16,
+                    enemy_archetype: enemy.archetype_id,
+                    enemy_hp: stats.hp as i16,
+                    enemy_atk: stats.atk as i16,
+                });
+
+                let mut player_combat = InlineCombatStats {
+                    hp: game_state.hp as i16,
+                    max_hp: game_state.max_hp as u16,
+                    atk: game_state.atk as i16,
+                    arm: game_state.arm as i16,
+                    spd: game_state.spd as i16,
+                    strikes: 1,
+                };
+                let mut enemy_combat = InlineCombatStats {
+                    hp: stats.hp as i16,
+                    max_hp: stats.hp,
+                    atk: stats.atk as i16,
+                    arm: stats.arm as i16,
+                    spd: stats.spd as i16,
+                    strikes: 1,
+                };
+
+                let result = resolve_combat_inline(&mut player_combat, &mut enemy_combat);
+                combat_triggered = true;
+
+                // Get gold reward based on enemy tier
+                let tier_enum = field_enemies::state::EnemyTier::from_u8(enemy.tier);
+                require!(tier_enum.is_some(), GameplayStateError::InvalidEnemyTier);
+                let gold_reward = tier_enum.unwrap().gold_reward() as u16;
+
+                emit!(CombatEnded {
+                    player: game_state.player,
+                    player_won: result.player_won,
+                    final_player_hp: result.final_player_hp,
+                    final_enemy_hp: result.final_enemy_hp,
+                    gold_earned: if result.player_won { gold_reward } else { 0 },
+                    turns_taken: result.turns_taken,
+                });
+
+                // Update player HP
+                game_state.hp = result.final_player_hp as i8;
+
+                if result.player_won {
+                    // Mark enemy as defeated
+                    enemy.defeated = true;
+
+                    // Award gold
+                    game_state.gold = game_state.gold.checked_add(gold_reward).unwrap_or(u16::MAX);
+                } else {
+                    // Player defeated - persist death state and return Ok
+                    game_state.is_dead = true;
+                    game_state.hp = 0;
+
+                    emit!(PlayerDefeated {
+                        player: game_state.player,
+                        killed_by: DeathCause::Enemy,
+                        final_hp: result.final_player_hp,
+                    });
+
+                    // Return Ok to persist the death state
+                    return Ok(());
+                }
+            }
+        }
+
+        emit!(PlayerMoved {
+            player: game_state.player,
+            from_x,
+            from_y,
+            to_x: target_x,
+            to_y: target_y,
+            moves_remaining: game_state.moves_remaining,
+            is_dig: is_wall,
+            combat_triggered,
+            enemies_moved,
+        });
+
+        // Handle phase advancement if moves exhausted
+        if game_state.moves_remaining == 0 {
+            handle_phase_advancement(game_state)?;
+        }
+
+        Ok(())
+    }
+
+    /// Triggers and resolves the boss fight when conditions are met.
+    ///
+    /// This instruction handles:
+    /// 1. Validation that boss fight is ready (boss_fight_ready flag set)
+    /// 2. Boss selection based on stored campaign_level and week
+    /// 3. Combat resolution inline
+    /// 4. Victory handling: week advancement or level completion
+    /// 5. Defeat handling: player death persisted in state
+    ///
+    /// Must be called after move_with_combat sets boss_fight_ready = true.
+    pub fn trigger_boss_fight(ctx: Context<TriggerBossFight>) -> Result<()> {
+        let game_state = &mut ctx.accounts.game_state;
+
+        // Check if player is dead
+        require!(!game_state.is_dead, GameplayStateError::PlayerDead);
+
+        // Validate boss fight is ready
+        require!(
+            game_state.boss_fight_ready,
+            GameplayStateError::BossFightNotReady
+        );
+
+        // Use the stored campaign_level instead of user-provided stage
+        let stage = game_state.campaign_level;
+
+        // Get boss stats for this stage and week
+        let mut boss_stats = get_boss_for_combat(stage, game_state.week)?;
+        let boss_id = get_boss_id(stage, game_state.week)?;
+
+        emit!(BossCombatStarted {
+            player: game_state.player,
+            boss_id,
+            boss_hp: boss_stats.hp,
+            week: game_state.week,
+        });
+
+        // Setup player combat stats
+        let mut player_combat = InlineCombatStats {
+            hp: game_state.hp as i16,
+            max_hp: game_state.max_hp as u16,
+            atk: game_state.atk as i16,
+            arm: game_state.arm as i16,
+            spd: game_state.spd as i16,
+            strikes: 1,
+        };
+
+        // Resolve combat
+        let result = resolve_combat_inline(&mut player_combat, &mut boss_stats);
+
+        emit!(CombatEnded {
+            player: game_state.player,
+            player_won: result.player_won,
+            final_player_hp: result.final_player_hp,
+            final_enemy_hp: result.final_enemy_hp,
+            gold_earned: 0, // Boss doesn't give gold directly
+            turns_taken: result.turns_taken,
+        });
+
+        // Update player HP
+        game_state.hp = result.final_player_hp as i8;
+
+        if result.player_won {
+            // Boss defeated - handle week/level progression
+            game_state.boss_fight_ready = false;
+
+            if game_state.week >= 3 {
+                // Week 3 boss defeated - level complete!
+                emit!(LevelCompleted {
+                    player: game_state.player,
+                    level: stage,
+                    total_moves: game_state.total_moves,
+                    gold_earned: game_state.gold,
+                });
+
+                // Mark session as complete (the client should call end_session)
+                // For now, just emit the event and keep the state
+            } else {
+                // Week 1 or 2 boss defeated - advance to next week
+                game_state.week = game_state
+                    .week
+                    .checked_add(1)
+                    .ok_or(GameplayStateError::ArithmeticOverflow)?;
+                game_state.phase = Phase::Day1;
+                game_state.moves_remaining = DAY_MOVES;
+
+                // Increase gear slots (capped at MAX_GEAR_SLOTS)
+                game_state.gear_slots = game_state
+                    .gear_slots
+                    .checked_add(2)
+                    .ok_or(GameplayStateError::ArithmeticOverflow)?
+                    .min(MAX_GEAR_SLOTS);
+
+                emit!(PhaseAdvanced {
+                    player: game_state.player,
+                    new_phase: Phase::Day1,
+                    new_week: game_state.week,
+                    moves_remaining: game_state.moves_remaining,
+                });
+            }
+
+            Ok(())
+        } else {
+            // Player defeated by boss - persist death state and return Ok
+            game_state.is_dead = true;
+            game_state.hp = 0;
+
+            emit!(PlayerDefeated {
+                player: game_state.player,
+                killed_by: DeathCause::Boss,
+                final_hp: result.final_player_hp,
+            });
+
+            Ok(())
+        }
+    }
 }
 
 /// Helper function to handle phase advancement when moves are exhausted
@@ -422,6 +854,36 @@ pub struct ModifyGold<'info> {
     pub player: Signer<'info>,
 }
 
+#[derive(Accounts)]
+pub struct MoveWithCombat<'info> {
+    #[account(
+        mut,
+        has_one = player @ GameplayStateError::Unauthorized,
+    )]
+    pub game_state: Account<'info, GameState>,
+
+    #[account(
+        mut,
+        seeds = [field_enemies::state::MapEnemies::SEED_PREFIX, game_state.session.as_ref()],
+        bump = map_enemies.bump,
+        seeds::program = field_enemies::ID,
+    )]
+    pub map_enemies: Account<'info, field_enemies::state::MapEnemies>,
+
+    pub player: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct TriggerBossFight<'info> {
+    #[account(
+        mut,
+        has_one = player @ GameplayStateError::Unauthorized,
+    )]
+    pub game_state: Account<'info, GameState>,
+
+    pub player: Signer<'info>,
+}
+
 // Events
 
 #[event]
@@ -441,6 +903,8 @@ pub struct PlayerMoved {
     pub to_y: u8,
     pub moves_remaining: u8,
     pub is_dig: bool,
+    pub combat_triggered: bool,
+    pub enemies_moved: u8,
 }
 
 #[event]
@@ -479,4 +943,71 @@ pub struct GoldModified {
     pub old_gold: u16,
     pub new_gold: u16,
     pub delta: i16,
+}
+
+/// Emitted when combat starts (either player walked into enemy or enemy walked into player)
+#[event]
+pub struct CombatStarted {
+    pub player: Pubkey,
+    pub player_hp: i16,
+    pub player_atk: i16,
+    pub enemy_archetype: u8,
+    pub enemy_hp: i16,
+    pub enemy_atk: i16,
+}
+
+/// Emitted when combat ends
+#[event]
+pub struct CombatEnded {
+    pub player: Pubkey,
+    pub player_won: bool,
+    pub final_player_hp: i16,
+    pub final_enemy_hp: i16,
+    pub gold_earned: u16,
+    pub turns_taken: u8,
+}
+
+/// Emitted when an enemy moves during night phase
+#[event]
+pub struct EnemyMoved {
+    pub enemy_index: u8,
+    pub from_x: u8,
+    pub from_y: u8,
+    pub to_x: u8,
+    pub to_y: u8,
+}
+
+/// Emitted when boss combat starts
+#[event]
+pub struct BossCombatStarted {
+    pub player: Pubkey,
+    pub boss_id: [u8; 12],
+    pub boss_hp: i16,
+    pub week: u8,
+}
+
+/// Emitted when the player is defeated (HP <= 0)
+#[event]
+pub struct PlayerDefeated {
+    pub player: Pubkey,
+    pub killed_by: DeathCause,
+    pub final_hp: i16,
+}
+
+/// Cause of player death - uses enum instead of String for efficiency
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DeathCause {
+    /// Killed by a field enemy
+    Enemy = 0,
+    /// Killed by a boss
+    Boss = 1,
+}
+
+/// Emitted when a level is completed (Week 3 boss defeated)
+#[event]
+pub struct LevelCompleted {
+    pub player: Pubkey,
+    pub level: u8,
+    pub total_moves: u32,
+    pub gold_earned: u16,
 }

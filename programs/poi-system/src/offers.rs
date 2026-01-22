@@ -1321,4 +1321,131 @@ mod tests {
         assert_ne!(seed1, seed3);
         assert_ne!(seed2, seed3);
     }
+
+    #[test]
+    fn test_is_item_in_pool_basic() {
+        // Create a pool with bits 0 and 15 set
+        let mut pool = [0u8; 10];
+        pool[0] = 0x01; // bit 0 set
+        pool[1] = 0x80; // bit 15 set (byte 1, bit 7)
+
+        assert!(super::is_item_in_pool(&pool, 0));
+        assert!(!super::is_item_in_pool(&pool, 1));
+        assert!(super::is_item_in_pool(&pool, 15));
+        assert!(!super::is_item_in_pool(&pool, 16));
+    }
+
+    #[test]
+    fn test_is_item_in_pool_out_of_bounds() {
+        let pool = [0xFFu8; 10]; // All bits set
+                                 // Index 80+ should return false (out of bounds)
+        assert!(!super::is_item_in_pool(&pool, 80));
+        assert!(!super::is_item_in_pool(&pool, 255));
+    }
+}
+
+// =============================================================================
+// Item Pool Filtering
+// =============================================================================
+
+/// Session item bitmask size (80 bits = 10 bytes)
+pub const ITEM_POOL_SIZE: usize = 10;
+
+/// Check if an item index is in the active item pool bitmask.
+///
+/// The active_item_pool is a bitmask where each bit represents an item.
+/// Items are indexed starting at 0. The bitmask is stored as bytes
+/// in little-endian order (bit 0 is the LSB of byte 0).
+///
+/// # Arguments
+/// * `pool` - The 10-byte active_item_pool bitmask
+/// * `item_index` - The item index to check (0-79)
+///
+/// # Returns
+/// `true` if the item is unlocked in the pool, `false` otherwise
+pub fn is_item_in_pool(pool: &[u8; ITEM_POOL_SIZE], item_index: u8) -> bool {
+    // Check bounds - pool supports items 0-79
+    if item_index >= (ITEM_POOL_SIZE * 8) as u8 {
+        return false;
+    }
+
+    let byte_index = (item_index / 8) as usize;
+    let bit_index = item_index % 8;
+
+    (pool[byte_index] & (1 << bit_index)) != 0
+}
+
+/// Convert an item ID to its pool index.
+///
+/// Item IDs follow the format: {Type}-{Tag}-{Num}
+/// - Type: T (Tool) or G (Gear)
+/// - Tag: 2-char tag code (ST, SC, GR, BL, FR, RU, BO, TE)
+/// - Num: 01-08 for Gear, 01-02 for Tools
+///
+/// Returns None if the item ID is invalid or doesn't map to a pool index.
+pub fn item_id_to_pool_index(item_id: &[u8; 8]) -> Option<u8> {
+    // Parse tag from bytes 2-3
+    let tag_code = match (item_id[2], item_id[3]) {
+        (b'S', b'T') => 0, // Stone
+        (b'S', b'C') => 1, // Scout
+        (b'G', b'R') => 2, // Greed
+        (b'B', b'L') => 3, // Blast
+        (b'F', b'R') => 4, // Frost
+        (b'R', b'U') => 5, // Rust
+        (b'B', b'O') => 6, // Blood
+        (b'T', b'E') => 7, // Tempo
+        _ => return None,
+    };
+
+    // Parse item number from bytes 5-6
+    let num_tens = item_id[5].checked_sub(b'0')?;
+    let num_ones = item_id[6].checked_sub(b'0')?;
+    if num_tens > 9 || num_ones > 9 {
+        return None;
+    }
+    let item_num = num_tens * 10 + num_ones;
+
+    // Calculate pool index based on item type
+    // Gear: items 0-63 (8 tags * 8 items)
+    // Tools: items 64-79 (8 tags * 2 items)
+    match item_id[0] {
+        b'G' => {
+            if item_num < 1 || item_num > 8 {
+                return None;
+            }
+            // Gear index: tag * 8 + (num - 1)
+            Some(tag_code * 8 + (item_num - 1))
+        }
+        b'T' => {
+            if item_num < 1 || item_num > 2 {
+                return None;
+            }
+            // Tool index: 64 + tag * 2 + (num - 1)
+            Some(64 + tag_code * 2 + (item_num - 1))
+        }
+        _ => None,
+    }
+}
+
+/// Filter offers to only include items that are in the active item pool.
+///
+/// # Arguments
+/// * `offers` - Slice of item offers to filter
+/// * `pool` - The session's active_item_pool bitmask
+///
+/// # Returns
+/// A vector containing only offers whose items are in the pool
+pub fn filter_offers_by_pool(offers: &[ItemOffer], pool: &[u8; ITEM_POOL_SIZE]) -> Vec<ItemOffer> {
+    offers
+        .iter()
+        .filter(|offer| {
+            if let Some(index) = item_id_to_pool_index(&offer.item_id) {
+                is_item_in_pool(pool, index)
+            } else {
+                // If we can't parse the item ID, exclude it
+                false
+            }
+        })
+        .cloned()
+        .collect()
 }

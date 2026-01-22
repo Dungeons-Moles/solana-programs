@@ -18,3 +18,5 @@ idl-build = ["anchor-lang/idl-build"]
 
 [dependencies]
 anchor-lang = "0.32.0"
+field-enemies = { path = "../field-enemies", features = ["cpi"] }
+boss-system = { path = "../boss-system", features = ["cpi"] }

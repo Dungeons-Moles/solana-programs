@@ -2,6 +2,7 @@
 //!
 //! Contains all 80 item definitions as compile-time constants.
 //! 16 Tools (2 per tag) + 64 Gear (8 per tag) across 8 tags.
+//! Plus the special Basic Pickaxe starter tool.
 
 use crate::state::{EffectDefinition, EffectType, ItemTag, ItemType, Rarity, TriggerType};
 
@@ -14,13 +15,35 @@ pub struct ItemDefinition {
     pub name: &'static str,
     /// Tool or Gear
     pub item_type: ItemType,
-    /// One of 8 tags
+    /// One of 8 tags (or None for special items)
     pub tag: ItemTag,
     /// Common, Rare, Heroic, or Mythic
     pub rarity: Rarity,
     /// Combat effects with tier-scaled values
     pub effects: &'static [EffectDefinition],
 }
+
+// =============================================================================
+// BASIC PICKAXE - Starter Tool (T-XX-00)
+// Special item that cannot be found in-game, only given at session start
+// =============================================================================
+
+/// The Basic Pickaxe is the starter tool given to all players.
+/// It provides +1 ATK at battle start and cannot be found on the map.
+/// ID format: T-XX-00 where XX indicates it's a special/starter item.
+pub const BASIC_PICKAXE: ItemDefinition = ItemDefinition {
+    id: b"T-XX-00\0",
+    name: "Basic Pickaxe",
+    item_type: ItemType::Tool,
+    tag: ItemTag::None,
+    rarity: Rarity::Common,
+    effects: &[EffectDefinition::new(
+        TriggerType::BattleStart,
+        EffectType::GainAtk,
+        false,
+        [1, 1, 1], // Always +1 ATK regardless of tier (unfusable)
+    )],
+};
 
 // =============================================================================
 // STONE Tag Items (T-ST-01, T-ST-02, G-ST-01 through G-ST-08)
@@ -1442,7 +1465,12 @@ pub const ITEMS: &[ItemDefinition] = &[
 // =============================================================================
 
 /// Get an item by its ID
+/// Handles the special case of BASIC_PICKAXE (T-XX-00) which is not in the main ITEMS array
 pub fn get_item(id: &[u8; 8]) -> Option<&'static ItemDefinition> {
+    // Special case: starter tool is not in ITEMS array (excluded from offers/fusion)
+    if id == b"T-XX-00\0" {
+        return Some(&BASIC_PICKAXE);
+    }
     ITEMS.iter().find(|i| i.id == id)
 }
 
@@ -1489,6 +1517,35 @@ mod tests {
     fn test_get_invalid_item() {
         let item = get_item(b"X-XX-99\0");
         assert!(item.is_none());
+    }
+
+    #[test]
+    fn test_basic_pickaxe_returned_by_get_item() {
+        // Verify the starter tool can be retrieved via get_item
+        let item = get_item(b"T-XX-00\0");
+        assert!(
+            item.is_some(),
+            "BASIC_PICKAXE should be returned by get_item"
+        );
+
+        let pickaxe = item.unwrap();
+        assert_eq!(pickaxe.name, "Basic Pickaxe");
+        assert_eq!(pickaxe.item_type, ItemType::Tool);
+        assert_eq!(pickaxe.tag, ItemTag::None);
+        assert_eq!(pickaxe.rarity, Rarity::Common);
+
+        // Verify effects
+        assert_eq!(pickaxe.effects.len(), 1);
+        assert_eq!(pickaxe.effects[0].trigger, TriggerType::BattleStart);
+        assert_eq!(pickaxe.effects[0].effect_type, EffectType::GainAtk);
+        assert_eq!(pickaxe.effects[0].values, [1, 1, 1]); // Always +1 ATK
+    }
+
+    #[test]
+    fn test_basic_pickaxe_not_in_items_array() {
+        // Verify BASIC_PICKAXE is NOT in the main ITEMS array
+        // (to ensure it's excluded from offer generation/fusion)
+        assert!(!ITEMS.iter().any(|i| i.id == b"T-XX-00\0"));
     }
 
     #[test]

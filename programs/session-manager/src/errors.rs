@@ -34,4 +34,16 @@ pub enum SessionManagerError {
     /// Arithmetic overflow occurred
     #[msg("Arithmetic overflow occurred")]
     ArithmeticOverflow,
+
+    /// Level is not unlocked for this player
+    #[msg("Level is not unlocked")]
+    LevelNotUnlocked,
+
+    /// Player has no available runs
+    #[msg("No available runs remaining")]
+    NoAvailableRuns,
+
+    /// Player already has a session on this level
+    #[msg("Session already exists for this level")]
+    SessionExistsForLevel,
 }

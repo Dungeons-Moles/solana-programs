@@ -83,4 +83,7 @@ pub enum PoiSystemError {
 
     #[msg("Invalid offer context")]
     InvalidOfferContext,
+
+    #[msg("Player is not on the POI tile")]
+    PlayerNotOnPoiTile,
 }

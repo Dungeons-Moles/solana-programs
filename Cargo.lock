@@ -532,6 +532,8 @@ name = "gameplay-state"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
+ "boss-system",
+ "field-enemies",
 ]
 
 [[package]]
@@ -707,6 +709,7 @@ dependencies = [
  "boss-system",
  "gameplay-state",
  "player-inventory",
+ "session-manager",
 ]
 
 [[package]]

@@ -13,9 +13,11 @@ pub enum ItemType {
     Gear,
 }
 
-/// Item tags - 8 thematic categories
+/// Item tags - 8 thematic categories plus None for special items
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ItemTag {
+    /// No tag (used for special items like Basic Pickaxe)
+    None,
     /// Armor, Shrapnel, durability
     Stone,
     /// DIG, multi-strike, mobility

@@ -23,7 +23,7 @@ use constants::MAX_GEAR_SLOTS;
 use effects::generate_combat_effects;
 use errors::InventoryError;
 use fusion::{execute_fusion, validate_fusion};
-use items::get_item;
+use items::{get_item, BASIC_PICKAXE};
 use offers::generate_item_offer;
 use state::{
     ItemEffect, ItemInstance, ItemOffer, ItemTag, ItemType, PlayerInventory, PoiType, Tier,
@@ -37,10 +37,13 @@ pub mod player_inventory {
     use super::*;
 
     /// Creates a new PlayerInventory account for a player.
-    /// Initializes with 4 gear slots and no equipped items.
+    /// Initializes with 4 gear slots and Basic Pickaxe equipped.
     pub fn initialize_inventory(ctx: Context<InitializeInventory>) -> Result<()> {
         let inventory = &mut ctx.accounts.inventory;
         inventory.init(ctx.accounts.player.key(), ctx.bumps.inventory);
+
+        // Auto-equip Basic Pickaxe as the starter tool
+        inventory.tool = Some(ItemInstance::new(*BASIC_PICKAXE.id, Tier::I));
 
         emit!(InventoryInitialized {
             player: ctx.accounts.player.key(),

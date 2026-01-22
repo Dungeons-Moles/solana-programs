@@ -6,6 +6,19 @@ use crate::errors::PoiSystemError;
 use crate::pois::{get_poi_definition, PoiDefinition};
 use crate::state::{ActiveCondition, InteractionType, ItemOffer, PoiInstance, UseType};
 
+/// Validates that the player is standing on the POI tile.
+/// Returns an error if player position doesn't match POI position.
+pub fn validate_player_on_poi(
+    player_x: u8,
+    player_y: u8,
+    poi: &PoiInstance,
+) -> Result<(), PoiSystemError> {
+    if player_x != poi.x || player_y != poi.y {
+        return Err(PoiSystemError::PlayerNotOnPoiTile);
+    }
+    Ok(())
+}
+
 /// Heal amounts for rest POIs
 pub const REST_PARTIAL_HEAL: u8 = 10;
 

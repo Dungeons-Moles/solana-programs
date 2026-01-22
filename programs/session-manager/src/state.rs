@@ -1,15 +1,18 @@
 use anchor_lang::prelude::*;
 
+/// Size of item bitmask in bytes (80 bits = 10 bytes)
+pub const SESSION_ITEM_BITMASK_SIZE: usize = 10;
+
 /// Represents an active game session for a player.
-/// One session allowed per player (enforced via PDA uniqueness).
+/// PDA Seeds: [b"session", player.key(), &[campaign_level]]
+/// Changed from single session per player to one session per (player, level) pair.
 #[account]
-#[derive(InitSpace)]
 pub struct GameSession {
     /// Player profile owner's wallet
     pub player: Pubkey,
     /// Unique session identifier (incrementing)
     pub session_id: u64,
-    /// Level being played in this session (campaign mode)
+    /// Level being played in this session (campaign mode, 1-40)
     pub campaign_level: u8,
     /// Unix timestamp when session started
     pub started_at: i64,
@@ -21,11 +24,23 @@ pub struct GameSession {
     pub state_hash: [u8; 32],
     /// PDA bump seed
     pub bump: u8,
+    /// Snapshot of player's active_item_pool at session start
+    /// Determines which items can appear in POI offers during this session
+    pub active_item_pool: [u8; SESSION_ITEM_BITMASK_SIZE],
+    /// Burner wallet pubkey for gameplay transactions
+    /// SOL is transferred to this wallet at session start
+    pub burner_wallet: Pubkey,
 }
 
 impl GameSession {
     /// PDA seed prefix for session accounts
     pub const SEED_PREFIX: &'static [u8] = b"session";
+
+    /// Account space calculation
+    /// 8 (discriminator) + 32 (player) + 8 (session_id) + 1 (campaign_level) +
+    /// 8 (started_at) + 8 (last_activity) + 1 (is_delegated) + 32 (state_hash) +
+    /// 1 (bump) + 10 (active_item_pool) + 32 (burner_wallet)
+    pub const INIT_SPACE: usize = 32 + 8 + 1 + 8 + 8 + 1 + 32 + 1 + 10 + 32;
 }
 
 /// Global counter for generating unique session IDs

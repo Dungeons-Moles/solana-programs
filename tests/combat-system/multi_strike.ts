@@ -1,8 +1,9 @@
 import * as anchor from "@coral-xyz/anchor";
-import { Program } from "@coral-xyz/anchor";
+import { BN, Program } from "@coral-xyz/anchor";
 import { CombatSystem } from "../../target/types/combat_system";
 import { GameplayState } from "../../target/types/gameplay_state";
 import { SessionManager } from "../../target/types/session_manager";
+import { PlayerProfile } from "../../target/types/player_profile";
 import { expect } from "chai";
 import { Keypair, LAMPORTS_PER_SOL, SystemProgram } from "@solana/web3.js";
 
@@ -15,10 +16,15 @@ describe("combat-system multi-strike", () => {
     .GameplayState as Program<GameplayState>;
   const sessionProgram = anchor.workspace
     .SessionManager as Program<SessionManager>;
+  const playerProfileProgram = anchor.workspace
+    .PlayerProfile as Program<PlayerProfile>;
 
-  const getSessionPda = (player: anchor.web3.PublicKey) => {
+  const getSessionPda = (
+    player: anchor.web3.PublicKey,
+    campaignLevel: number,
+  ) => {
     return anchor.web3.PublicKey.findProgramAddressSync(
-      [Buffer.from("session"), player.toBuffer()],
+      [Buffer.from("session"), player.toBuffer(), Buffer.from([campaignLevel])],
       sessionProgram.programId,
     );
   };
@@ -41,6 +47,13 @@ describe("combat-system multi-strike", () => {
     return anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("session_counter")],
       sessionProgram.programId,
+    );
+  };
+
+  const getPlayerProfilePda = (player: anchor.web3.PublicKey) => {
+    return anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("player"), player.toBuffer()],
+      playerProfileProgram.programId,
     );
   };
 
@@ -71,29 +84,45 @@ describe("combat-system multi-strike", () => {
     await ensureCounterExists();
 
     const user = Keypair.generate();
+    const burnerWallet = Keypair.generate();
     const airdropSig = await provider.connection.requestAirdrop(
       user.publicKey,
       5 * LAMPORTS_PER_SOL,
     );
     await provider.connection.confirmTransaction(airdropSig);
 
-    const [sessionPda] = getSessionPda(user.publicKey);
+    const campaignLevel = 1;
+    const [playerProfilePda] = getPlayerProfilePda(user.publicKey);
+    const [sessionPda] = getSessionPda(user.publicKey, campaignLevel);
     const [gameStatePda] = getGameStatePda(sessionPda);
     const [combatStatePda] = getCombatStatePda(gameStatePda);
 
+    // Create player profile first
+    await playerProfileProgram.methods
+      .initializeProfile("MultiStrikeTestPlayer")
+      .accounts({
+        playerProfile: playerProfilePda,
+        owner: user.publicKey,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .signers([user])
+      .rpc();
+
     await sessionProgram.methods
-      .startSession(1)
+      .startSession(campaignLevel, new BN(0))
       .accounts({
         gameSession: sessionPda,
         sessionCounter: counterPda,
+        playerProfile: playerProfilePda,
         player: user.publicKey,
+        burnerWallet: burnerWallet.publicKey,
         systemProgram: SystemProgram.programId,
       } as any)
       .signers([user])
       .rpc();
 
     await gameplayProgram.methods
-      .initializeGameState(10, 10, 0, 0)
+      .initializeGameState(campaignLevel, 10, 10, 0, 0)
       .accounts({
         gameState: gameStatePda,
         gameSession: sessionPda,
@@ -103,13 +132,14 @@ describe("combat-system multi-strike", () => {
       .signers([user])
       .rpc();
 
-    return { user, sessionPda, gameStatePda, combatStatePda };
+    return { user, sessionPda, gameStatePda, combatStatePda, campaignLevel };
   };
 
   const cleanup = async (
     user: Keypair,
     sessionPda: anchor.web3.PublicKey,
     gameStatePda: anchor.web3.PublicKey,
+    campaignLevel: number = 1,
   ) => {
     try {
       await gameplayProgram.methods
@@ -126,7 +156,7 @@ describe("combat-system multi-strike", () => {
 
     try {
       await sessionProgram.methods
-        .endSession()
+        .endSession(campaignLevel, true)
         .accounts({
           gameSession: sessionPda,
           player: user.publicKey,
@@ -140,7 +170,7 @@ describe("combat-system multi-strike", () => {
 
   describe("T059: Multi-strike combat", () => {
     it("resolves multiple strikes per turn", async () => {
-      const { user, sessionPda, gameStatePda, combatStatePda } =
+      const { user, sessionPda, gameStatePda, combatStatePda, campaignLevel } =
         await setupCombat();
 
       const playerStats = {
@@ -188,7 +218,7 @@ describe("combat-system multi-strike", () => {
       expect(state.enemyHp).to.equal(0);
       expect(state.playerHp).to.equal(6);
 
-      await cleanup(user, sessionPda, gameStatePda);
+      await cleanup(user, sessionPda, gameStatePda, campaignLevel);
     });
   });
 });

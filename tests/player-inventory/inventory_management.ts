@@ -54,7 +54,8 @@ describe("player-inventory", () => {
         await program.account.playerInventory.fetch(inventoryPda);
 
       expect(inventory.player.toString()).to.equal(player.publicKey.toString());
-      expect(inventory.tool).to.be.null;
+      // Tool is initialized with BASIC_PICKAXE (T-XX-00)
+      expect(inventory.tool).to.not.be.null;
       expect(inventory.gearSlotCapacity).to.equal(4);
     });
   });

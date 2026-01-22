@@ -39,6 +39,11 @@ impl Phase {
     pub fn is_night(&self) -> bool {
         matches!(self, Phase::Night1 | Phase::Night2 | Phase::Night3)
     }
+
+    /// Returns true if this is specifically Night3 (end of week boss phase)
+    pub fn is_night3(&self) -> bool {
+        matches!(self, Phase::Night3)
+    }
 }
 
 /// Stat type enumeration for modify_stat instruction
@@ -117,6 +122,13 @@ pub struct GameState {
 
     /// PDA bump seed
     pub bump: u8,
+
+    /// Campaign level for this session (1-40)
+    /// Stored at init to prevent user manipulation of boss stage
+    pub campaign_level: u8,
+
+    /// Player death flag - once set, all gameplay instructions are blocked
+    pub is_dead: bool,
 }
 
 impl GameState {

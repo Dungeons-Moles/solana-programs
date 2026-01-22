@@ -26,6 +26,9 @@ pub enum GameplayStateError {
     #[msg("Boss fight already triggered")]
     BossFightAlreadyTriggered,
 
+    #[msg("Boss fight not ready - must exhaust moves in Night3 phase first")]
+    BossFightNotReady,
+
     #[msg("Unauthorized: only session owner can modify state")]
     Unauthorized,
 
@@ -34,4 +37,19 @@ pub enum GameplayStateError {
 
     #[msg("Arithmetic overflow")]
     ArithmeticOverflow,
+
+    #[msg("No enemy at the specified position")]
+    EnemyNotAtPosition,
+
+    #[msg("Player has been defeated")]
+    PlayerDefeated,
+
+    #[msg("Player is dead - no further actions allowed")]
+    PlayerDead,
+
+    #[msg("Invalid week value")]
+    InvalidWeek,
+
+    #[msg("Invalid enemy tier")]
+    InvalidEnemyTier,
 }

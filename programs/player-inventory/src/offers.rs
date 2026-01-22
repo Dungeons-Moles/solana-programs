@@ -53,19 +53,25 @@ pub fn get_rarity_from_table(poi_type: PoiType, act: u8, seed: u64) -> Rarity {
 }
 
 /// Calculate tag weights based on boss weaknesses
+/// Takes two non-None ItemTags representing the boss's weaknesses
 pub fn calculate_tag_weights(boss_weaknesses: (ItemTag, ItemTag)) -> [u32; 8] {
     let mut weights = [BASE_WEIGHT; 8];
 
     // Apply 1.4x weight to weakness tags
-    weights[boss_weaknesses.0 as usize] = WEAKNESS_WEIGHT;
-    weights[boss_weaknesses.1 as usize] = WEAKNESS_WEIGHT;
+    // Use tag_index_safe which properly maps tags to weight array indices
+    weights[tag_index_for_weight(boss_weaknesses.0)] = WEAKNESS_WEIGHT;
+    weights[tag_index_for_weight(boss_weaknesses.1)] = WEAKNESS_WEIGHT;
 
     weights
 }
 
-/// Get the index of a tag in the weight array
+/// Get the index of a tag in the weight array (0-7 for Stone-Tempo)
+/// Panics for ItemTag::None as it should never appear in offer selection
 fn tag_index(tag: ItemTag) -> usize {
     match tag {
+        ItemTag::None => unreachable!(
+            "ItemTag::None should never appear in offer selection - this indicates a bug"
+        ),
         ItemTag::Stone => 0,
         ItemTag::Scout => 1,
         ItemTag::Greed => 2,
@@ -75,6 +81,12 @@ fn tag_index(tag: ItemTag) -> usize {
         ItemTag::Blood => 6,
         ItemTag::Tempo => 7,
     }
+}
+
+/// Get the index of a tag in the weight array for weight calculation
+/// Returns the same indices as tag_index for valid tags, panics for None
+fn tag_index_for_weight(tag: ItemTag) -> usize {
+    tag_index(tag)
 }
 
 /// Weighted selection from candidates using deterministic seed

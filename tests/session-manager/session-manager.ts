@@ -1,6 +1,7 @@
 import * as anchor from "@coral-xyz/anchor";
-import { Program } from "@coral-xyz/anchor";
+import { BN, Program } from "@coral-xyz/anchor";
 import { SessionManager } from "../../target/types/session_manager";
+import { PlayerProfile } from "../../target/types/player_profile";
 import { expect } from "chai";
 import { Keypair, LAMPORTS_PER_SOL, SystemProgram } from "@solana/web3.js";
 
@@ -10,11 +11,16 @@ describe("session-manager", () => {
   anchor.setProvider(provider);
 
   const program = anchor.workspace.SessionManager as Program<SessionManager>;
+  const playerProfileProgram = anchor.workspace
+    .PlayerProfile as Program<PlayerProfile>;
 
-  // Helper to derive session PDA
-  const getSessionPDA = (player: anchor.web3.PublicKey) => {
+  // Helper to derive session PDA (now includes campaignLevel)
+  const getSessionPDA = (
+    player: anchor.web3.PublicKey,
+    campaignLevel: number,
+  ) => {
     return anchor.web3.PublicKey.findProgramAddressSync(
-      [Buffer.from("session"), player.toBuffer()],
+      [Buffer.from("session"), player.toBuffer(), Buffer.from([campaignLevel])],
       program.programId,
     );
   };
@@ -24,6 +30,14 @@ describe("session-manager", () => {
     return anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("session_counter")],
       program.programId,
+    );
+  };
+
+  // Helper to derive PlayerProfile PDA
+  const getPlayerProfilePDA = (player: anchor.web3.PublicKey) => {
+    return anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("player"), player.toBuffer()],
+      playerProfileProgram.programId,
     );
   };
 
@@ -49,6 +63,34 @@ describe("session-manager", () => {
       }
     }
     counterInitialized = true;
+  };
+
+  // Helper to create user with profile
+  const createUserWithProfile = async (name: string = "TestPlayer") => {
+    const user = Keypair.generate();
+    const burnerWallet = Keypair.generate();
+
+    // Airdrop SOL
+    const airdropSig = await provider.connection.requestAirdrop(
+      user.publicKey,
+      2 * LAMPORTS_PER_SOL,
+    );
+    await provider.connection.confirmTransaction(airdropSig);
+
+    const [playerProfilePDA] = getPlayerProfilePDA(user.publicKey);
+
+    // Create player profile
+    await playerProfileProgram.methods
+      .initializeProfile(name)
+      .accounts({
+        playerProfile: playerProfilePDA,
+        owner: user.publicKey,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .signers([user])
+      .rpc();
+
+    return { user, burnerWallet, playerProfilePDA };
   };
 
   describe("T046: Initialize Session Counter", () => {
@@ -82,23 +124,19 @@ describe("session-manager", () => {
     it("starts new game session", async () => {
       await ensureCounterExists();
 
-      const user = Keypair.generate();
-
-      // Airdrop SOL
-      const airdropSig = await provider.connection.requestAirdrop(
-        user.publicKey,
-        2 * LAMPORTS_PER_SOL,
-      );
-      await provider.connection.confirmTransaction(airdropSig);
-
-      const [sessionPDA] = getSessionPDA(user.publicKey);
+      const { user, burnerWallet, playerProfilePDA } =
+        await createUserWithProfile("SessionTest1");
+      const campaignLevel = 1; // Player starts with level 1 unlocked
+      const [sessionPDA] = getSessionPDA(user.publicKey, campaignLevel);
 
       await program.methods
-        .startSession(5) // Campaign level 5
+        .startSession(campaignLevel, new BN(0))
         .accounts({
           gameSession: sessionPDA,
           sessionCounter: counterPDA,
+          playerProfile: playerProfilePDA,
           player: user.publicKey,
+          burnerWallet: burnerWallet.publicKey,
           systemProgram: SystemProgram.programId,
         } as any)
         .signers([user])
@@ -106,7 +144,7 @@ describe("session-manager", () => {
 
       const session = await program.account.gameSession.fetch(sessionPDA);
       expect(session.player.toString()).to.equal(user.publicKey.toString());
-      expect(session.campaignLevel).to.equal(5);
+      expect(session.campaignLevel).to.equal(campaignLevel);
       expect(session.isDelegated).to.equal(false);
       expect(session.sessionId.toNumber()).to.be.greaterThan(0);
       expect(session.startedAt.toNumber()).to.be.greaterThan(0);
@@ -114,7 +152,7 @@ describe("session-manager", () => {
 
       // Clean up: end the session
       await program.methods
-        .endSession()
+        .endSession(campaignLevel, true)
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
@@ -124,41 +162,39 @@ describe("session-manager", () => {
     });
   });
 
-  describe("T048: Reject Second Session for Same Player", () => {
-    it("rejects second session for same player", async () => {
+  describe("T048: Reject Second Session for Same Player at Same Level", () => {
+    it("rejects second session for same player at same level", async () => {
       await ensureCounterExists();
 
-      const user = Keypair.generate();
-
-      // Airdrop SOL
-      const airdropSig = await provider.connection.requestAirdrop(
-        user.publicKey,
-        2 * LAMPORTS_PER_SOL,
-      );
-      await provider.connection.confirmTransaction(airdropSig);
-
-      const [sessionPDA] = getSessionPDA(user.publicKey);
+      const { user, burnerWallet, playerProfilePDA } =
+        await createUserWithProfile("SessionTest2");
+      const campaignLevel = 1; // Must be >= 1 and <= highest_level_unlocked
+      const [sessionPDA] = getSessionPDA(user.publicKey, campaignLevel);
 
       // First session should succeed
       await program.methods
-        .startSession(0)
+        .startSession(campaignLevel, new BN(0))
         .accounts({
           gameSession: sessionPDA,
           sessionCounter: counterPDA,
+          playerProfile: playerProfilePDA,
           player: user.publicKey,
+          burnerWallet: burnerWallet.publicKey,
           systemProgram: SystemProgram.programId,
         } as any)
         .signers([user])
         .rpc();
 
-      // Second session should fail
+      // Second session at same level should fail
       try {
         await program.methods
-          .startSession(1)
+          .startSession(campaignLevel, new BN(0))
           .accounts({
             gameSession: sessionPDA,
             sessionCounter: counterPDA,
+            playerProfile: playerProfilePDA,
             player: user.publicKey,
+            burnerWallet: burnerWallet.publicKey,
             systemProgram: SystemProgram.programId,
           } as any)
           .signers([user])
@@ -171,7 +207,7 @@ describe("session-manager", () => {
 
       // Clean up
       await program.methods
-        .endSession()
+        .endSession(campaignLevel, true)
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
@@ -185,32 +221,28 @@ describe("session-manager", () => {
     it("delegates session to ephemeral rollup", async () => {
       await ensureCounterExists();
 
-      const user = Keypair.generate();
-
-      // Airdrop SOL
-      const airdropSig = await provider.connection.requestAirdrop(
-        user.publicKey,
-        2 * LAMPORTS_PER_SOL,
-      );
-      await provider.connection.confirmTransaction(airdropSig);
-
-      const [sessionPDA] = getSessionPDA(user.publicKey);
+      const { user, burnerWallet, playerProfilePDA } =
+        await createUserWithProfile("SessionTest3");
+      const campaignLevel = 1; // Player starts with level 1 unlocked
+      const [sessionPDA] = getSessionPDA(user.publicKey, campaignLevel);
 
       // Start session
       await program.methods
-        .startSession(10)
+        .startSession(campaignLevel, new BN(0))
         .accounts({
           gameSession: sessionPDA,
           sessionCounter: counterPDA,
+          playerProfile: playerProfilePDA,
           player: user.publicKey,
+          burnerWallet: burnerWallet.publicKey,
           systemProgram: SystemProgram.programId,
         } as any)
         .signers([user])
         .rpc();
 
-      // Delegate session
+      // Delegate session (campaignLevel is now first param)
       await program.methods
-        .delegateSession()
+        .delegateSession(campaignLevel)
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
@@ -223,7 +255,7 @@ describe("session-manager", () => {
 
       // Clean up
       await program.methods
-        .endSession()
+        .endSession(campaignLevel, true)
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
@@ -237,31 +269,27 @@ describe("session-manager", () => {
     it("commits session state", async () => {
       await ensureCounterExists();
 
-      const user = Keypair.generate();
-
-      // Airdrop SOL
-      const airdropSig = await provider.connection.requestAirdrop(
-        user.publicKey,
-        2 * LAMPORTS_PER_SOL,
-      );
-      await provider.connection.confirmTransaction(airdropSig);
-
-      const [sessionPDA] = getSessionPDA(user.publicKey);
+      const { user, burnerWallet, playerProfilePDA } =
+        await createUserWithProfile("SessionTest4");
+      const campaignLevel = 1; // Player starts with level 1 unlocked
+      const [sessionPDA] = getSessionPDA(user.publicKey, campaignLevel);
 
       // Start and delegate session
       await program.methods
-        .startSession(15)
+        .startSession(campaignLevel, new BN(0))
         .accounts({
           gameSession: sessionPDA,
           sessionCounter: counterPDA,
+          playerProfile: playerProfilePDA,
           player: user.publicKey,
+          burnerWallet: burnerWallet.publicKey,
           systemProgram: SystemProgram.programId,
         } as any)
         .signers([user])
         .rpc();
 
       await program.methods
-        .delegateSession()
+        .delegateSession(campaignLevel)
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
@@ -269,12 +297,12 @@ describe("session-manager", () => {
         .signers([user])
         .rpc();
 
-      // Commit with a state hash
+      // Commit with a state hash (campaignLevel is now first param)
       const stateHash = new Uint8Array(32);
       stateHash.fill(0xab);
 
       await program.methods
-        .commitSession(Array.from(stateHash) as number[])
+        .commitSession(campaignLevel, Array.from(stateHash) as number[])
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
@@ -287,7 +315,7 @@ describe("session-manager", () => {
 
       // Clean up
       await program.methods
-        .endSession()
+        .endSession(campaignLevel, true)
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
@@ -301,24 +329,20 @@ describe("session-manager", () => {
     it("ends session and closes account", async () => {
       await ensureCounterExists();
 
-      const user = Keypair.generate();
-
-      // Airdrop SOL
-      const airdropSig = await provider.connection.requestAirdrop(
-        user.publicKey,
-        2 * LAMPORTS_PER_SOL,
-      );
-      await provider.connection.confirmTransaction(airdropSig);
-
-      const [sessionPDA] = getSessionPDA(user.publicKey);
+      const { user, burnerWallet, playerProfilePDA } =
+        await createUserWithProfile("SessionTest5");
+      const campaignLevel = 1; // Player starts with level 1 unlocked
+      const [sessionPDA] = getSessionPDA(user.publicKey, campaignLevel);
 
       // Start session
       await program.methods
-        .startSession(20)
+        .startSession(campaignLevel, new BN(0))
         .accounts({
           gameSession: sessionPDA,
           sessionCounter: counterPDA,
+          playerProfile: playerProfilePDA,
           player: user.publicKey,
+          burnerWallet: burnerWallet.publicKey,
           systemProgram: SystemProgram.programId,
         } as any)
         .signers([user])
@@ -333,9 +357,9 @@ describe("session-manager", () => {
         user.publicKey,
       );
 
-      // End session
+      // End session (campaignLevel is now first param, victory bool added)
       await program.methods
-        .endSession()
+        .endSession(campaignLevel, true)
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
@@ -358,15 +382,10 @@ describe("session-manager", () => {
     it("allows force close without timeout", async () => {
       await ensureCounterExists();
 
-      const user = Keypair.generate();
+      const { user, burnerWallet, playerProfilePDA } =
+        await createUserWithProfile("SessionTest6");
       const anyoneElse = Keypair.generate();
-
-      // Airdrop SOL
-      const airdropSig = await provider.connection.requestAirdrop(
-        user.publicKey,
-        2 * LAMPORTS_PER_SOL,
-      );
-      await provider.connection.confirmTransaction(airdropSig);
+      const campaignLevel = 1; // Player starts with level 1 unlocked
 
       const airdropSig2 = await provider.connection.requestAirdrop(
         anyoneElse.publicKey,
@@ -374,23 +393,25 @@ describe("session-manager", () => {
       );
       await provider.connection.confirmTransaction(airdropSig2);
 
-      const [sessionPDA] = getSessionPDA(user.publicKey);
+      const [sessionPDA] = getSessionPDA(user.publicKey, campaignLevel);
 
       // Start session
       await program.methods
-        .startSession(25)
+        .startSession(campaignLevel, new BN(0))
         .accounts({
           gameSession: sessionPDA,
           sessionCounter: counterPDA,
+          playerProfile: playerProfilePDA,
           player: user.publicKey,
+          burnerWallet: burnerWallet.publicKey,
           systemProgram: SystemProgram.programId,
         } as any)
         .signers([user])
         .rpc();
 
-      // Force close immediately (no timeout restriction)
+      // Force close immediately (campaignLevel is now first param)
       await program.methods
-        .forceCloseSession()
+        .forceCloseSession(campaignLevel)
         .accounts({
           gameSession: sessionPDA,
           sessionOwner: user.publicKey,

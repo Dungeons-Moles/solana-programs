@@ -7,8 +7,8 @@ use anchor_lang::prelude::*;
 pub struct MapConfig {
     /// Authority that can update seed mappings
     pub admin: Pubkey,
-    /// Seed values for campaign levels 0-80
-    #[max_len(81)]
+    /// Seed values for campaign levels 1-40 (index = level - 1)
+    #[max_len(40)]
     pub seeds: [u64; LEVEL_COUNT],
     /// Config version for migrations
     pub version: u8,
@@ -24,7 +24,7 @@ impl MapConfig {
 /// Represents a single seed update for batch operations
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct SeedUpdate {
-    /// Level to update (0-80)
+    /// Level to update (1-40)
     pub level: u8,
     /// New seed value
     pub seed: u64,

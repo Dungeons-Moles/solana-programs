@@ -416,6 +416,10 @@ fn apply_status_effects(
     let mut player_applied = StatusEffects::default();
     let mut enemy_applied = StatusEffects::default();
 
+    // Determine who acts first for FirstTurnIfFaster/FirstTurnIfSlower triggers
+    let (player_acts_first, _) =
+        engine::determine_turn_order(combat_state.player_spd, combat_state.enemy_spd);
+
     process_phase_effects(
         player_effects,
         combat_state,
@@ -424,6 +428,7 @@ fn apply_status_effects(
         &mut player_applied,
         &mut enemy_applied,
         player_triggered,
+        player_acts_first,
         log,
     );
     process_phase_effects(
@@ -434,6 +439,7 @@ fn apply_status_effects(
         &mut player_applied,
         &mut enemy_applied,
         enemy_triggered,
+        !player_acts_first, // Enemy acts first if player doesn't
         log,
     );
 }
@@ -448,6 +454,7 @@ fn process_phase_effects(
     player_applied: &mut StatusEffects,
     enemy_applied: &mut StatusEffects,
     triggered_flags: &mut [bool],
+    owner_acts_first: bool,
     log: &mut Vec<CombatLogEntry>,
 ) {
     let (mut working_stats, mut working_status, mut opponent_stats, mut opponent_status) =
@@ -479,6 +486,7 @@ fn process_phase_effects(
         &mut opponent_status,
         triggered_flags,
         is_player,
+        owner_acts_first,
         &mut combat_state.gold_change,
         log,
     );

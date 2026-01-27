@@ -12,11 +12,23 @@ pub struct CombatantStats {
     pub spd: i16,
 }
 
+/// Check if a trigger should fire.
+///
+/// `acts_first` is needed for `FirstTurnIfFaster` and `FirstTurnIfSlower` triggers.
+/// For enemies, `acts_first` means enemy SPD >= player SPD (tie goes to enemy).
+/// For players, `acts_first` means player SPD > enemy SPD.
 #[allow(clippy::manual_is_multiple_of)]
-pub fn should_trigger(trigger_type: TriggerType, turn: u8, is_first_turn: bool) -> bool {
+pub fn should_trigger(
+    trigger_type: TriggerType,
+    turn: u8,
+    is_first_turn: bool,
+    acts_first: bool,
+) -> bool {
     match trigger_type {
         TriggerType::BattleStart => turn == 1,
         TriggerType::FirstTurn => is_first_turn,
+        TriggerType::FirstTurnIfFaster => is_first_turn && acts_first,
+        TriggerType::FirstTurnIfSlower => is_first_turn && !acts_first,
         TriggerType::TurnStart => true,
         TriggerType::EveryOtherTurn => turn % 2 == 0,
         TriggerType::OnHit => true,
@@ -34,6 +46,21 @@ pub fn check_wounded(hp: i16, max_hp: u16) -> bool {
     let hp_value = i32::from(hp);
     let max_value = i32::from(max_hp);
     hp_value * 2 < max_value
+}
+
+#[inline]
+fn apply_status_effect(
+    status_field: &mut u8,
+    value: i16,
+    turn: u8,
+    is_target_player: bool,
+    status_id: u8,
+    log: &mut Vec<CombatLogEntry>,
+) {
+    *status_field = status_field.saturating_add(value as u8);
+    if value > 0 {
+        log.push(CombatLogEntry::apply_status(turn, is_target_player, status_id, value));
+    }
 }
 
 /// Applies an effect and logs it.
@@ -98,48 +125,16 @@ pub fn apply_effect(
             }
         }
         EffectType::ApplyChill => {
-            status.chill = status.chill.saturating_add(value as u8);
-            if value > 0 {
-                log.push(CombatLogEntry::apply_status(
-                    turn,
-                    is_target_player,
-                    STATUS_CHILL,
-                    value,
-                ));
-            }
+            apply_status_effect(&mut status.chill, value, turn, is_target_player, STATUS_CHILL, log);
         }
         EffectType::ApplyShrapnel => {
-            status.shrapnel = status.shrapnel.saturating_add(value as u8);
-            if value > 0 {
-                log.push(CombatLogEntry::apply_status(
-                    turn,
-                    is_target_player,
-                    STATUS_SHRAPNEL,
-                    value,
-                ));
-            }
+            apply_status_effect(&mut status.shrapnel, value, turn, is_target_player, STATUS_SHRAPNEL, log);
         }
         EffectType::ApplyRust => {
-            status.rust = status.rust.saturating_add(value as u8);
-            if value > 0 {
-                log.push(CombatLogEntry::apply_status(
-                    turn,
-                    is_target_player,
-                    STATUS_RUST,
-                    value,
-                ));
-            }
+            apply_status_effect(&mut status.rust, value, turn, is_target_player, STATUS_RUST, log);
         }
         EffectType::ApplyBleed => {
-            status.bleed = status.bleed.saturating_add(value as u8);
-            if value > 0 {
-                log.push(CombatLogEntry::apply_status(
-                    turn,
-                    is_target_player,
-                    STATUS_BLEED,
-                    value,
-                ));
-            }
+            apply_status_effect(&mut status.bleed, value, turn, is_target_player, STATUS_BLEED, log);
         }
         EffectType::RemoveArmor => {
             let old_arm = stats.arm;
@@ -155,30 +150,16 @@ pub fn apply_effect(
             }
         }
         EffectType::StealGold => {
-            // Enemy steals gold from player (target is player) or player steals from enemy
-            // Positive value = amount to steal
-            // If target is player, player loses gold (gold_change decreases)
-            // If target is enemy (player is stealing), player gains gold (gold_change increases)
             if is_target_player {
-                // Enemy is stealing from player
                 *gold_change = gold_change.saturating_sub(value);
                 log.push(CombatLogEntry::gold_stolen(turn, false, -value));
             } else {
-                // Player is stealing from enemy
                 *gold_change = gold_change.saturating_add(value);
                 log.push(CombatLogEntry::gold_stolen(turn, true, value));
             }
         }
         EffectType::ApplyReflection => {
-            status.reflection = status.reflection.saturating_add(value as u8);
-            if value > 0 {
-                log.push(CombatLogEntry::apply_status(
-                    turn,
-                    is_target_player,
-                    STATUS_REFLECTION,
-                    value,
-                ));
-            }
+            apply_status_effect(&mut status.reflection, value, turn, is_target_player, STATUS_REFLECTION, log);
         }
         // These effects are processed outside the combat system
         EffectType::GainStrikes
@@ -200,6 +181,7 @@ pub fn process_triggers_for_phase(
     opponent_status: &mut StatusEffects,
     triggered_flags: &mut [bool],
     is_owner_player: bool,
+    owner_acts_first: bool,
     gold_change: &mut i16,
     log: &mut Vec<CombatLogEntry>,
 ) {
@@ -217,7 +199,7 @@ pub fn process_triggers_for_phase(
         let should_fire = match effect.trigger {
             TriggerType::Exposed => check_exposed(owner_stats.arm),
             TriggerType::Wounded => check_wounded(owner_stats.hp, owner_stats.max_hp),
-            _ => should_trigger(effect.trigger, turn, is_first_turn),
+            _ => should_trigger(effect.trigger, turn, is_first_turn, owner_acts_first),
         };
 
         if !should_fire {
@@ -318,28 +300,155 @@ mod tests {
 
     #[test]
     fn test_battle_start_trigger() {
-        assert!(should_trigger(TriggerType::BattleStart, 1, true));
-        assert!(!should_trigger(TriggerType::BattleStart, 2, false));
+        // acts_first doesn't matter for BattleStart
+        assert!(should_trigger(TriggerType::BattleStart, 1, true, false));
+        assert!(!should_trigger(TriggerType::BattleStart, 2, false, false));
     }
 
     #[test]
     fn test_first_turn_trigger() {
-        assert!(should_trigger(TriggerType::FirstTurn, 1, true));
-        assert!(!should_trigger(TriggerType::FirstTurn, 2, false));
+        // acts_first doesn't matter for unconditional FirstTurn
+        assert!(should_trigger(TriggerType::FirstTurn, 1, true, false));
+        assert!(!should_trigger(TriggerType::FirstTurn, 2, false, false));
+    }
+
+    #[test]
+    fn test_first_turn_if_faster_trigger() {
+        // Only fires on turn 1 AND if this combatant acts first
+        assert!(should_trigger(TriggerType::FirstTurnIfFaster, 1, true, true));
+        assert!(!should_trigger(TriggerType::FirstTurnIfFaster, 1, true, false));
+        assert!(!should_trigger(TriggerType::FirstTurnIfFaster, 2, false, true));
+    }
+
+    #[test]
+    fn test_first_turn_if_slower_trigger() {
+        // Only fires on turn 1 AND if this combatant acts second
+        assert!(should_trigger(TriggerType::FirstTurnIfSlower, 1, true, false));
+        assert!(!should_trigger(TriggerType::FirstTurnIfSlower, 1, true, true));
+        assert!(!should_trigger(TriggerType::FirstTurnIfSlower, 2, false, false));
+    }
+
+    #[test]
+    fn test_first_turn_if_faster_effect_blocked_when_slower() {
+        // Simulate Frost Wisp: "If it acts first on Turn 1: apply 2 Chill"
+        // If player is faster (SPD 3 vs enemy SPD 1), enemy's FirstTurnIfFaster should NOT fire
+        let mut owner_stats = CombatantStats {
+            hp: 10,
+            max_hp: 10,
+            atk: 2,
+            arm: 0,
+            spd: 1, // Enemy is slower
+        };
+        let mut owner_status = StatusEffects::default();
+        let mut opponent_stats = CombatantStats {
+            hp: 10,
+            max_hp: 10,
+            atk: 2,
+            arm: 0,
+            spd: 3, // Player is faster
+        };
+        let mut opponent_status = StatusEffects::default();
+
+        let mut effects = vec![ItemEffect {
+            trigger: TriggerType::FirstTurnIfFaster,
+            once_per_turn: false,
+            effect_type: EffectType::ApplyChill,
+            value: 2,
+        }];
+        let mut flags = vec![false; effects.len()];
+        let mut gold_change = 0i16;
+        let mut log = Vec::new();
+
+        // Enemy is slower (acts_first = false), so FirstTurnIfFaster should NOT fire
+        process_triggers_for_phase(
+            &mut effects,
+            TriggerType::FirstTurnIfFaster,
+            1,
+            &mut owner_stats,
+            &mut owner_status,
+            &mut opponent_stats,
+            &mut opponent_status,
+            &mut flags,
+            false, // is_owner_player (enemy is owner)
+            false, // owner_acts_first: enemy is slower
+            &mut gold_change,
+            &mut log,
+        );
+
+        // Chill should NOT be applied because enemy is slower
+        assert_eq!(
+            opponent_status.chill, 0,
+            "Chill should NOT be applied when enemy is slower"
+        );
+        assert!(log.is_empty(), "No log entries should be created");
+    }
+
+    #[test]
+    fn test_first_turn_if_faster_effect_fires_when_faster() {
+        // Same scenario but enemy is faster this time
+        let mut owner_stats = CombatantStats {
+            hp: 10,
+            max_hp: 10,
+            atk: 2,
+            arm: 0,
+            spd: 3, // Enemy is faster
+        };
+        let mut owner_status = StatusEffects::default();
+        let mut opponent_stats = CombatantStats {
+            hp: 10,
+            max_hp: 10,
+            atk: 2,
+            arm: 0,
+            spd: 1, // Player is slower
+        };
+        let mut opponent_status = StatusEffects::default();
+
+        let mut effects = vec![ItemEffect {
+            trigger: TriggerType::FirstTurnIfFaster,
+            once_per_turn: false,
+            effect_type: EffectType::ApplyChill,
+            value: 2,
+        }];
+        let mut flags = vec![false; effects.len()];
+        let mut gold_change = 0i16;
+        let mut log = Vec::new();
+
+        // Enemy is faster (acts_first = true), so FirstTurnIfFaster should fire
+        process_triggers_for_phase(
+            &mut effects,
+            TriggerType::FirstTurnIfFaster,
+            1,
+            &mut owner_stats,
+            &mut owner_status,
+            &mut opponent_stats,
+            &mut opponent_status,
+            &mut flags,
+            false, // is_owner_player (enemy is owner)
+            true,  // owner_acts_first: enemy is faster
+            &mut gold_change,
+            &mut log,
+        );
+
+        // Chill SHOULD be applied because enemy acts first
+        assert_eq!(
+            opponent_status.chill, 2,
+            "Chill should be applied when enemy is faster"
+        );
+        assert_eq!(log.len(), 1, "One log entry for ApplyChill");
     }
 
     #[test]
     fn test_turn_start_trigger() {
-        assert!(should_trigger(TriggerType::TurnStart, 1, true));
-        assert!(should_trigger(TriggerType::TurnStart, 5, false));
+        assert!(should_trigger(TriggerType::TurnStart, 1, true, false));
+        assert!(should_trigger(TriggerType::TurnStart, 5, false, false));
     }
 
     #[test]
     fn test_every_other_turn_trigger() {
-        assert!(!should_trigger(TriggerType::EveryOtherTurn, 1, false));
-        assert!(should_trigger(TriggerType::EveryOtherTurn, 2, false));
-        assert!(!should_trigger(TriggerType::EveryOtherTurn, 3, false));
-        assert!(should_trigger(TriggerType::EveryOtherTurn, 4, false));
+        assert!(!should_trigger(TriggerType::EveryOtherTurn, 1, false, false));
+        assert!(should_trigger(TriggerType::EveryOtherTurn, 2, false, false));
+        assert!(!should_trigger(TriggerType::EveryOtherTurn, 3, false, false));
+        assert!(should_trigger(TriggerType::EveryOtherTurn, 4, false, false));
     }
 
     #[test]
@@ -402,7 +511,8 @@ mod tests {
             &mut opponent_stats,
             &mut opponent_status,
             &mut flags,
-            true, // is_owner_player
+            true,  // is_owner_player
+            false, // owner_acts_first: unused for TurnStart
             &mut gold_change,
             &mut log,
         );
@@ -416,24 +526,23 @@ mod tests {
     // Reflection Status Effect Tests
     // ========================================================================
 
+    fn make_test_combatant() -> (CombatantStats, StatusEffects) {
+        (
+            CombatantStats {
+                hp: 10,
+                max_hp: 10,
+                atk: 3,
+                arm: 0,
+                spd: 1,
+            },
+            StatusEffects::default(),
+        )
+    }
+
     #[test]
     fn test_reflection_blocks_and_redirects_chill() {
-        let mut owner_stats = CombatantStats {
-            hp: 10,
-            max_hp: 10,
-            atk: 3,
-            arm: 0,
-            spd: 1,
-        };
-        let mut owner_status = StatusEffects::default();
-        let mut opponent_stats = CombatantStats {
-            hp: 10,
-            max_hp: 10,
-            atk: 1,
-            arm: 0,
-            spd: 1,
-        };
-        let mut opponent_status = StatusEffects::default();
+        let (mut owner_stats, mut owner_status) = make_test_combatant();
+        let (mut opponent_stats, mut opponent_status) = make_test_combatant();
         opponent_status.reflection = 1; // Opponent has 1 Reflection stack
 
         // Owner tries to apply Chill to opponent
@@ -456,7 +565,8 @@ mod tests {
             &mut opponent_stats,
             &mut opponent_status,
             &mut flags,
-            true,
+            true,  // is_owner_player
+            false, // owner_acts_first: unused for OnHit
             &mut gold_change,
             &mut log,
         );
@@ -497,7 +607,8 @@ mod tests {
             &mut opponent_stats,
             &mut opponent_status,
             &mut flags,
-            true,
+            true,  // is_owner_player
+            false, // owner_acts_first: unused for OnHit
             &mut gold_change,
             &mut log,
         );
@@ -538,7 +649,8 @@ mod tests {
             &mut opponent_stats,
             &mut opponent_status,
             &mut flags,
-            true,
+            true,  // is_owner_player
+            false, // owner_acts_first: unused for OnHit
             &mut gold_change,
             &mut log,
         );
@@ -581,7 +693,8 @@ mod tests {
             &mut opponent_stats,
             &mut opponent_status,
             &mut flags,
-            true,
+            true,  // is_owner_player
+            false, // owner_acts_first: unused for OnHit
             &mut gold_change,
             &mut log,
         );
@@ -621,7 +734,8 @@ mod tests {
             &mut opponent_stats,
             &mut opponent_status,
             &mut flags,
-            true,
+            true,  // is_owner_player
+            false, // owner_acts_first: unused for OnHit
             &mut gold_change,
             &mut log,
         );
@@ -671,7 +785,8 @@ mod tests {
             &mut opponent_stats,
             &mut opponent_status,
             &mut flags,
-            true,
+            true,  // is_owner_player
+            false, // owner_acts_first: unused for OnHit
             &mut gold_change,
             &mut log,
         );
@@ -735,7 +850,8 @@ mod tests {
             &mut opponent_stats,
             &mut opponent_status,
             &mut flags,
-            true,
+            true,  // is_owner_player
+            false, // owner_acts_first: unused for OnHit
             &mut gold_change,
             &mut log,
         );

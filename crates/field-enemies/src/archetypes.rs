@@ -1,11 +1,8 @@
-// Archetypes module - Enemy archetype definitions
-// Implementation in US1 (T017-T019) and US5 (T066-T079)
-
 use crate::state::EnemyStats;
 use combat_system::state::CombatantInput;
 
-/// Number of enemy archetypes
-pub const ARCHETYPE_COUNT: usize = 13;
+/// Number of enemy archetypes (12 field enemies per GDD)
+pub const ARCHETYPE_COUNT: usize = 12;
 
 /// Enemy archetype IDs
 pub mod ids {
@@ -21,7 +18,6 @@ pub mod ids {
     pub const POWDER_TICK: u8 = 9;
     pub const COIN_SLUG: u8 = 10;
     pub const BLOOD_MOSQUITO: u8 = 11;
-    pub const CRYSTAL_MIMIC: u8 = 12;
 }
 
 /// Enemy archetype metadata
@@ -106,12 +102,6 @@ pub static ENEMY_ARCHETYPES: [EnemyArchetype; ARCHETYPE_COUNT] = [
         name: "Blood Mosquito",
         biome_a_weight: 1,
         biome_b_weight: 2,
-    },
-    EnemyArchetype {
-        id: 12,
-        name: "Crystal Mimic",
-        biome_a_weight: 1,
-        biome_b_weight: 1,
     },
 ];
 
@@ -407,30 +397,6 @@ pub static ENEMY_STATS: [[EnemyStats; 3]; ARCHETYPE_COUNT] = [
             dig: 2,
         },
     ],
-    // 12: Crystal Mimic - 10/2/4/2/1, 14/3/5/3/1, 18/4/6/4/2
-    [
-        EnemyStats {
-            hp: 10,
-            atk: 2,
-            arm: 4,
-            spd: 2,
-            dig: 1,
-        },
-        EnemyStats {
-            hp: 14,
-            atk: 3,
-            arm: 5,
-            spd: 3,
-            dig: 1,
-        },
-        EnemyStats {
-            hp: 18,
-            atk: 4,
-            arm: 6,
-            spd: 4,
-            dig: 2,
-        },
-    ],
 ];
 
 /// Get stats for an enemy by archetype ID and tier
@@ -493,7 +459,8 @@ mod tests {
 
     #[test]
     fn test_invalid_archetype_id() {
-        assert!(get_enemy_stats(13, 0).is_none());
+        // Archetype 12+ are invalid (only 0-11 are field enemies)
+        assert!(get_enemy_stats(12, 0).is_none());
         assert!(get_enemy_stats(255, 0).is_none());
     }
 
@@ -506,7 +473,7 @@ mod tests {
     #[test]
     fn test_all_36_configurations() {
         // Verify all 12 archetypes × 3 tiers are valid
-        for archetype_id in 0..13u8 {
+        for archetype_id in 0..12u8 {
             for tier in 0..3u8 {
                 let stats = get_enemy_stats(archetype_id, tier);
                 assert!(

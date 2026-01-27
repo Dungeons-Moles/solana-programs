@@ -913,7 +913,7 @@ mod tests {
             let enemy = map.enemies[idx];
             assert!(enemy.x < MAP_WIDTH);
             assert!(enemy.y < MAP_HEIGHT);
-            assert!(enemy.archetype_id < 12); // 12 enemy archetypes
+            assert!(enemy.archetype_id < 12); // 12 field enemies per GDD
             assert!(enemy.tier <= 2);
             assert!(map.is_walkable(enemy.x, enemy.y));
 

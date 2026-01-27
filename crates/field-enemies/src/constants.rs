@@ -1,4 +1,4 @@
-/// Number of enemy archetypes
+/// Number of enemy archetypes (12 field enemies per GDD)
 pub const ARCHETYPE_COUNT: usize = 12;
 
 /// Number of tiers per archetype

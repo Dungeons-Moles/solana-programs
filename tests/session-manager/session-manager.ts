@@ -88,9 +88,9 @@ describe("session-manager", () => {
     );
   };
 
-  const getInventoryPDA = (player: anchor.web3.PublicKey) => {
+  const getInventoryPDA = (session: anchor.web3.PublicKey) => {
     return anchor.web3.PublicKey.findProgramAddressSync(
-      [Buffer.from("inventory"), player.toBuffer()],
+      [Buffer.from("inventory"), session.toBuffer()],
       playerInventoryProgram.programId,
     );
   };
@@ -190,7 +190,7 @@ describe("session-manager", () => {
     const [gameStatePDA] = getGameStatePDA(sessionPDA);
     const [mapEnemiesPDA] = getMapEnemiesPDA(sessionPDA);
     const [mapPoisPDA] = getMapPoisPDA(sessionPDA);
-    const [inventoryPDA] = getInventoryPDA(user.publicKey);
+    const [inventoryPDA] = getInventoryPDA(sessionPDA);
 
     await (program.methods as any)
       .startSession(campaignLevel)
@@ -213,18 +213,6 @@ describe("session-manager", () => {
         systemProgram: SystemProgram.programId,
       } as any)
       .preInstructions([anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({ units: 1400000 }), anchor.web3.ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 })])
-      .signers([user])
-      .rpc();
-
-    // Initialize map POIs (session-manager doesn't do this due to cyclic dep)
-    await poiSystemProgram.methods
-      .initializeMapPois(campaignLevel, 1, new anchor.BN(Date.now()))
-      .accounts({
-        mapPois: mapPoisPDA,
-        session: sessionPDA,
-        payer: user.publicKey,
-        systemProgram: SystemProgram.programId,
-      } as any)
       .signers([user])
       .rpc();
 
@@ -289,7 +277,7 @@ describe("session-manager", () => {
       expect(session.lastActivity.toNumber()).to.be.greaterThan(0);
 
       // Clean up: end the session (also closes inventory via CPI)
-      const [inventoryPDA] = getInventoryPDA(user.publicKey);
+      const [inventoryPDA] = getInventoryPDA(sessionPDA);
       await program.methods
         .endSession(campaignLevel, true)
         .accounts({
@@ -395,7 +383,7 @@ describe("session-manager", () => {
       }
 
       // Clean up
-      const [inventoryPDA] = getInventoryPDA(user.publicKey);
+      const [inventoryPDA] = getInventoryPDA(sessionPDA);
       await program.methods
         .endSession(campaignLevel, true)
         .accounts({
@@ -440,7 +428,7 @@ describe("session-manager", () => {
       expect(session.isDelegated).to.equal(true);
 
       // Clean up
-      const [inventoryPDA] = getInventoryPDA(user.publicKey);
+      const [inventoryPDA] = getInventoryPDA(sessionPDA);
       await program.methods
         .endSession(campaignLevel, true)
         .accounts({
@@ -479,7 +467,7 @@ describe("session-manager", () => {
       const balanceBefore = await provider.connection.getBalance(
         user.publicKey,
       );
-      const [inventoryPDA] = getInventoryPDA(user.publicKey);
+      const [inventoryPDA] = getInventoryPDA(sessionPDA);
 
       // End session (also closes inventory via CPI, returning rent)
       await program.methods

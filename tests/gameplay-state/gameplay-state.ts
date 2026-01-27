@@ -62,9 +62,9 @@ describe("gameplay-state", () => {
     );
   };
 
-  const getInventoryPDA = (player: anchor.web3.PublicKey) => {
+  const getInventoryPDA = (session: anchor.web3.PublicKey) => {
     return anchor.web3.PublicKey.findProgramAddressSync(
-      [Buffer.from("inventory"), player.toBuffer()],
+      [Buffer.from("inventory"), session.toBuffer()],
       playerInventoryProgram.programId,
     );
   };
@@ -172,7 +172,7 @@ describe("gameplay-state", () => {
     const [gameStatePDA] = getGameStatePDA(sessionPDA);
     const [mapEnemiesPDA] = getMapEnemiesPDA(sessionPDA);
     const [mapPoisPDA] = getMapPoisPDA(sessionPDA);
-    const [inventoryPDA] = getInventoryPDA(user.publicKey);
+    const [inventoryPDA] = getInventoryPDA(sessionPDA);
     const [generatedMapPDA] = getGeneratedMapPDA(sessionPDA);
 
     // Create player profile first
@@ -255,7 +255,7 @@ describe("gameplay-state", () => {
     gameStatePDA: anchor.web3.PublicKey,
     campaignLevel: number = 1,
   ) => {
-    const [inventoryPDA] = getInventoryPDA(user.publicKey);
+    const [inventoryPDA] = getInventoryPDA(sessionPDA);
     try {
       await gameplayProgram.methods
         .closeGameState()
@@ -298,7 +298,7 @@ describe("gameplay-state", () => {
       await gameplayProgram.account.gameState.fetch(gameStatePDA);
     const [generatedMapPDA] = getGeneratedMapPDA(gameState.session);
     const [mapEnemiesPDA] = getMapEnemiesPDA(gameState.session);
-    const [inventoryPDA] = getInventoryPDA(mainUser);
+    const [inventoryPDA] = getInventoryPDA(gameState.session);
 
     await (gameplayProgram.methods as any)
       .movePlayer(targetX, targetY)
@@ -986,7 +986,7 @@ describe("gameplay-state", () => {
         try {
           const [generatedMapPDA] = getGeneratedMapPDA(sessionPDA);
           const [mapEnemiesPDA] = getMapEnemiesPDA(sessionPDA);
-          const [inventoryPDA] = getInventoryPDA(user.publicKey);
+          const [inventoryPDA] = getInventoryPDA(sessionPDA);
           await (gameplayProgram.methods as any)
             .movePlayer(1, 0)
             .accounts({
@@ -1043,7 +1043,7 @@ describe("gameplay-state", () => {
           await provider.connection.getAccountInfo(gameStatePDA);
         expect(gameStateAccount).to.be.null;
 
-        const [inventoryPDA] = getInventoryPDA(user.publicKey);
+        const [inventoryPDA] = getInventoryPDA(sessionPDA);
         await sessionProgram.methods
           .endSession(campaignLevel, true)
           .accounts({

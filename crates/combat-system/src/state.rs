@@ -1,9 +1,5 @@
 use anchor_lang::prelude::*;
 
-// =============================================================================
-// Combat Log Types - For turn-by-turn visualization
-// =============================================================================
-
 /// Actions that can be logged during combat.
 /// Each action type has a specific meaning for the `value` and `extra` fields.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,10 +102,6 @@ impl CombatLogEntry {
     }
 }
 
-// =============================================================================
-// Combat State Types
-// =============================================================================
-
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default, InitSpace)]
 pub struct StatusEffects {
     pub chill: u8,
@@ -134,6 +126,10 @@ pub struct CombatantInput {
 pub enum TriggerType {
     BattleStart,
     FirstTurn,
+    /// Triggers on Turn 1 only if this combatant acts first (higher SPD or enemy on tie)
+    FirstTurnIfFaster,
+    /// Triggers on Turn 1 only if this combatant acts second (lower SPD)
+    FirstTurnIfSlower,
     TurnStart,
     EveryOtherTurn,
     OnHit,
@@ -204,7 +200,6 @@ pub(crate) struct CombatState {
 }
 
 impl CombatState {
-    /// Get player stats as CombatantStats
     pub fn player_stats(&self) -> crate::triggers::CombatantStats {
         crate::triggers::CombatantStats {
             hp: self.player_hp,
@@ -215,7 +210,6 @@ impl CombatState {
         }
     }
 
-    /// Get enemy stats as CombatantStats
     pub fn enemy_stats(&self) -> crate::triggers::CombatantStats {
         crate::triggers::CombatantStats {
             hp: self.enemy_hp,
@@ -226,7 +220,6 @@ impl CombatState {
         }
     }
 
-    /// Update player stats from CombatantStats
     pub fn set_player_stats(&mut self, stats: &crate::triggers::CombatantStats) {
         self.player_hp = stats.hp;
         self.player_atk = stats.atk;
@@ -234,7 +227,6 @@ impl CombatState {
         self.player_spd = stats.spd;
     }
 
-    /// Update enemy stats from CombatantStats
     pub fn set_enemy_stats(&mut self, stats: &crate::triggers::CombatantStats) {
         self.enemy_hp = stats.hp;
         self.enemy_atk = stats.atk;

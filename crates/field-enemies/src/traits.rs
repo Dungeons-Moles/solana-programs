@@ -1,6 +1,3 @@
-// Traits module - Enemy trait definitions
-// Implementation in US3 (T040-T052)
-
 use combat_system::state::{EffectType, ItemEffect, TriggerType};
 
 use crate::archetypes::ids;
@@ -70,9 +67,8 @@ pub static BURROW_AMBUSHER_TRAITS: [ItemEffect; 1] = [ItemEffect {
 }];
 
 /// Frost Wisp: If it acts first on Turn 1: apply 2 Chill
-/// Note: FirstTurn trigger + SPD check handled in combat engine
 pub static FROST_WISP_TRAITS: [ItemEffect; 1] = [ItemEffect {
-    trigger: TriggerType::FirstTurn,
+    trigger: TriggerType::FirstTurnIfFaster,
     once_per_turn: false,
     effect_type: EffectType::ApplyChill,
     value: 2,
@@ -88,12 +84,13 @@ pub static POWDER_TICK_TRAITS: [ItemEffect; 1] = [ItemEffect {
 }];
 
 /// Coin Slug: Battle Start: gain Armor equal to floor(player Gold/10) (cap 3)
-/// Note: Gold-based armor calculation handled in combat initialization
+/// Note: value=0 is a placeholder; actual armor is calculated in
+/// gameplay_state::preprocess_enemy_effects() based on player's current gold.
 pub static COIN_SLUG_TRAITS: [ItemEffect; 1] = [ItemEffect {
     trigger: TriggerType::BattleStart,
     once_per_turn: false,
     effect_type: EffectType::GainArmor,
-    value: 0, // Calculated dynamically based on player gold
+    value: 0, // Placeholder - calculated dynamically in preprocess_enemy_effects()
 }];
 
 /// Blood Mosquito: On Hit (once/turn): apply 1 Bleed
@@ -101,15 +98,6 @@ pub static BLOOD_MOSQUITO_TRAITS: [ItemEffect; 1] = [ItemEffect {
     trigger: TriggerType::OnHit,
     once_per_turn: true,
     effect_type: EffectType::ApplyBleed,
-    value: 1,
-}];
-
-
-/// Crystal Mimic: Battle Start: gain 1 Reflection
-pub static CRYSTAL_MIMIC_TRAITS: [ItemEffect; 1] = [ItemEffect {
-    trigger: TriggerType::BattleStart,
-    once_per_turn: false,
-    effect_type: EffectType::ApplyReflection,
     value: 1,
 }];
 
@@ -128,7 +116,6 @@ pub fn get_enemy_traits(archetype_id: u8) -> &'static [ItemEffect] {
         ids::POWDER_TICK => &POWDER_TICK_TRAITS,
         ids::COIN_SLUG => &COIN_SLUG_TRAITS,
         ids::BLOOD_MOSQUITO => &BLOOD_MOSQUITO_TRAITS,
-        ids::CRYSTAL_MIMIC => &CRYSTAL_MIMIC_TRAITS,
         _ => &[],
     }
 }
@@ -167,7 +154,8 @@ mod tests {
 
     #[test]
     fn test_all_archetypes_have_traits() {
-        for id in 0..13u8 {
+        // 12 field enemies per GDD (0-11)
+        for id in 0..12u8 {
             let traits = get_enemy_traits(id);
             assert!(!traits.is_empty(), "Archetype {} has no traits", id);
         }
@@ -175,9 +163,24 @@ mod tests {
 
     #[test]
     fn test_invalid_archetype_returns_empty() {
-        let traits = get_enemy_traits(13);
+        // Archetype 12+ are invalid (only 0-11 are field enemies)
+        let traits = get_enemy_traits(12);
         assert!(traits.is_empty());
         let traits = get_enemy_traits(255);
         assert!(traits.is_empty());
+    }
+
+    #[test]
+    fn test_frost_wisp_trait_triggers_only_when_faster() {
+        // Frost Wisp: "If it acts first on Turn 1: apply 2 Chill"
+        // This requires FirstTurnIfFaster, NOT unconditional FirstTurn
+        let traits = get_enemy_traits(ids::FROST_WISP);
+        assert_eq!(traits.len(), 1);
+        assert!(
+            matches!(traits[0].trigger, TriggerType::FirstTurnIfFaster),
+            "Frost Wisp should use FirstTurnIfFaster trigger"
+        );
+        assert!(matches!(traits[0].effect_type, EffectType::ApplyChill));
+        assert_eq!(traits[0].value, 2);
     }
 }

@@ -7,7 +7,7 @@ pub mod state;
 pub mod stats;
 
 use combat_system::state::CombatantInput;
-use combat_system::{resolve_combat, CombatLogEntry, EffectType, ItemEffect, TriggerType};
+use combat_system::{resolve_combat, CombatLogEntry, EffectType, ItemEffect};
 use constants::{BASE_HP, DAY_MOVES, GAME_STATE_SEED, INITIAL_GEAR_SLOTS, MAX_GEAR_SLOTS};
 use errors::GameplayStateError;
 use movement::{
@@ -529,34 +529,52 @@ fn remove_enemy(map_enemies: &mut MapEnemies, enemy_index: usize) {
 fn build_player_combatant(
     current_hp: i16,
     stats: &PlayerStats,
-    player_effects: &[ItemEffect],
+    _player_effects: &[ItemEffect],
 ) -> CombatantInput {
-    // Bonus HP from BattleStart Heal effects (temporary boost beyond base max_hp)
-    let bonus_hp: i32 = player_effects
-        .iter()
-        .filter(|effect| {
-            matches!(effect.trigger, TriggerType::BattleStart)
-                && matches!(effect.effect_type, EffectType::Heal)
-        })
-        .map(|effect| effect.value.max(0) as i32)
-        .sum();
-
-    let combat_hp = (current_hp as i32)
-        .saturating_add(bonus_hp)
-        .clamp(1, u16::MAX as i32) as i16;
-    let combat_max_hp = (stats.max_hp as i32)
-        .saturating_add(bonus_hp)
-        .clamp(1, u16::MAX as i32) as u16;
+    // NOTE: BattleStart Heal effects are already included in stats.max_hp
+    // via calculate_stats(). They represent permanent max HP bonuses from items
+    // (e.g., Health Ring), not temporary combat-only boosts.
+    //
+    // current_hp is clamped to stats.max_hp to prevent exceeding derived max.
+    let combat_hp = current_hp.clamp(1, stats.max_hp);
 
     CombatantInput {
         hp: combat_hp,
-        max_hp: combat_max_hp,
+        max_hp: stats.max_hp as u16,
         atk: stats.atk,
         arm: stats.arm,
         spd: stats.spd,
         dig: stats.dig,
         strikes: 1,
     }
+}
+
+/// Preprocess enemy effects to handle dynamic calculations.
+///
+/// Currently handles:
+/// - Coin Slug (id=10): BattleStart GainArmor based on player gold (floor(gold/10), cap 3)
+fn preprocess_enemy_effects(archetype_id: u8, player_gold: u16) -> Vec<ItemEffect> {
+    let base_effects = field_enemies::traits::get_enemy_traits(archetype_id);
+
+    // Coin Slug: armor = min(player_gold / 10, 3)
+    if archetype_id == field_enemies::archetypes::ids::COIN_SLUG {
+        let armor_from_gold = ((player_gold / 10) as i16).min(3);
+        return base_effects
+            .iter()
+            .map(|effect| {
+                if matches!(effect.effect_type, EffectType::GainArmor) {
+                    ItemEffect {
+                        value: armor_from_gold,
+                        ..*effect
+                    }
+                } else {
+                    *effect
+                }
+            })
+            .collect();
+    }
+
+    base_effects.to_vec()
 }
 
 fn resolve_enemy_combat<'info>(
@@ -582,7 +600,7 @@ fn resolve_enemy_combat<'info>(
     let player_stats = calculate_stats(inventory);
     let player_effects = generate_combat_effects(inventory);
     let player_input = build_player_combatant(game_state.hp, &player_stats, &player_effects);
-    let enemy_effects = field_enemies::traits::get_enemy_traits(enemy.archetype_id).to_vec();
+    let enemy_effects = preprocess_enemy_effects(enemy.archetype_id, game_state.gold);
 
     emit!(CombatStarted {
         player: game_state.player,
@@ -616,7 +634,13 @@ fn resolve_enemy_combat<'info>(
     // HP capped at max_hp (discarding temp combat bonuses)
     game_state.hp = result.final_player_hp.min(player_stats.max_hp);
 
-    // Gold from combat (stolen by enemies cannot go below 0)
+    // Gold changes from two sources (applied in order):
+    // 1. gold_change: From combat effects (e.g., Ore Tick's StealGold trait).
+    //    Can be negative if enemy stole gold. Clamped to not go below 0.
+    // 2. gold_reward: Tier-based victory reward (T1=5, T2=10, T3=20).
+    //    Only awarded if player won.
+    // Example: If enemy steals 5 gold and player wins T1 fight:
+    //   final_gold = (initial - 5) + 5 = initial
     let new_gold = (game_state.gold as i32)
         .saturating_add(result.gold_change as i32)
         .max(0) as u16;
@@ -696,7 +720,8 @@ fn resolve_boss_fight<'info>(
     // HP capped at max_hp (discarding temp combat bonuses)
     game_state.hp = result.final_player_hp.min(player_stats.max_hp);
 
-    // Gold from combat (stolen by boss cannot go below 0)
+    // Gold changes from combat effects only (bosses have no tier-based reward).
+    // gold_change can be negative if boss has theft effects. Clamped to not go below 0.
     let new_gold = (game_state.gold as i32)
         .saturating_add(result.gold_change as i32)
         .max(0) as u16;
@@ -843,74 +868,41 @@ fn select_enemy_step(
         return None;
     }
 
-    let dx_abs = dx.abs();
-    let dy_abs = dy.abs();
-    let primary_x = dx_abs >= dy_abs;
-
-    let mut candidates = [(0u8, 0u8); 2];
-    let mut candidate_count = 0usize;
-
-    if primary_x {
-        if dx != 0 {
-            let step_x = if dx > 0 {
-                enemy_x.saturating_add(1)
-            } else {
-                enemy_x.saturating_sub(1)
-            };
-            candidates[candidate_count] = (step_x, enemy_y);
-            candidate_count += 1;
+    let step_toward = |pos: u8, delta: i16| -> Option<u8> {
+        if delta == 0 {
+            return None;
         }
-        if dy != 0 {
-            let step_y = if dy > 0 {
-                enemy_y.saturating_add(1)
-            } else {
-                enemy_y.saturating_sub(1)
-            };
-            candidates[candidate_count] = (enemy_x, step_y);
-            candidate_count += 1;
-        }
+        Some(if delta > 0 { pos.saturating_add(1) } else { pos.saturating_sub(1) })
+    };
+
+    let x_step = step_toward(enemy_x, dx).map(|x| (x, enemy_y));
+    let y_step = step_toward(enemy_y, dy).map(|y| (enemy_x, y));
+
+    let candidates: [Option<(u8, u8)>; 2] = if dx.abs() >= dy.abs() {
+        [x_step, y_step]
     } else {
-        if dy != 0 {
-            let step_y = if dy > 0 {
-                enemy_y.saturating_add(1)
-            } else {
-                enemy_y.saturating_sub(1)
-            };
-            candidates[candidate_count] = (enemy_x, step_y);
-            candidate_count += 1;
-        }
-        if dx != 0 {
-            let step_x = if dx > 0 {
-                enemy_x.saturating_add(1)
-            } else {
-                enemy_x.saturating_sub(1)
-            };
-            candidates[candidate_count] = (step_x, enemy_y);
-            candidate_count += 1;
-        }
-    }
+        [y_step, x_step]
+    };
 
-    for idx in 0..candidate_count {
-        let (candidate_x, candidate_y) = candidates[idx];
-        if candidate_x >= generated_map.width || candidate_y >= generated_map.height {
+    for candidate in candidates.into_iter().flatten() {
+        let (cx, cy) = candidate;
+        if cx >= generated_map.width || cy >= generated_map.height {
             continue;
         }
-        if !generated_map.is_walkable(candidate_x, candidate_y) {
+        if !generated_map.is_walkable(cx, cy) {
             continue;
         }
-        if candidate_x == player_x && candidate_y == player_y {
+        if cx == player_x && cy == player_y {
             if player_tile_blocked {
                 continue;
             }
-            return Some((candidate_x, candidate_y));
+            return Some(candidate);
         }
-
-        let index = (candidate_y as usize) * map_width + (candidate_x as usize);
+        let index = (cy as usize) * map_width + (cx as usize);
         if index < occupied.len() && occupied[index] {
             continue;
         }
-
-        return Some((candidate_x, candidate_y));
+        return Some(candidate);
     }
 
     None
@@ -1283,61 +1275,58 @@ mod hp_logic_tests {
 
     #[test]
     fn test_hp_capping_logic() {
-        // Scenario 1: 10 HP. Item gives +5 temp bonus. Lose 3 (12 left). End -> 10.
-        let current_hp: i16 = 10;
-        let stats = make_base_stats();
+        // Test that combat HP is capped at max_hp from derived stats.
+        // BattleStart Heal bonuses are included in stats.max_hp via calculate_stats(),
+        // not as separate temporary bonuses in build_player_combatant().
+        let stats = PlayerStats {
+            max_hp: 15, // Already includes +5 from BattleStart Heal item
+            atk: 0,
+            arm: 0,
+            spd: 0,
+            dig: 1,
+        };
 
-        let effects = vec![ItemEffect {
-            effect_type: EffectType::Heal,
-            trigger: TriggerType::BattleStart,
-            value: 5,
-            once_per_turn: false,
-        }];
+        // Player at full HP
+        let current_hp: i16 = 15;
+        let effects = vec![];
 
-        // Step 1: Verify combatant build includes bonus
         let input = build_player_combatant(current_hp, &stats, &effects);
-        assert_eq!(input.hp, 15, "Combat HP should include +5 bonus (10+5=15)");
-        assert_eq!(
-            input.max_hp, 15,
-            "Combat Max HP should include +5 bonus (10+5=15)"
-        );
+        assert_eq!(input.hp, 15, "Combat HP should match current HP");
+        assert_eq!(input.max_hp, 15, "Combat max_hp should match derived stats");
 
-        // Step 2: Simulate combat outcome
-        // Player loses 3 HP, ending at 12
+        // Simulate combat: lose 3 HP
         let final_combat_hp: i16 = 12;
 
-        // Step 3: Apply post-combat logic
+        // Post-combat capping
         let new_persistent_hp = final_combat_hp.min(stats.max_hp);
-        assert_eq!(
-            new_persistent_hp, 10,
-            "HP should be capped at base max_hp (10), discarding temp bonus"
-        );
+        assert_eq!(new_persistent_hp, 12, "HP should persist as 12 (below max 15)");
     }
 
     #[test]
     fn test_hp_damage_persistence() {
-        // Scenario 2: 10 HP. Item gives +5. Lose 7 (8 left). End -> 8.
-        let current_hp: i16 = 10;
-        let stats = make_base_stats();
+        // Test that damage persists correctly after combat.
+        let stats = PlayerStats {
+            max_hp: 15, // Includes item bonuses from calculate_stats()
+            atk: 0,
+            arm: 0,
+            spd: 0,
+            dig: 1,
+        };
 
-        let effects = vec![ItemEffect {
-            effect_type: EffectType::Heal,
-            trigger: TriggerType::BattleStart,
-            value: 5,
-            once_per_turn: false,
-        }];
+        let current_hp: i16 = 15;
+        let effects = vec![];
 
         let input = build_player_combatant(current_hp, &stats, &effects);
         assert_eq!(input.hp, 15);
         assert_eq!(input.max_hp, 15);
 
-        // Player loses 7 HP from 15, ending at 8
+        // Player loses 7 HP, ending at 8
         let final_combat_hp: i16 = 8;
 
         let new_persistent_hp = final_combat_hp.min(stats.max_hp);
         assert_eq!(
             new_persistent_hp, 8,
-            "HP should persist as 8 (lower than base max 10)"
+            "HP should persist as 8 (lower than max 15)"
         );
     }
 
@@ -1383,6 +1372,87 @@ mod hp_logic_tests {
         assert_eq!(input.arm, 3);
         assert_eq!(input.spd, 2);
         assert_eq!(input.dig, 3);
+    }
+
+    #[test]
+    fn test_battlestart_heal_not_double_counted() {
+        // Regression test: BattleStart Heal bonuses are included in stats.max_hp
+        // via calculate_stats(). They should NOT be added again in build_player_combatant().
+        //
+        // If this test fails, it means BattleStart Heal is being double-counted:
+        // - Once in calculate_stats() -> stats.max_hp
+        // - Again in build_player_combatant() -> combat_max_hp
+        //
+        // The fix ensures build_player_combatant() uses stats.max_hp directly.
+
+        use combat_system::{EffectType, TriggerType};
+
+        // Simulate: stats.max_hp = 15 (base 10 + 5 from BattleStart Heal item)
+        let stats = PlayerStats {
+            max_hp: 15,
+            atk: 0,
+            arm: 0,
+            spd: 0,
+            dig: 1,
+        };
+
+        // The same Heal effect that calculate_stats() already processed
+        let effects = vec![ItemEffect {
+            effect_type: EffectType::Heal,
+            trigger: TriggerType::BattleStart,
+            value: 5,
+            once_per_turn: false,
+        }];
+
+        let current_hp: i16 = 15;
+        let input = build_player_combatant(current_hp, &stats, &effects);
+
+        // CORRECT: combat_max_hp = 15 (from stats, Heal NOT added again)
+        // BUG: combat_max_hp = 20 (15 + 5, Heal double-counted)
+        assert_eq!(
+            input.max_hp, 15,
+            "BattleStart Heal should NOT be double-counted"
+        );
+        assert_eq!(input.hp, 15, "Combat HP should not exceed derived max_hp");
+    }
+
+    #[test]
+    fn test_coin_slug_armor_from_gold() {
+        // Coin Slug: Battle Start: gain Armor equal to floor(player Gold/10) (cap 3)
+        // This tests the preprocess_enemy_effects function.
+
+        use field_enemies::archetypes::ids::COIN_SLUG;
+
+        // 0 gold = 0 armor
+        let effects = preprocess_enemy_effects(COIN_SLUG, 0);
+        assert_eq!(effects.len(), 1);
+        assert_eq!(effects[0].value, 0);
+
+        // 9 gold = 0 armor (floor(9/10) = 0)
+        let effects = preprocess_enemy_effects(COIN_SLUG, 9);
+        assert_eq!(effects[0].value, 0);
+
+        // 10 gold = 1 armor
+        let effects = preprocess_enemy_effects(COIN_SLUG, 10);
+        assert_eq!(effects[0].value, 1);
+
+        // 25 gold = 2 armor
+        let effects = preprocess_enemy_effects(COIN_SLUG, 25);
+        assert_eq!(effects[0].value, 2);
+
+        // 30 gold = 3 armor (cap)
+        let effects = preprocess_enemy_effects(COIN_SLUG, 30);
+        assert_eq!(effects[0].value, 3);
+
+        // 100 gold = 3 armor (capped at 3)
+        let effects = preprocess_enemy_effects(COIN_SLUG, 100);
+        assert_eq!(effects[0].value, 3, "Armor should be capped at 3");
+
+        // Non-Coin Slug enemies should not be affected
+        let effects = preprocess_enemy_effects(0, 100); // Tunnel Rat
+        assert!(!effects.iter().any(|e| {
+            matches!(e.effect_type, EffectType::GainArmor) && e.value == 3
+        }));
     }
 }
 

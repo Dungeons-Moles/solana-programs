@@ -73,12 +73,8 @@ pub fn execute_strikes(
         defender_stats.hp = new_hp;
         total_damage = total_damage.saturating_add(damage);
 
-        // Log the attack
         if damage > 0 {
             log.push(CombatLogEntry::attack(turn, is_player_attacking, damage));
-        }
-
-        if damage > 0 {
             process_triggers_for_phase(
                 on_hit_effects,
                 TriggerType::OnHit,
@@ -89,12 +85,13 @@ pub fn execute_strikes(
                 defender_status,
                 triggered_flags,
                 is_player_attacking,
+                false, // acts_first: unused for OnHit triggers
                 gold_change,
                 log,
             );
         }
 
-        // Process shrapnel retaliation
+        // Shrapnel: defender retaliates with damage when struck
         let old_attacker_hp = attacker_stats.hp;
         attacker_stats.hp =
             process_shrapnel_retaliation(defender_status.shrapnel, attacker_stats.hp);

@@ -5,7 +5,7 @@
 use crate::items::get_item;
 use crate::itemsets::get_active_itemsets;
 use crate::state::{
-    EffectType, ItemEffect, ItemInstance, PlayerInventory, Tier, ToolOilModification,
+    stat_bonus, EffectType, ItemEffect, ItemInstance, PlayerInventory, Tier, ToolOilModification,
 };
 
 /// Convert an item's effects to ItemEffect array with tier scaling
@@ -27,13 +27,13 @@ pub fn generate_tool_effects(tool: &ItemInstance) -> Vec<ItemEffect> {
 
     // Add Tool Oil bonuses
     if tool.has_oil(ToolOilModification::PlusAtk) {
-        effects.push(ItemEffect::stat_bonus(EffectType::GainAtk, 1));
+        effects.push(stat_bonus(EffectType::GainAtk, 1));
     }
     if tool.has_oil(ToolOilModification::PlusSpd) {
-        effects.push(ItemEffect::stat_bonus(EffectType::GainSpd, 1));
+        effects.push(stat_bonus(EffectType::GainSpd, 1));
     }
     if tool.has_oil(ToolOilModification::PlusDig) {
-        effects.push(ItemEffect::stat_bonus(EffectType::GainDig, 1));
+        effects.push(stat_bonus(EffectType::GainDig, 1));
     }
 
     effects
@@ -94,6 +94,7 @@ mod tests {
 
     fn make_inventory() -> PlayerInventory {
         PlayerInventory {
+            session: Pubkey::default(),
             player: Pubkey::default(),
             tool: None,
             gear: [None; 8],

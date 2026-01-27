@@ -1,0 +1,16 @@
+[package]
+name = "combat-system"
+version = "0.1.0"
+description = "Combat system library for deterministic auto-battle"
+edition = "2021"
+
+[lib]
+crate-type = ["lib"]
+name = "combat_system"
+
+[features]
+default = []
+idl-build = ["anchor-lang/idl-build"]
+
+[dependencies]
+anchor-lang = "0.32.0"

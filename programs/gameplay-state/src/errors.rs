@@ -52,4 +52,8 @@ pub enum GameplayStateError {
 
     #[msg("Invalid enemy tier")]
     InvalidEnemyTier,
+    #[msg("Invalid session account")]
+    InvalidSession,
+    #[msg("Invalid session owner program")]
+    InvalidSessionOwner,
 }

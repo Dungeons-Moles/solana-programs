@@ -86,4 +86,7 @@ pub enum PoiSystemError {
 
     #[msg("Player is not on the POI tile")]
     PlayerNotOnPoiTile,
+
+    #[msg("Session account is not owned by session-manager program")]
+    InvalidSessionOwner,
 }

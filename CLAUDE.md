@@ -1,30 +1,34 @@
 # solana-programs Development Guidelines
 
-Auto-generated from all feature plans. Last updated: 2026-01-15
+Auto-generated from all feature plans. Last updated: 2026-01-26
 
 ## Active Technologies
+
+- Rust 1.75+ (Solana BPF target) + Anchor 0.32+, Solana CLI 2.3+, solana-program (001-solana-core-programs)
 - Rust 2021 edition, Solana SDK 2.x + Anchor 0.31.1 (matching existing programs) (002-gameplay-state-tracking)
-- Solana accounts (PDA-based state) (002-gameplay-state-tracking)
 - Rust 2021 edition (Solana BPF target) + Anchor 0.31.1 (matching existing programs), solana-program (003-combat-system)
 - Solana accounts (PDA-based state) + on-chain item registry (004-item-system)
 - Rust 1.75+ (Solana BPF target) + Anchor 0.32+, anchor-lang, solana-program (005-field-enemies)
-- On-chain Solana accounts via Anchor PDAs (005-field-enemies)
-- Rust 2021 edition (Solana BPF target) + Anchor 0.31.1 + solana-program, anchor-lang, combat-system crate (for ItemEffect/TriggerType reuse) (006-boss-system)
-- Compile-time constants for boss definitions; BossInstance computed at runtime (006-boss-system)
+- Rust 2021 edition (Solana BPF target) + Anchor 0.31.1 + solana-program, anchor-lang, combat-system crate (006-boss-system)
 - Rust 2021 edition (Solana BPF target) + Anchor 0.32.0, solana-program (007-poi-system)
-- PDA-based state for per-session POI instances (MapPois account) (007-poi-system)
-- Rust 2021 edition (Solana BPF target) + Anchor 0.32+, solana-program, combat-system crate (for ItemTag reuse), player-inventory crate (for ItemDefinition access), boss-system crate (for BossDefinition/weakness tags) (008-item-offer-generation)
-- PDA-based state via Anchor (`MapPois` extended with offer state, or new `ItemOffers` account) (008-item-offer-generation)
+- Rust 2021 edition (Solana BPF target) + Anchor 0.32+, solana-program, combat-system crate, player-inventory crate (008-item-offer-generation)
 - Rust 1.75+ (Solana BPF target) + Anchor 0.32+, solana-program, combat-system, field-enemies, boss-system, poi-system (010-core-gameplay-loop)
-- Solana accounts (PDAs) (010-core-gameplay-loop)
-
-- Rust 1.75+ (Solana BPF target) + Anchor 0.32+, Solana CLI 2.3+, solana-program (001-solana-core-programs)
 - MagicBlock integration is stubbed (SDK pending toolchain update)
 
 ## Project Structure
 
 ```text
-src/
+crates/
+  boss-system/
+  combat-system/
+  field-enemies/
+programs/
+  gameplay-state/
+  map-generator/
+  player-inventory/
+  player-profile/
+  poi-system/
+  session-manager/
 tests/
 ```
 
@@ -40,10 +44,13 @@ cargo clippy
 Rust 1.75+ (Solana BPF target): Follow standard conventions
 
 ## Recent Changes
-- 010-core-gameplay-loop: Added Rust 1.75+ (Solana BPF target) + Anchor 0.32+, solana-program, combat-system, field-enemies, boss-system, poi-system
-- 008-item-offer-generation: Added Rust 2021 edition (Solana BPF target) + Anchor 0.32+, solana-program, combat-system crate (for ItemTag reuse), player-inventory crate (for ItemDefinition access), boss-system crate (for BossDefinition/weakness tags)
-- 007-poi-system: Added Rust 2021 edition (Solana BPF target) + Anchor 0.32.0, solana-program
 
+- 010-core-gameplay-loop: Integrated core gameplay loop with combat, enemies, bosses, and POI systems
+- 008-item-offer-generation: Implemented item offer generation logic and state
+- 007-poi-system: Implemented POI system with PDA-based state for per-session instances
+- 006-boss-system: Implemented 24 boss definitions, stat scaling, phase mechanics
+- 005-field-enemies: Implemented enemy spawning and reward logic (in crates/field-enemies)
+- 001-solana-core-programs: Implemented session manager and map generator
 
 <!-- MANUAL ADDITIONS START -->
 <!-- MANUAL ADDITIONS END -->

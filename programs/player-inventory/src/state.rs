@@ -81,57 +81,8 @@ impl Tier {
     }
 }
 
-/// When an effect triggers (matches combat-system)
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
-pub enum TriggerType {
-    /// At the start of battle
-    BattleStart,
-    /// Only on the first turn
-    FirstTurn,
-    /// At the start of each turn
-    TurnStart,
-    /// Every other turn
-    EveryOtherTurn,
-    /// When hitting the enemy
-    OnHit,
-    /// When enemy has no armor
-    Exposed,
-    /// When player HP is below 50%
-    Wounded,
-}
-
-/// Effect types (matches combat-system)
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
-pub enum EffectType {
-    /// Deal weapon damage
-    DealDamage,
-    /// Deal non-weapon damage (bombs, etc.)
-    DealNonWeaponDamage,
-    /// Heal HP
-    Heal,
-    /// Gain armor
-    GainArmor,
-    /// Gain ATK
-    GainAtk,
-    /// Gain SPD
-    GainSpd,
-    /// Apply Chill stacks to enemy
-    ApplyChill,
-    /// Apply Shrapnel stacks to self
-    ApplyShrapnel,
-    /// Apply Rust stacks to enemy
-    ApplyRust,
-    /// Apply Bleed stacks to enemy
-    ApplyBleed,
-    /// Remove armor from enemy
-    RemoveArmor,
-    /// Gain DIG
-    GainDig,
-    /// Gain gold
-    GainGold,
-    /// Apply bomb countdown
-    ApplyBomb,
-}
+/// Combat-system trigger/effect types shared across gameplay.
+pub use combat_system::state::{EffectType, ItemEffect, TriggerType};
 
 /// Effect definition with tier-scaled values (compile-time constant)
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -178,28 +129,13 @@ impl EffectDefinition {
     }
 }
 
-/// Combat effect (matches combat-system types)
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
-pub struct ItemEffect {
-    /// When effect activates
-    pub trigger: TriggerType,
-    /// Whether effect is limited to once per turn
-    pub once_per_turn: bool,
-    /// What the effect does
-    pub effect_type: EffectType,
-    /// Effect value
-    pub value: i16,
-}
-
-impl ItemEffect {
-    /// Create a stat bonus effect (BattleStart trigger)
-    pub fn stat_bonus(effect_type: EffectType, value: i16) -> Self {
-        Self {
-            trigger: TriggerType::BattleStart,
-            once_per_turn: false,
-            effect_type,
-            value,
-        }
+/// Create a stat bonus effect (BattleStart trigger)
+pub fn stat_bonus(effect_type: EffectType, value: i16) -> ItemEffect {
+    ItemEffect {
+        trigger: TriggerType::BattleStart,
+        once_per_turn: false,
+        effect_type,
+        value,
     }
 }
 
@@ -269,7 +205,9 @@ impl ItemInstance {
 /// Player's equipped items and slot capacity
 #[account]
 pub struct PlayerInventory {
-    /// Owner's wallet
+    /// The session this inventory belongs to
+    pub session: Pubkey,
+    /// Owner's wallet (for authorization)
     pub player: Pubkey,
     /// Equipped tool (0 or 1)
     pub tool: Option<ItemInstance>,
@@ -283,11 +221,12 @@ pub struct PlayerInventory {
 
 impl PlayerInventory {
     /// Account space calculation
-    /// 8 (discriminator) + 32 (player) + 1 + 10 (tool option) + 8 * (1 + 10) (gear array) + 1 + 1
-    pub const LEN: usize = 8 + 32 + 1 + 10 + (8 * 11) + 1 + 1;
+    /// 8 (discriminator) + 32 (session) + 32 (player) + 1 + 10 (tool option) + 8 * (1 + 10) (gear array) + 1 + 1
+    pub const LEN: usize = 8 + 32 + 32 + 1 + 10 + (8 * 11) + 1 + 1;
 
     /// Initialize a new PlayerInventory
-    pub fn init(&mut self, player: Pubkey, bump: u8) {
+    pub fn init(&mut self, session: Pubkey, player: Pubkey, bump: u8) {
+        self.session = session;
         self.player = player;
         self.tool = None;
         self.gear = [None; 8];

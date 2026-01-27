@@ -36,17 +36,23 @@ declare_id!("8vNWjVvz8ZZvPLCKhNJcJH6vxCqNKJgq3hLYAqYdQmQZ");
 pub mod player_inventory {
     use super::*;
 
-    /// Creates a new PlayerInventory account for a player.
+    /// Creates a new PlayerInventory account for a session.
     /// Initializes with 4 gear slots and Basic Pickaxe equipped.
+    /// Each session has its own inventory, ensuring clean state per run.
     pub fn initialize_inventory(ctx: Context<InitializeInventory>) -> Result<()> {
         let inventory = &mut ctx.accounts.inventory;
-        inventory.init(ctx.accounts.player.key(), ctx.bumps.inventory);
+        inventory.init(
+            ctx.accounts.session.key(),
+            ctx.accounts.player.key(),
+            ctx.bumps.inventory,
+        );
 
         // Auto-equip Basic Pickaxe as the starter tool
         inventory.tool = Some(ItemInstance::new(*BASIC_PICKAXE.id, Tier::I));
 
         emit!(InventoryInitialized {
             player: ctx.accounts.player.key(),
+            session: ctx.accounts.session.key(),
         });
 
         Ok(())
@@ -244,6 +250,17 @@ pub mod player_inventory {
 
         Ok(offer)
     }
+
+    /// Closes the PlayerInventory account, returning rent to the player.
+    /// Called automatically when a session ends (victory, defeat, or quit)
+    /// to ensure fresh inventory for the next session.
+    pub fn close_inventory(ctx: Context<CloseInventory>) -> Result<()> {
+        emit!(InventoryClosed {
+            player: ctx.accounts.inventory.player,
+        });
+
+        Ok(())
+    }
 }
 
 // =============================================================================
@@ -252,15 +269,19 @@ pub mod player_inventory {
 
 #[derive(Accounts)]
 pub struct InitializeInventory<'info> {
-    /// PDA: ["inventory", player.key()]
+    /// PDA: ["inventory", session.key()] - one inventory per session
     #[account(
         init,
         payer = player,
         space = PlayerInventory::LEN,
-        seeds = [b"inventory", player.key().as_ref()],
+        seeds = [b"inventory", session.key().as_ref()],
         bump
     )]
     pub inventory: Account<'info, PlayerInventory>,
+
+    /// The game session this inventory belongs to
+    /// CHECK: Session account from session-manager program
+    pub session: AccountInfo<'info>,
 
     /// Player wallet, pays for account creation
     #[account(mut)]
@@ -273,7 +294,7 @@ pub struct InitializeInventory<'info> {
 pub struct EquipTool<'info> {
     #[account(
         mut,
-        seeds = [b"inventory", player.key().as_ref()],
+        seeds = [b"inventory", inventory.session.as_ref()],
         bump = inventory.bump,
         has_one = player @ InventoryError::Unauthorized
     )]
@@ -286,7 +307,7 @@ pub struct EquipTool<'info> {
 pub struct EquipGear<'info> {
     #[account(
         mut,
-        seeds = [b"inventory", player.key().as_ref()],
+        seeds = [b"inventory", inventory.session.as_ref()],
         bump = inventory.bump,
         has_one = player @ InventoryError::Unauthorized
     )]
@@ -299,7 +320,7 @@ pub struct EquipGear<'info> {
 pub struct UnequipGear<'info> {
     #[account(
         mut,
-        seeds = [b"inventory", player.key().as_ref()],
+        seeds = [b"inventory", inventory.session.as_ref()],
         bump = inventory.bump,
         has_one = player @ InventoryError::Unauthorized
     )]
@@ -312,7 +333,7 @@ pub struct UnequipGear<'info> {
 pub struct FuseItems<'info> {
     #[account(
         mut,
-        seeds = [b"inventory", player.key().as_ref()],
+        seeds = [b"inventory", inventory.session.as_ref()],
         bump = inventory.bump,
         has_one = player @ InventoryError::Unauthorized
     )]
@@ -325,7 +346,7 @@ pub struct FuseItems<'info> {
 pub struct ApplyToolOil<'info> {
     #[account(
         mut,
-        seeds = [b"inventory", player.key().as_ref()],
+        seeds = [b"inventory", inventory.session.as_ref()],
         bump = inventory.bump,
         has_one = player @ InventoryError::Unauthorized
     )]
@@ -338,7 +359,7 @@ pub struct ApplyToolOil<'info> {
 pub struct ExpandGearSlots<'info> {
     #[account(
         mut,
-        seeds = [b"inventory", player.key().as_ref()],
+        seeds = [b"inventory", inventory.session.as_ref()],
         bump = inventory.bump,
         has_one = player @ InventoryError::Unauthorized
     )]
@@ -350,7 +371,7 @@ pub struct ExpandGearSlots<'info> {
 #[derive(Accounts)]
 pub struct GetCombatEffects<'info> {
     #[account(
-        seeds = [b"inventory", player.key().as_ref()],
+        seeds = [b"inventory", inventory.session.as_ref()],
         bump = inventory.bump,
         has_one = player @ InventoryError::Unauthorized
     )]
@@ -365,6 +386,21 @@ pub struct GenerateOffer<'info> {
     pub signer: Signer<'info>,
 }
 
+#[derive(Accounts)]
+pub struct CloseInventory<'info> {
+    #[account(
+        mut,
+        seeds = [b"inventory", inventory.session.as_ref()],
+        bump = inventory.bump,
+        has_one = player @ InventoryError::Unauthorized,
+        close = player
+    )]
+    pub inventory: Account<'info, PlayerInventory>,
+
+    #[account(mut)]
+    pub player: Signer<'info>,
+}
+
 // =============================================================================
 // Events
 // =============================================================================
@@ -372,6 +408,7 @@ pub struct GenerateOffer<'info> {
 #[event]
 pub struct InventoryInitialized {
     pub player: Pubkey,
+    pub session: Pubkey,
 }
 
 #[event]
@@ -408,4 +445,9 @@ pub struct GearSlotsExpanded {
 pub struct ToolOilApplied {
     pub player: Pubkey,
     pub modification: ToolOilModification,
+}
+
+#[event]
+pub struct InventoryClosed {
+    pub player: Pubkey,
 }

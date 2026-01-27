@@ -33,8 +33,8 @@ pub const OIL_FLAG_DIG: u8 = 0x04;
 /// Result of a rest interaction
 #[derive(Clone, Debug)]
 pub struct RestResult {
-    /// Amount healed
-    pub heal_amount: u8,
+    /// Amount healed (u16 to support max_hp > 255)
+    pub heal_amount: u16,
     /// Whether this was a full heal (Mole Den)
     pub full_heal: bool,
     /// Whether the POI is now marked as used
@@ -76,18 +76,26 @@ pub fn can_interact(
 /// - L5 (Rest Alcove): Heal 10 HP, one-time, night-only
 ///
 /// Returns: RestResult with heal amount and whether to mark POI as used
+///
+/// Note: HP values are i16 to match GameState.hp and PlayerStats.max_hp.
+/// Negative current_hp is treated as 0 for healing calculations.
 pub fn execute_rest_interaction(
     poi: &PoiInstance,
-    current_hp: u8,
-    max_hp: u8,
+    current_hp: i16,
+    max_hp: i16,
     is_night: bool,
 ) -> Result<RestResult, PoiSystemError> {
     let def = can_interact(poi, is_night)?;
 
+    // Clamp current_hp to 0 if negative (shouldn't happen, but be safe)
+    let effective_hp = current_hp.max(0) as u16;
+    // Clamp max_hp to 0 if negative (shouldn't happen, but be safe)
+    let effective_max_hp = max_hp.max(0) as u16;
+
     match def.interaction_type {
         InteractionType::RestFull => {
             // L1: Mole Den - full heal
-            let heal_amount = max_hp.saturating_sub(current_hp);
+            let heal_amount = effective_max_hp.saturating_sub(effective_hp);
             Ok(RestResult {
                 heal_amount,
                 full_heal: true,
@@ -96,7 +104,8 @@ pub fn execute_rest_interaction(
         }
         InteractionType::RestPartial => {
             // L5: Rest Alcove - heal 10 HP
-            let heal_amount = REST_PARTIAL_HEAL.min(max_hp.saturating_sub(current_hp));
+            let missing_hp = effective_max_hp.saturating_sub(effective_hp);
+            let heal_amount = (REST_PARTIAL_HEAL as u16).min(missing_hp);
             Ok(RestResult {
                 heal_amount,
                 full_heal: false,
@@ -933,7 +942,7 @@ mod tests {
     #[test]
     fn test_execute_rest_mole_den_full_heal() {
         let poi = create_test_poi(1, 5, 5, false, false); // L1 Mole Den
-        let result = execute_rest_interaction(&poi, 50, 100, true);
+        let result = execute_rest_interaction(&poi, 50i16, 100i16, true);
 
         assert!(result.is_ok());
         let result = result.unwrap();
@@ -945,7 +954,7 @@ mod tests {
     #[test]
     fn test_execute_rest_mole_den_already_full() {
         let poi = create_test_poi(1, 5, 5, false, false);
-        let result = execute_rest_interaction(&poi, 100, 100, true);
+        let result = execute_rest_interaction(&poi, 100i16, 100i16, true);
 
         assert!(result.is_ok());
         let result = result.unwrap();
@@ -955,7 +964,7 @@ mod tests {
     #[test]
     fn test_execute_rest_mole_den_day_fails() {
         let poi = create_test_poi(1, 5, 5, false, false);
-        let result = execute_rest_interaction(&poi, 50, 100, false);
+        let result = execute_rest_interaction(&poi, 50i16, 100i16, false);
 
         assert!(matches!(result, Err(PoiSystemError::NightOnlyPoi)));
     }
@@ -963,7 +972,7 @@ mod tests {
     #[test]
     fn test_execute_rest_alcove_partial_heal() {
         let poi = create_test_poi(5, 5, 5, false, false); // L5 Rest Alcove
-        let result = execute_rest_interaction(&poi, 50, 100, true);
+        let result = execute_rest_interaction(&poi, 50i16, 100i16, true);
 
         assert!(result.is_ok());
         let result = result.unwrap();
@@ -975,7 +984,7 @@ mod tests {
     #[test]
     fn test_execute_rest_alcove_caps_at_max() {
         let poi = create_test_poi(5, 5, 5, false, false);
-        let result = execute_rest_interaction(&poi, 95, 100, true);
+        let result = execute_rest_interaction(&poi, 95i16, 100i16, true);
 
         assert!(result.is_ok());
         let result = result.unwrap();
@@ -985,7 +994,7 @@ mod tests {
     #[test]
     fn test_execute_rest_alcove_already_used() {
         let poi = create_test_poi(5, 5, 5, true, false);
-        let result = execute_rest_interaction(&poi, 50, 100, true);
+        let result = execute_rest_interaction(&poi, 50i16, 100i16, true);
 
         assert!(matches!(result, Err(PoiSystemError::PoiAlreadyUsed)));
     }
@@ -994,9 +1003,31 @@ mod tests {
     fn test_execute_rest_invalid_poi_type() {
         // L2 Supply Cache is not a rest POI
         let poi = create_test_poi(2, 5, 5, false, false);
-        let result = execute_rest_interaction(&poi, 50, 100, true);
+        let result = execute_rest_interaction(&poi, 50i16, 100i16, true);
 
         assert!(matches!(result, Err(PoiSystemError::InvalidInteraction)));
+    }
+
+    #[test]
+    fn test_execute_rest_high_hp_values() {
+        // Test with HP > 255 to ensure no truncation
+        let poi = create_test_poi(1, 5, 5, false, false); // L1 Mole Den
+        let result = execute_rest_interaction(&poi, 200i16, 500i16, true);
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.heal_amount, 300, "Should heal 300 HP (500 - 200)");
+    }
+
+    #[test]
+    fn test_execute_rest_negative_hp_treated_as_zero() {
+        // Negative HP should be treated as 0 for healing calculations
+        let poi = create_test_poi(1, 5, 5, false, false); // L1 Mole Den
+        let result = execute_rest_interaction(&poi, -10i16, 100i16, true);
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.heal_amount, 100, "Should heal full amount when HP is negative");
     }
 
     // =========================================================================

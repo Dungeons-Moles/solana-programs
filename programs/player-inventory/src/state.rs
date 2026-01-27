@@ -205,7 +205,9 @@ impl ItemInstance {
 /// Player's equipped items and slot capacity
 #[account]
 pub struct PlayerInventory {
-    /// Owner's wallet
+    /// The session this inventory belongs to
+    pub session: Pubkey,
+    /// Owner's wallet (for authorization)
     pub player: Pubkey,
     /// Equipped tool (0 or 1)
     pub tool: Option<ItemInstance>,
@@ -219,11 +221,12 @@ pub struct PlayerInventory {
 
 impl PlayerInventory {
     /// Account space calculation
-    /// 8 (discriminator) + 32 (player) + 1 + 10 (tool option) + 8 * (1 + 10) (gear array) + 1 + 1
-    pub const LEN: usize = 8 + 32 + 1 + 10 + (8 * 11) + 1 + 1;
+    /// 8 (discriminator) + 32 (session) + 32 (player) + 1 + 10 (tool option) + 8 * (1 + 10) (gear array) + 1 + 1
+    pub const LEN: usize = 8 + 32 + 32 + 1 + 10 + (8 * 11) + 1 + 1;
 
     /// Initialize a new PlayerInventory
-    pub fn init(&mut self, player: Pubkey, bump: u8) {
+    pub fn init(&mut self, session: Pubkey, player: Pubkey, bump: u8) {
+        self.session = session;
         self.player = player;
         self.tool = None;
         self.gear = [None; 8];

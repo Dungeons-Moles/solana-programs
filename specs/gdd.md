@@ -383,13 +383,13 @@ Act 2 (Biome B):
 - L13 (Week 3) x1 guaranteed
 - L5 x3, L6 x2 total
 
-Act 3 (Biome A+):
+Act 3 (Biome C):
 
 - Same core utilities
 - L13 (Week 3) 30%
 - L5 x1, L14 x1
 
-Act 4 (Biome B+):
+Act 4 (Biome D):
 
 - Same core utilities
 - L13 (Week 3) 20%
@@ -466,7 +466,7 @@ Scrap Chute cost:
 
 Campaign structure:
 
-- 4 acts of 20 stages: A / B / A+ / B+.
+- 4 acts of 10 stages: A / B / C / D.
 - Week 1 and Week 2 bosses are biome variants (same archetypes, different emphasis).
 - Week 3 finals are 2 bosses per biome (Biome B finals are new).
 
@@ -550,8 +550,8 @@ Within-act ramp (stages 1–5/6–10/11–15/16–20):
 
 Act-level bumps:
 
-- Act 3 (A+): Week 1/2 bosses +1 ATK baseline; Week 3 finals +2 ATK baseline.
-- Act 4 (B+): Week 1/2 bosses +1 ATK +1 SPD baseline; Week 3 finals +2 ATK +1 SPD baseline.
+- Act 3 (C): Week 1/2 bosses +1 ATK baseline; Week 3 finals +2 ATK baseline.
+- Act 4 (D): Week 1/2 bosses +1 ATK +1 SPD baseline; Week 3 finals +2 ATK +1 SPD baseline.
 
 Each boss also gets one additional “Act+” trait line (data-driven) that intensifies its identity (no new mechanics).
 

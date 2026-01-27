@@ -4,10 +4,10 @@ use crate::{
     CombatantInput, ScaledBossStats, Week,
 };
 
-/// Calculate tier (0-3) based on stage within act
-/// Tier 0: stages 1-5, Tier 1: stages 6-10, Tier 2: stages 11-15, Tier 3: stages 16-20
-pub fn calculate_tier(stage_in_act: u8) -> u8 {
-    (stage_in_act - 1) / 5
+/// Calculate tier (0-1) based on level within act (10 levels per act)
+/// Tier 0: levels 1-5, Tier 1: levels 6-10
+pub fn calculate_tier(level_in_act: u8) -> u8 {
+    (level_in_act - 1) / 5
 }
 
 /// Scale Week 1 boss stats based on tier
@@ -114,14 +114,11 @@ mod tests {
 
     #[test]
     fn test_calculate_tier() {
-        assert_eq!(calculate_tier(1), 0); // Stage 1 = Tier 0
-        assert_eq!(calculate_tier(5), 0); // Stage 5 = Tier 0
-        assert_eq!(calculate_tier(6), 1); // Stage 6 = Tier 1
-        assert_eq!(calculate_tier(10), 1); // Stage 10 = Tier 1
-        assert_eq!(calculate_tier(11), 2); // Stage 11 = Tier 2
-        assert_eq!(calculate_tier(15), 2); // Stage 15 = Tier 2
-        assert_eq!(calculate_tier(16), 3); // Stage 16 = Tier 3
-        assert_eq!(calculate_tier(20), 3); // Stage 20 = Tier 3
+        // With 10 levels per act, only tiers 0-1 are used
+        assert_eq!(calculate_tier(1), 0); // Level 1 = Tier 0
+        assert_eq!(calculate_tier(5), 0); // Level 5 = Tier 0
+        assert_eq!(calculate_tier(6), 1); // Level 6 = Tier 1
+        assert_eq!(calculate_tier(10), 1); // Level 10 = Tier 1
     }
 
     #[test]
@@ -198,22 +195,22 @@ mod tests {
 
     #[test]
     fn test_full_scaling_example() {
-        // Stage 75 in Act 4 (B+), Week 3 Final
-        // tier = (75-61)/5 = 2 (stages 71-75)
-        // Boss: The Frostbound Leviathan (B-B-W3-01)
+        // Level 35 in Act 4 (B+), Week 3 Final
+        // level_in_act = 5, tier = (5-1)/5 = 0
+        // Boss: The Frostbound Leviathan (B-B-W3-01) - odd level = Final 1
         // Base: HP=74, ATK=4, ARM=14, SPD=2, DIG=3
 
-        let boss = select_boss(75, Week::Three);
+        let boss = select_boss(35, Week::Three);
         assert_eq!(boss.name, "The Frostbound Leviathan");
 
-        let scaled = scale_boss(boss, 75, Week::Three);
+        let scaled = scale_boss(boss, 35, Week::Three);
 
-        // Week 3 tier 2 scaling: +8 HP, +2 ARM, +1 ATK
+        // Week 3 tier 0 scaling: no tier bonuses
         // Act 4 baseline: +2 ATK, +1 SPD
-        assert_eq!(scaled.hp, 74 + 8); // 82
-        assert_eq!(scaled.atk, 4 + 1 + 2); // 7
-        assert_eq!(scaled.arm, 14 + 2); // 16
-        assert_eq!(scaled.spd, 2 + 1); // 3
+        assert_eq!(scaled.hp, 74); // no tier bonus
+        assert_eq!(scaled.atk, 4 + 2); // 6 (base + act bonus)
+        assert_eq!(scaled.arm, 14); // no tier bonus
+        assert_eq!(scaled.spd, 2 + 1); // 3 (act 4 bonus)
         assert_eq!(scaled.dig, 3); // unchanged
     }
 

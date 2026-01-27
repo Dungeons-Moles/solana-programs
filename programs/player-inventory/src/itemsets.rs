@@ -299,6 +299,7 @@ mod tests {
     #[test]
     fn test_active_itemsets_none() {
         let inventory = PlayerInventory {
+            session: Pubkey::default(),
             player: Pubkey::default(),
             tool: None,
             gear: [None; 8],
@@ -317,6 +318,7 @@ mod tests {
     #[test]
     fn test_active_itemsets_partial() {
         let mut inventory = PlayerInventory {
+            session: Pubkey::default(),
             player: Pubkey::default(),
             tool: None,
             gear: [None; 8],
@@ -335,6 +337,7 @@ mod tests {
     #[test]
     fn test_active_itemsets_complete() {
         let mut inventory = PlayerInventory {
+            session: Pubkey::default(),
             player: Pubkey::default(),
             tool: None,
             gear: [None; 8],

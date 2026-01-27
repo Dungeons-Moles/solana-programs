@@ -1,13 +1,16 @@
 use crate::{bosses::*, Biome, Week};
 
-/// Calculate which act (0-3) based on stage number
-pub fn calculate_act(stage: u8) -> u8 {
-    (stage - 1) / 20
+/// Campaign has 40 levels total (4 acts × 10 levels each)
+pub const LEVELS_PER_ACT: u8 = 10;
+
+/// Calculate which act (0-3) based on campaign level (1-40)
+pub fn calculate_act(level: u8) -> u8 {
+    (level - 1) / LEVELS_PER_ACT
 }
 
-/// Calculate stage within the current act (1-20)
-pub fn calculate_stage_in_act(stage: u8) -> u8 {
-    (stage - 1) % 20 + 1
+/// Calculate level within the current act (1-10)
+pub fn calculate_stage_in_act(level: u8) -> u8 {
+    (level - 1) % LEVELS_PER_ACT + 1
 }
 
 /// Get biome for an act (even acts = A, odd acts = B)
@@ -20,10 +23,10 @@ pub fn get_biome_for_act(act: u8) -> Biome {
     }
 }
 
-/// Select Week 1 boss index based on stage in act
-/// Cycles through 0-4 for stages 1-20
-pub fn select_week1_boss_index(stage_in_act: u8) -> u8 {
-    (stage_in_act - 1) % 5
+/// Select Week 1 boss index based on level in act
+/// Cycles through 0-4 for levels 1-10 (repeats at level 6)
+pub fn select_week1_boss_index(level_in_act: u8) -> u8 {
+    (level_in_act - 1) % 5
 }
 
 /// Select Week 2 boss index based on stage in act
@@ -66,23 +69,25 @@ mod tests {
 
     #[test]
     fn test_calculate_act() {
-        assert_eq!(calculate_act(1), 0); // Stage 1 = Act 0
-        assert_eq!(calculate_act(20), 0); // Stage 20 = Act 0
-        assert_eq!(calculate_act(21), 1); // Stage 21 = Act 1
-        assert_eq!(calculate_act(40), 1); // Stage 40 = Act 1
-        assert_eq!(calculate_act(41), 2); // Stage 41 = Act 2
-        assert_eq!(calculate_act(60), 2); // Stage 60 = Act 2
-        assert_eq!(calculate_act(61), 3); // Stage 61 = Act 3
-        assert_eq!(calculate_act(80), 3); // Stage 80 = Act 3
+        // 40 levels total: 4 acts × 10 levels
+        assert_eq!(calculate_act(1), 0); // Level 1 = Act 0
+        assert_eq!(calculate_act(10), 0); // Level 10 = Act 0
+        assert_eq!(calculate_act(11), 1); // Level 11 = Act 1
+        assert_eq!(calculate_act(20), 1); // Level 20 = Act 1
+        assert_eq!(calculate_act(21), 2); // Level 21 = Act 2
+        assert_eq!(calculate_act(30), 2); // Level 30 = Act 2
+        assert_eq!(calculate_act(31), 3); // Level 31 = Act 3
+        assert_eq!(calculate_act(40), 3); // Level 40 = Act 3
     }
 
     #[test]
     fn test_calculate_stage_in_act() {
+        // 10 levels per act
         assert_eq!(calculate_stage_in_act(1), 1);
-        assert_eq!(calculate_stage_in_act(20), 20);
-        assert_eq!(calculate_stage_in_act(21), 1);
-        assert_eq!(calculate_stage_in_act(40), 20);
-        assert_eq!(calculate_stage_in_act(80), 20);
+        assert_eq!(calculate_stage_in_act(10), 10);
+        assert_eq!(calculate_stage_in_act(11), 1);
+        assert_eq!(calculate_stage_in_act(20), 10);
+        assert_eq!(calculate_stage_in_act(40), 10);
     }
 
     #[test]
@@ -95,14 +100,14 @@ mod tests {
 
     #[test]
     fn test_week1_boss_cycling() {
-        // Week 1 bosses cycle 0-4 repeatedly
+        // Week 1 bosses cycle 0-4 repeatedly (5 bosses, 10 levels per act)
         assert_eq!(select_week1_boss_index(1), 0);
         assert_eq!(select_week1_boss_index(2), 1);
         assert_eq!(select_week1_boss_index(3), 2);
         assert_eq!(select_week1_boss_index(4), 3);
         assert_eq!(select_week1_boss_index(5), 4);
         assert_eq!(select_week1_boss_index(6), 0); // Cycle repeats
-        assert_eq!(select_week1_boss_index(20), 4); // Stage 20 = index 4
+        assert_eq!(select_week1_boss_index(10), 4); // Level 10 = index 4
     }
 
     #[test]
@@ -117,18 +122,18 @@ mod tests {
 
     #[test]
     fn test_week3_final_alternation() {
-        // Week 3: odd stages = Final 1 (index 0), even stages = Final 2 (index 1)
+        // Week 3: odd levels = Final 1 (index 0), even levels = Final 2 (index 1)
         assert_eq!(select_week3_boss_index(1), 0); // Odd = Final 1
         assert_eq!(select_week3_boss_index(2), 1); // Even = Final 2
         assert_eq!(select_week3_boss_index(3), 0);
         assert_eq!(select_week3_boss_index(4), 1);
-        assert_eq!(select_week3_boss_index(19), 0);
-        assert_eq!(select_week3_boss_index(20), 1);
+        assert_eq!(select_week3_boss_index(9), 0);
+        assert_eq!(select_week3_boss_index(10), 1);
     }
 
     #[test]
     fn test_select_boss_act1_week1() {
-        // Stage 1, Week 1: Biome A, boss index 0 = Broodmother
+        // Level 1, Week 1: Biome A, boss index 0 = Broodmother
         let boss = select_boss(1, Week::One);
         assert_eq!(boss.name, "The Broodmother");
         assert_eq!(boss.biome, Biome::A);
@@ -136,8 +141,8 @@ mod tests {
 
     #[test]
     fn test_select_boss_act2_week1() {
-        // Stage 21, Week 1: Biome B, boss index 0 = Broodmother B
-        let boss = select_boss(21, Week::One);
+        // Level 11, Week 1: Biome B, boss index 0 = Broodmother B
+        let boss = select_boss(11, Week::One);
         assert_eq!(boss.name, "The Broodmother");
         assert_eq!(boss.biome, Biome::B);
         assert_eq!(boss.base_stats.spd, 4); // +1 SPD in Biome B
@@ -145,20 +150,20 @@ mod tests {
 
     #[test]
     fn test_select_boss_week3_finals() {
-        // Stage 1, Week 3: Biome A, odd = Final 1 (Eldritch Mole)
+        // Level 1, Week 3: Biome A, odd = Final 1 (Eldritch Mole)
         let boss = select_boss(1, Week::Three);
         assert_eq!(boss.name, "The Eldritch Mole");
 
-        // Stage 2, Week 3: Biome A, even = Final 2 (Gilded Devourer)
+        // Level 2, Week 3: Biome A, even = Final 2 (Gilded Devourer)
         let boss = select_boss(2, Week::Three);
         assert_eq!(boss.name, "The Gilded Devourer");
 
-        // Stage 21, Week 3: Biome B, odd = Final 1 (Frostbound Leviathan)
-        let boss = select_boss(21, Week::Three);
+        // Level 11, Week 3: Biome B, odd = Final 1 (Frostbound Leviathan)
+        let boss = select_boss(11, Week::Three);
         assert_eq!(boss.name, "The Frostbound Leviathan");
 
-        // Stage 22, Week 3: Biome B, even = Final 2 (Rusted Chronomancer)
-        let boss = select_boss(22, Week::Three);
+        // Level 12, Week 3: Biome B, even = Final 2 (Rusted Chronomancer)
+        let boss = select_boss(12, Week::Three);
         assert_eq!(boss.name, "The Rusted Chronomancer");
     }
 }

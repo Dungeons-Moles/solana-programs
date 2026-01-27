@@ -20,6 +20,22 @@ pub const PLAYER_PROFILE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     0x76, 0x10, 0x4d, 0xb5, 0x58, 0x07, 0x9f, 0xc8, 0x38, 0xd3, 0x07, 0x21, 0xce, 0x96, 0x44, 0x7b,
 ]);
 
+/// POI System program ID for manual CPI.
+/// Must match the declare_id! in poi-system/src/lib.rs
+/// FJVnZE45hxcd7BJeci27BiTx23XD6inN4paiM2EkMaoB
+pub const POI_SYSTEM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
+    0xd5, 0x98, 0x2e, 0x8a, 0x65, 0x1b, 0x8b, 0x9d, 0x52, 0x43, 0x36, 0xc3, 0xa4, 0x8f, 0x42, 0xec,
+    0x5f, 0x14, 0x87, 0x6e, 0x0f, 0x16, 0x76, 0x9f, 0x5d, 0x9b, 0xd6, 0xa0, 0x5e, 0x9c, 0xcd, 0x3c,
+]);
+
+/// Discriminator for poi_system::initialize_map_pois instruction.
+/// Computed as sha256("global:initialize_map_pois")[..8].
+///
+/// NOTE: This is manually specified because session-manager cannot depend on poi-system
+/// (circular dependency). If poi-system's initialize_map_pois instruction changes, this must be updated.
+pub const INITIALIZE_MAP_POIS_DISCRIMINATOR: [u8; 8] =
+    [0xa8, 0xec, 0xff, 0x37, 0xee, 0xd2, 0x19, 0xfb];
+
 #[program]
 pub mod session_manager {
     use super::*;
@@ -152,22 +168,35 @@ pub mod session_manager {
             start_y,
         )?;
 
-        // 4. Initialize Inventory (if needed)
-        // We call initialize_inventory. If it exists, this CPI will fail (Init violation).
-        // However, standard flow implies this is called for new users who might not have inventory.
-        // If inventory persists, the client should handle that. But tests assume this works.
-        // For now, we call it. If it fails due to existing account, it's a client usage error (don't call bundle if inventory exists).
+        // 4. Initialize Inventory for this session
+        // Each session gets its own inventory (PDA derived from session key).
+        // This ensures clean inventory state per run and allows concurrent sessions.
         player_inventory::cpi::initialize_inventory(CpiContext::new(
             ctx.accounts.player_inventory_program.to_account_info(),
             player_inventory::cpi::accounts::InitializeInventory {
                 inventory: ctx.accounts.inventory.to_account_info(),
+                session: ctx.accounts.game_session.to_account_info(),
                 player: ctx.accounts.player.to_account_info(),
                 system_program: ctx.accounts.system_program.to_account_info(),
             },
         ))?;
 
-        // 5. POI System - skipped as dependency is disabled/cyclic.
-        // map_pois remains uninitialized here. Client must call initialize_map_pois separately.
+        // 5. Initialize POI System via manual CPI (to avoid circular dependency)
+        // Act is 1-4, derived from campaign level (10 levels per act)
+        let act = (campaign_level - 1) / 10 + 1;
+        let week = 1u8; // Always start at week 1
+        let poi_seed = clock.unix_timestamp as u64; // Use timestamp as seed for POI generation
+
+        initialize_map_pois_cpi(
+            &ctx.accounts.poi_system_program,
+            &ctx.accounts.map_pois,
+            &ctx.accounts.game_session.to_account_info(),
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+            act,
+            week,
+            poi_seed,
+        )?;
 
         emit!(SessionStarted {
             player: session_player,
@@ -391,7 +420,7 @@ pub struct StartSession<'info> {
     pub map_enemies: UncheckedAccount<'info>,
 
     #[account(mut)]
-    /// CHECK: POI system accounts (passed but unused/init separately)
+    /// CHECK: Initialized by poi-system CPI (PDA derived from session)
     pub map_pois: UncheckedAccount<'info>,
 
     #[account(mut)]
@@ -400,7 +429,8 @@ pub struct StartSession<'info> {
 
     pub map_generator_program: Program<'info, MapGenerator>,
     pub gameplay_state_program: Program<'info, GameplayState>,
-    /// CHECK: POI program
+    #[account(address = POI_SYSTEM_PROGRAM_ID)]
+    /// CHECK: POI system program for manual CPI, validated by address constraint
     pub poi_system_program: UncheckedAccount<'info>,
     pub player_inventory_program: Program<'info, PlayerInventory>,
 
@@ -486,4 +516,98 @@ pub struct SessionEnded {
     pub victory: bool,
     pub final_state_hash: [u8; 32],
     pub timestamp: i64,
+}
+
+/// The discriminator for end_session instruction.
+/// This is exported so other programs can validate their manual CPI discriminators.
+/// Computed as sha256("global:end_session")[..8].
+///
+/// IMPORTANT: If you rename the `end_session` instruction, you must:
+/// 1. Update this constant
+/// 2. Update gameplay-state's END_SESSION_DISCRIMINATOR constant
+pub const END_SESSION_DISCRIMINATOR: [u8; 8] = [0x0b, 0xf4, 0x3d, 0x9a, 0xd4, 0xf9, 0x0f, 0x42];
+
+/// Manual CPI to poi_system::initialize_map_pois.
+///
+/// This uses manual instruction construction because session-manager cannot depend
+/// on poi-system (would create circular dependency). The discriminator is validated
+/// by `test_initialize_map_pois_discriminator`.
+#[allow(clippy::too_many_arguments)]
+fn initialize_map_pois_cpi<'info>(
+    poi_system_program: &AccountInfo<'info>,
+    map_pois: &AccountInfo<'info>,
+    session: &AccountInfo<'info>,
+    payer: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+    act: u8,
+    week: u8,
+    seed: u64,
+) -> Result<()> {
+    use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
+    use anchor_lang::solana_program::program::invoke;
+
+    let mut data = Vec::with_capacity(8 + 1 + 1 + 8);
+    data.extend_from_slice(&INITIALIZE_MAP_POIS_DISCRIMINATOR);
+    data.push(act);
+    data.push(week);
+    data.extend_from_slice(&seed.to_le_bytes());
+
+    let accounts = vec![
+        AccountMeta::new(map_pois.key(), false),
+        AccountMeta::new_readonly(session.key(), false),
+        AccountMeta::new(payer.key(), true),
+        AccountMeta::new_readonly(system_program.key(), false),
+    ];
+
+    let instruction = Instruction {
+        program_id: POI_SYSTEM_PROGRAM_ID,
+        accounts,
+        data,
+    };
+
+    invoke(
+        &instruction,
+        &[
+            map_pois.clone(),
+            session.clone(),
+            payer.clone(),
+            system_program.clone(),
+            poi_system_program.clone(),
+        ],
+    )?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Validates that END_SESSION_DISCRIMINATOR matches sha256("global:end_session")[..8].
+    /// This test ensures the exported discriminator stays in sync with the instruction.
+    #[test]
+    fn test_end_session_discriminator() {
+        // The discriminator is sha256("global:end_session")[..8]
+        // Pre-computed value - if instruction is renamed, this test should be updated
+        // along with the constant.
+        let expected: [u8; 8] = [0x0b, 0xf4, 0x3d, 0x9a, 0xd4, 0xf9, 0x0f, 0x42];
+        assert_eq!(
+            END_SESSION_DISCRIMINATOR, expected,
+            "END_SESSION_DISCRIMINATOR doesn't match expected value"
+        );
+    }
+
+    /// Validates that INITIALIZE_MAP_POIS_DISCRIMINATOR matches sha256("global:initialize_map_pois")[..8].
+    /// This test ensures the manual CPI discriminator stays in sync with poi-system.
+    #[test]
+    fn test_initialize_map_pois_discriminator() {
+        // The discriminator is sha256("global:initialize_map_pois")[..8]
+        // Pre-computed value - if instruction is renamed, update both this test
+        // and INITIALIZE_MAP_POIS_DISCRIMINATOR.
+        let expected: [u8; 8] = [0xa8, 0xec, 0xff, 0x37, 0xee, 0xd2, 0x19, 0xfb];
+        assert_eq!(
+            INITIALIZE_MAP_POIS_DISCRIMINATOR, expected,
+            "INITIALIZE_MAP_POIS_DISCRIMINATOR doesn't match expected value"
+        );
+    }
 }

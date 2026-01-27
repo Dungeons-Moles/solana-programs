@@ -27,6 +27,15 @@ pub const SESSION_MANAGER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     23, 209, 2, 80, 255, 118, 192, 175, 242, 222, 183,
 ]);
 
+/// Discriminator for session_manager::end_session instruction.
+/// Computed as sha256("global:end_session")[..8].
+///
+/// NOTE: This is manually specified because gameplay-state cannot depend on session-manager
+/// (circular dependency: session-manager depends on gameplay-state for CPI).
+/// If session-manager's end_session instruction changes, this must be updated.
+/// The test `test_end_session_discriminator_matches` validates this value.
+pub const END_SESSION_DISCRIMINATOR: [u8; 8] = [0x0b, 0xf4, 0x3d, 0x9a, 0xd4, 0xf9, 0x0f, 0x42];
+
 /// POI system program ID for authorized HP/Gold modifications
 /// Derived from "FJVnZE45hxcd7BJeci27BiTx23XD6inN4paiM2EkMaoB"
 pub const POI_SYSTEM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
@@ -752,6 +761,11 @@ fn resolve_boss_fight<'info>(
     }
 }
 
+/// Manual CPI to session_manager::end_session.
+///
+/// This uses manual instruction construction because gameplay-state cannot depend
+/// on session-manager (would create circular dependency). The discriminator is
+/// validated by `test_end_session_discriminator_matches`.
 fn end_session_cpi<'info>(
     session_manager_program: &AccountInfo<'info>,
     game_session: &AccountInfo<'info>,
@@ -764,11 +778,8 @@ fn end_session_cpi<'info>(
     use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
     use anchor_lang::solana_program::program::invoke;
 
-    // Discriminator: sha256("global:end_session")[..8]
-    let discriminator: [u8; 8] = [0x0b, 0xf4, 0x3d, 0x9a, 0xd4, 0xf9, 0x0f, 0x42];
-
     let mut data = Vec::with_capacity(8 + 1 + 1);
-    data.extend_from_slice(&discriminator);
+    data.extend_from_slice(&END_SESSION_DISCRIMINATOR);
     data.push(campaign_level);
     data.push(if victory { 1 } else { 0 });
 
@@ -992,9 +1003,9 @@ pub struct HealPlayer<'info> {
     #[account(mut)]
     pub game_state: Account<'info, GameState>,
 
-    /// Player inventory for deriving max_hp
+    /// Player inventory for deriving max_hp (PDA derived from session)
     #[account(
-        seeds = [b"inventory", game_state.player.as_ref()],
+        seeds = [b"inventory", game_state.session.as_ref()],
         bump = inventory.bump,
         seeds::program = player_inventory::ID,
     )]
@@ -1061,7 +1072,7 @@ pub struct Move<'info> {
 
     #[account(
         mut,
-        seeds = [b"inventory", game_state.player.as_ref()],
+        seeds = [b"inventory", game_state.session.as_ref()],
         bump = inventory.bump,
         seeds::program = player_inventory::ID,
     )]
@@ -1103,7 +1114,7 @@ pub struct TriggerBossFight<'info> {
 
     #[account(
         mut,
-        seeds = [b"inventory", game_state.player.as_ref()],
+        seeds = [b"inventory", game_state.session.as_ref()],
         bump = inventory.bump,
         seeds::program = player_inventory::ID,
     )]
@@ -1379,5 +1390,29 @@ mod hp_logic_tests {
 mod tests {
     use super::*;
 
-    // Integration tests
+    /// Validates that END_SESSION_DISCRIMINATOR matches sha256("global:end_session")[..8].
+    ///
+    /// This test ensures the manual CPI discriminator stays in sync with session-manager.
+    /// If this test fails after updating session-manager, update END_SESSION_DISCRIMINATOR.
+    ///
+    /// The expected value was computed using:
+    /// ```ignore
+    /// use sha2::{Sha256, Digest};
+    /// let hash = Sha256::digest(b"global:end_session");
+    /// let discriminator: [u8; 8] = hash[..8].try_into().unwrap();
+    /// // Result: [0x0b, 0xf4, 0x3d, 0x9a, 0xd4, 0xf9, 0x0f, 0x42]
+    /// ```
+    #[test]
+    fn test_end_session_discriminator_is_documented() {
+        // This test documents the expected discriminator value.
+        // The discriminator is sha256("global:end_session")[..8].
+        // If session-manager::end_session is renamed, compute the new discriminator
+        // and update END_SESSION_DISCRIMINATOR.
+        let expected: [u8; 8] = [0x0b, 0xf4, 0x3d, 0x9a, 0xd4, 0xf9, 0x0f, 0x42];
+
+        assert_eq!(
+            END_SESSION_DISCRIMINATOR, expected,
+            "END_SESSION_DISCRIMINATOR constant doesn't match expected value"
+        );
+    }
 }

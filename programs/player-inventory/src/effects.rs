@@ -94,6 +94,7 @@ mod tests {
 
     fn make_inventory() -> PlayerInventory {
         PlayerInventory {
+            session: Pubkey::default(),
             player: Pubkey::default(),
             tool: None,
             gear: [None; 8],

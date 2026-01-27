@@ -135,9 +135,9 @@ const ENEMY_BIOME_WEIGHTS: [[u8; 2]; 12] = [
 /// Returns true if the campaign level is in Biome A (Acts 1 & 3), false for Biome B (Acts 2 & 4)
 #[inline]
 fn is_biome_a(campaign_level: u8) -> bool {
-    // Acts: 1 (1-20), 2 (21-40), 3 (41-60), 4 (61-80)
+    // 40 levels total: Acts 1 (1-10), 2 (11-20), 3 (21-30), 4 (31-40)
     // Biome A = Acts 1 & 3, Biome B = Acts 2 & 4
-    let act = ((campaign_level.saturating_sub(1)) / 20) + 1;
+    let act = ((campaign_level.saturating_sub(1)) / 10) + 1;
     act == 1 || act == 3
 }
 
@@ -953,22 +953,23 @@ mod tests {
 
     #[test]
     fn test_biome_a_weighting() {
-        // Act 1 (level 1) should be Biome A
+        // 40 levels total: 4 acts × 10 levels each
+        // Act 1 (levels 1-10) should be Biome A
         assert!(is_biome_a(1));
+        assert!(is_biome_a(5));
         assert!(is_biome_a(10));
-        assert!(is_biome_a(20));
-        // Act 2 (levels 21-40) should be Biome B
-        assert!(!is_biome_a(21));
-        assert!(!is_biome_a(30));
+        // Act 2 (levels 11-20) should be Biome B
+        assert!(!is_biome_a(11));
+        assert!(!is_biome_a(15));
+        assert!(!is_biome_a(20));
+        // Act 3 (levels 21-30) should be Biome A
+        assert!(is_biome_a(21));
+        assert!(is_biome_a(25));
+        assert!(is_biome_a(30));
+        // Act 4 (levels 31-40) should be Biome B
+        assert!(!is_biome_a(31));
+        assert!(!is_biome_a(35));
         assert!(!is_biome_a(40));
-        // Act 3 (levels 41-60) should be Biome A
-        assert!(is_biome_a(41));
-        assert!(is_biome_a(50));
-        assert!(is_biome_a(60));
-        // Act 4 (levels 61-80) should be Biome B
-        assert!(!is_biome_a(61));
-        assert!(!is_biome_a(70));
-        assert!(!is_biome_a(80));
     }
 
     #[test]
@@ -981,8 +982,8 @@ mod tests {
             let mut map_a = create_test_map();
             let mut map_b = create_test_map();
 
-            assert!(generate_map(&mut map_a, seed, 1)); // Biome A
-            assert!(generate_map(&mut map_b, seed, 21)); // Biome B
+            assert!(generate_map(&mut map_a, seed, 1)); // Biome A (Act 1)
+            assert!(generate_map(&mut map_b, seed, 11)); // Biome B (Act 2)
 
             for idx in 0..map_a.enemy_count as usize {
                 biome_a_enemy_count[map_a.enemies[idx].archetype_id as usize] += 1;

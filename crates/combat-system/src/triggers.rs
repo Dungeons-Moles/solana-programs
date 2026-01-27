@@ -411,4 +411,352 @@ mod tests {
         // Should have logged 2 ATK changes
         assert_eq!(log.len(), 2);
     }
+
+    // ========================================================================
+    // Reflection Status Effect Tests
+    // ========================================================================
+
+    #[test]
+    fn test_reflection_blocks_and_redirects_chill() {
+        let mut owner_stats = CombatantStats {
+            hp: 10,
+            max_hp: 10,
+            atk: 3,
+            arm: 0,
+            spd: 1,
+        };
+        let mut owner_status = StatusEffects::default();
+        let mut opponent_stats = CombatantStats {
+            hp: 10,
+            max_hp: 10,
+            atk: 1,
+            arm: 0,
+            spd: 1,
+        };
+        let mut opponent_status = StatusEffects::default();
+        opponent_status.reflection = 1; // Opponent has 1 Reflection stack
+
+        // Owner tries to apply Chill to opponent
+        let mut effects = vec![ItemEffect {
+            trigger: TriggerType::OnHit,
+            once_per_turn: false,
+            effect_type: EffectType::ApplyChill,
+            value: 2,
+        }];
+        let mut flags = vec![false; effects.len()];
+        let mut gold_change = 0i16;
+        let mut log = Vec::new();
+
+        process_triggers_for_phase(
+            &mut effects,
+            TriggerType::OnHit,
+            1,
+            &mut owner_stats,
+            &mut owner_status,
+            &mut opponent_stats,
+            &mut opponent_status,
+            &mut flags,
+            true,
+            &mut gold_change,
+            &mut log,
+        );
+
+        // Chill should be reflected back to owner
+        assert_eq!(owner_status.chill, 2, "Chill should be reflected to owner");
+        assert_eq!(opponent_status.chill, 0, "Opponent should not have Chill");
+        assert_eq!(
+            opponent_status.reflection, 0,
+            "Reflection stack should be consumed"
+        );
+    }
+
+    #[test]
+    fn test_reflection_blocks_and_redirects_bleed() {
+        let mut owner_stats = CombatantStats::default();
+        let mut owner_status = StatusEffects::default();
+        let mut opponent_stats = CombatantStats::default();
+        let mut opponent_status = StatusEffects::default();
+        opponent_status.reflection = 2; // Opponent has 2 Reflection stacks
+
+        let mut effects = vec![ItemEffect {
+            trigger: TriggerType::OnHit,
+            once_per_turn: false,
+            effect_type: EffectType::ApplyBleed,
+            value: 3,
+        }];
+        let mut flags = vec![false; effects.len()];
+        let mut gold_change = 0i16;
+        let mut log = Vec::new();
+
+        process_triggers_for_phase(
+            &mut effects,
+            TriggerType::OnHit,
+            1,
+            &mut owner_stats,
+            &mut owner_status,
+            &mut opponent_stats,
+            &mut opponent_status,
+            &mut flags,
+            true,
+            &mut gold_change,
+            &mut log,
+        );
+
+        assert_eq!(owner_status.bleed, 3, "Bleed should be reflected to owner");
+        assert_eq!(opponent_status.bleed, 0, "Opponent should not have Bleed");
+        assert_eq!(
+            opponent_status.reflection, 1,
+            "One Reflection stack should remain"
+        );
+    }
+
+    #[test]
+    fn test_reflection_does_not_block_apply_reflection() {
+        // ApplyReflection itself should NOT be reflected (prevents infinite loops)
+        let mut owner_stats = CombatantStats::default();
+        let mut owner_status = StatusEffects::default();
+        let mut opponent_stats = CombatantStats::default();
+        let mut opponent_status = StatusEffects::default();
+        opponent_status.reflection = 1;
+
+        let mut effects = vec![ItemEffect {
+            trigger: TriggerType::OnHit,
+            once_per_turn: false,
+            effect_type: EffectType::ApplyReflection,
+            value: 2,
+        }];
+        let mut flags = vec![false; effects.len()];
+        let mut gold_change = 0i16;
+        let mut log = Vec::new();
+
+        process_triggers_for_phase(
+            &mut effects,
+            TriggerType::OnHit,
+            1,
+            &mut owner_stats,
+            &mut owner_status,
+            &mut opponent_stats,
+            &mut opponent_status,
+            &mut flags,
+            true,
+            &mut gold_change,
+            &mut log,
+        );
+
+        // ApplyReflection should go through to opponent, NOT be reflected
+        assert_eq!(
+            owner_status.reflection, 0,
+            "Owner should not receive reflected Reflection"
+        );
+        assert_eq!(
+            opponent_status.reflection, 3,
+            "Opponent should have original 1 + applied 2 = 3 Reflection"
+        );
+    }
+
+    #[test]
+    fn test_reflection_zero_stacks_does_not_block() {
+        let mut owner_stats = CombatantStats::default();
+        let mut owner_status = StatusEffects::default();
+        let mut opponent_stats = CombatantStats::default();
+        let mut opponent_status = StatusEffects::default();
+        opponent_status.reflection = 0; // No Reflection
+
+        let mut effects = vec![ItemEffect {
+            trigger: TriggerType::OnHit,
+            once_per_turn: false,
+            effect_type: EffectType::ApplyRust,
+            value: 1,
+        }];
+        let mut flags = vec![false; effects.len()];
+        let mut gold_change = 0i16;
+        let mut log = Vec::new();
+
+        process_triggers_for_phase(
+            &mut effects,
+            TriggerType::OnHit,
+            1,
+            &mut owner_stats,
+            &mut owner_status,
+            &mut opponent_stats,
+            &mut opponent_status,
+            &mut flags,
+            true,
+            &mut gold_change,
+            &mut log,
+        );
+
+        // Without Reflection, Rust should apply to opponent normally
+        assert_eq!(owner_status.rust, 0, "Owner should not have Rust");
+        assert_eq!(opponent_status.rust, 1, "Opponent should have Rust applied");
+    }
+
+    #[test]
+    fn test_reflection_does_not_affect_direct_damage() {
+        let mut owner_stats = CombatantStats::default();
+        owner_stats.hp = 20;
+        let mut owner_status = StatusEffects::default();
+        let mut opponent_stats = CombatantStats::default();
+        opponent_stats.hp = 20;
+        let mut opponent_status = StatusEffects::default();
+        opponent_status.reflection = 5; // Lots of Reflection
+
+        // Direct damage effect (DealDamage targets opponent but is not a status effect)
+        let mut effects = vec![ItemEffect {
+            trigger: TriggerType::OnHit,
+            once_per_turn: false,
+            effect_type: EffectType::DealDamage,
+            value: 5,
+        }];
+        let mut flags = vec![false; effects.len()];
+        let mut gold_change = 0i16;
+        let mut log = Vec::new();
+
+        process_triggers_for_phase(
+            &mut effects,
+            TriggerType::OnHit,
+            1,
+            &mut owner_stats,
+            &mut owner_status,
+            &mut opponent_stats,
+            &mut opponent_status,
+            &mut flags,
+            true,
+            &mut gold_change,
+            &mut log,
+        );
+
+        // Direct damage should NOT be reflected
+        assert_eq!(owner_stats.hp, 20, "Owner HP should be unchanged");
+        assert_eq!(opponent_stats.hp, 15, "Opponent should take 5 damage");
+        assert_eq!(
+            opponent_status.reflection, 5,
+            "Reflection should not be consumed for non-status effects"
+        );
+    }
+
+    #[test]
+    fn test_reflection_multiple_status_effects_consumes_multiple_stacks() {
+        let mut owner_stats = CombatantStats::default();
+        let mut owner_status = StatusEffects::default();
+        let mut opponent_stats = CombatantStats::default();
+        let mut opponent_status = StatusEffects::default();
+        opponent_status.reflection = 2; // 2 Reflection stacks
+
+        // Two different status effects
+        let mut effects = vec![
+            ItemEffect {
+                trigger: TriggerType::OnHit,
+                once_per_turn: false,
+                effect_type: EffectType::ApplyChill,
+                value: 1,
+            },
+            ItemEffect {
+                trigger: TriggerType::OnHit,
+                once_per_turn: false,
+                effect_type: EffectType::ApplyShrapnel,
+                value: 2,
+            },
+        ];
+        let mut flags = vec![false; effects.len()];
+        let mut gold_change = 0i16;
+        let mut log = Vec::new();
+
+        process_triggers_for_phase(
+            &mut effects,
+            TriggerType::OnHit,
+            1,
+            &mut owner_stats,
+            &mut owner_status,
+            &mut opponent_stats,
+            &mut opponent_status,
+            &mut flags,
+            true,
+            &mut gold_change,
+            &mut log,
+        );
+
+        // Both status effects should be reflected
+        assert_eq!(owner_status.chill, 1, "Chill should be reflected to owner");
+        assert_eq!(
+            owner_status.shrapnel, 2,
+            "Shrapnel should be reflected to owner"
+        );
+        assert_eq!(opponent_status.chill, 0, "Opponent should not have Chill");
+        assert_eq!(
+            opponent_status.shrapnel, 0,
+            "Opponent should not have Shrapnel"
+        );
+        assert_eq!(
+            opponent_status.reflection, 0,
+            "Both Reflection stacks should be consumed"
+        );
+    }
+
+    #[test]
+    fn test_reflection_partial_block_when_stacks_run_out() {
+        let mut owner_stats = CombatantStats::default();
+        let mut owner_status = StatusEffects::default();
+        let mut opponent_stats = CombatantStats::default();
+        let mut opponent_status = StatusEffects::default();
+        opponent_status.reflection = 1; // Only 1 Reflection stack
+
+        // Three status effects, but only 1 Reflection
+        let mut effects = vec![
+            ItemEffect {
+                trigger: TriggerType::OnHit,
+                once_per_turn: false,
+                effect_type: EffectType::ApplyChill,
+                value: 1,
+            },
+            ItemEffect {
+                trigger: TriggerType::OnHit,
+                once_per_turn: false,
+                effect_type: EffectType::ApplyBleed,
+                value: 2,
+            },
+            ItemEffect {
+                trigger: TriggerType::OnHit,
+                once_per_turn: false,
+                effect_type: EffectType::ApplyRust,
+                value: 3,
+            },
+        ];
+        let mut flags = vec![false; effects.len()];
+        let mut gold_change = 0i16;
+        let mut log = Vec::new();
+
+        process_triggers_for_phase(
+            &mut effects,
+            TriggerType::OnHit,
+            1,
+            &mut owner_stats,
+            &mut owner_status,
+            &mut opponent_stats,
+            &mut opponent_status,
+            &mut flags,
+            true,
+            &mut gold_change,
+            &mut log,
+        );
+
+        // First effect (Chill) should be reflected, rest should hit opponent
+        assert_eq!(
+            owner_status.chill, 1,
+            "First effect (Chill) should be reflected to owner"
+        );
+        assert_eq!(owner_status.bleed, 0, "Bleed should NOT be on owner");
+        assert_eq!(owner_status.rust, 0, "Rust should NOT be on owner");
+
+        assert_eq!(opponent_status.chill, 0, "Chill should NOT be on opponent");
+        assert_eq!(
+            opponent_status.bleed, 2,
+            "Bleed should hit opponent (no Reflection left)"
+        );
+        assert_eq!(
+            opponent_status.rust, 3,
+            "Rust should hit opponent (no Reflection left)"
+        );
+        assert_eq!(opponent_status.reflection, 0, "Reflection should be exhausted");
+    }
 }

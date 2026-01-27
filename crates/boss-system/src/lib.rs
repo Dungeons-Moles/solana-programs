@@ -78,7 +78,7 @@ pub struct ScaledBossStats {
 
 /// Returns the boss definition for a given stage and week.
 pub fn get_boss_for_stage(stage: u8, week: Week) -> Result<BossInfo, BossSystemError> {
-    if !(1..=80).contains(&stage) {
+    if !(1..=40).contains(&stage) {
         return Err(BossSystemError::InvalidStage);
     }
 
@@ -98,7 +98,7 @@ pub fn get_boss_for_stage(stage: u8, week: Week) -> Result<BossInfo, BossSystemE
 /// Returns scaled boss stats for a specific stage and week.
 /// Applies tier scaling and act baseline bonuses.
 pub fn get_scaled_boss_stats(stage: u8, week: Week) -> Result<ScaledBossStats, BossSystemError> {
-    if !(1..=80).contains(&stage) {
+    if !(1..=40).contains(&stage) {
         return Err(BossSystemError::InvalidStage);
     }
 
@@ -110,7 +110,7 @@ pub fn get_scaled_boss_stats(stage: u8, week: Week) -> Result<ScaledBossStats, B
 /// Returns the two weakness tags for the boss at the given stage and week.
 /// Used by item offer generation for tag weighting.
 pub fn get_boss_weaknesses(stage: u8, week: Week) -> Result<[ItemTag; 2], BossSystemError> {
-    if !(1..=80).contains(&stage) {
+    if !(1..=40).contains(&stage) {
         return Err(BossSystemError::InvalidStage);
     }
 
@@ -121,7 +121,7 @@ pub fn get_boss_weaknesses(stage: u8, week: Week) -> Result<[ItemTag; 2], BossSy
 /// Converts boss traits to ItemEffect array for combat system integration.
 /// Returns all effects that should be active for this boss.
 pub fn get_boss_effects(stage: u8, week: Week) -> Result<Vec<ItemEffect>, BossSystemError> {
-    if !(1..=80).contains(&stage) {
+    if !(1..=40).contains(&stage) {
         return Err(BossSystemError::InvalidStage);
     }
 
@@ -132,7 +132,7 @@ pub fn get_boss_effects(stage: u8, week: Week) -> Result<Vec<ItemEffect>, BossSy
 /// Returns a complete CombatantInput struct for initializing boss combat.
 /// Includes scaled stats ready for combat system.
 pub fn get_boss_combat_input(stage: u8, week: Week) -> Result<CombatantInput, BossSystemError> {
-    if !(1..=80).contains(&stage) {
+    if !(1..=40).contains(&stage) {
         return Err(BossSystemError::InvalidStage);
     }
 

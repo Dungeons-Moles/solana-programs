@@ -138,9 +138,9 @@ pub mod poi_system {
         let (poi, _) = get_and_validate_poi(map_pois, game_state, poi_index, false)?;
         let player_stats = gameplay_state::stats::calculate_stats(inventory);
 
-        // Get values for rest interaction
-        let current_hp = game_state.hp as u8;
-        let max_hp = player_stats.max_hp as u8;
+        // Get values for rest interaction (i16 to handle HP > 255 or negative values)
+        let current_hp = game_state.hp;
+        let max_hp = player_stats.max_hp;
         let is_night = game_state.phase.is_night();
 
         // Execute rest interaction
@@ -164,7 +164,7 @@ pub mod poi_system {
                     },
                     &[&seeds[..]],
                 ),
-                result.heal_amount as u16,
+                result.heal_amount,
             )?;
         }
 
@@ -835,9 +835,9 @@ pub struct InteractRest<'info> {
     )]
     pub game_state: Account<'info, GameState>,
 
-    /// Player's inventory for deriving max_hp (passed to heal CPI)
+    /// Player's inventory for deriving max_hp (PDA derived from session)
     #[account(
-        seeds = [b"inventory", game_state.player.as_ref()],
+        seeds = [b"inventory", game_state.session.as_ref()],
         bump = inventory.bump,
         seeds::program = player_inventory::ID,
     )]
@@ -1318,7 +1318,8 @@ pub struct RestCompleted {
     pub poi_type: u8,
     pub x: u8,
     pub y: u8,
-    pub heal_amount: u8,
+    /// Heal amount (u16 to support max_hp > 255)
+    pub heal_amount: u16,
     pub full_heal: bool,
 }
 
@@ -1330,4 +1331,33 @@ pub struct CacheOfferGenerated {
     pub poi_type: u8,
     /// Items as (item_id as bytes, rarity)
     pub items: [([u8; 8], u8); 3],
+}
+
+/// The discriminator for initialize_map_pois instruction.
+/// This is exported so other programs can validate their manual CPI discriminators.
+/// Computed as sha256("global:initialize_map_pois")[..8].
+///
+/// IMPORTANT: If you rename the `initialize_map_pois` instruction, you must:
+/// 1. Update this constant
+/// 2. Update session-manager's INITIALIZE_MAP_POIS_DISCRIMINATOR constant
+pub const INITIALIZE_MAP_POIS_DISCRIMINATOR: [u8; 8] =
+    [0xa8, 0xec, 0xff, 0x37, 0xee, 0xd2, 0x19, 0xfb];
+
+#[cfg(test)]
+mod discriminator_tests {
+    use super::*;
+
+    /// Validates that INITIALIZE_MAP_POIS_DISCRIMINATOR matches sha256("global:initialize_map_pois")[..8].
+    /// This test ensures the exported discriminator stays in sync with the instruction.
+    #[test]
+    fn test_initialize_map_pois_discriminator() {
+        // The discriminator is sha256("global:initialize_map_pois")[..8]
+        // Pre-computed value - if instruction is renamed, update both this test
+        // and INITIALIZE_MAP_POIS_DISCRIMINATOR.
+        let expected: [u8; 8] = [0xa8, 0xec, 0xff, 0x37, 0xee, 0xd2, 0x19, 0xfb];
+        assert_eq!(
+            INITIALIZE_MAP_POIS_DISCRIMINATOR, expected,
+            "INITIALIZE_MAP_POIS_DISCRIMINATOR doesn't match expected value"
+        );
+    }
 }

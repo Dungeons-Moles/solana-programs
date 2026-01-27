@@ -1461,28 +1461,16 @@ mod tests {
     use super::*;
 
     /// Validates that END_SESSION_DISCRIMINATOR matches sha256("global:end_session")[..8].
-    ///
-    /// This test ensures the manual CPI discriminator stays in sync with session-manager.
-    /// If this test fails after updating session-manager, update END_SESSION_DISCRIMINATOR.
-    ///
-    /// The expected value was computed using:
-    /// ```ignore
-    /// use sha2::{Sha256, Digest};
-    /// let hash = Sha256::digest(b"global:end_session");
-    /// let discriminator: [u8; 8] = hash[..8].try_into().unwrap();
-    /// // Result: [0x0b, 0xf4, 0x3d, 0x9a, 0xd4, 0xf9, 0x0f, 0x42]
-    /// ```
+    /// Computes the hash at test time so a rename in session-manager is caught immediately.
     #[test]
-    fn test_end_session_discriminator_is_documented() {
-        // This test documents the expected discriminator value.
-        // The discriminator is sha256("global:end_session")[..8].
-        // If session-manager::end_session is renamed, compute the new discriminator
-        // and update END_SESSION_DISCRIMINATOR.
-        let expected: [u8; 8] = [0x0b, 0xf4, 0x3d, 0x9a, 0xd4, 0xf9, 0x0f, 0x42];
-
+    fn test_end_session_discriminator_matches() {
+        use sha2::{Sha256, Digest};
+        let hash = Sha256::digest(b"global:end_session");
+        let expected: [u8; 8] = hash[..8].try_into().unwrap();
         assert_eq!(
             END_SESSION_DISCRIMINATOR, expected,
-            "END_SESSION_DISCRIMINATOR constant doesn't match expected value"
+            "END_SESSION_DISCRIMINATOR doesn't match sha256(\"global:end_session\")[..8] — \
+             session-manager::end_session may have been renamed"
         );
     }
 }

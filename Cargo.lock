@@ -535,6 +535,7 @@ dependencies = [
  "field-enemies",
  "map-generator",
  "player-inventory",
+ "sha2",
 ]
 
 [[package]]
@@ -712,6 +713,7 @@ dependencies = [
  "gameplay-state",
  "player-inventory",
  "session-manager",
+ "sha2",
 ]
 
 [[package]]
@@ -891,6 +893,7 @@ dependencies = [
  "gameplay-state",
  "map-generator",
  "player-inventory",
+ "sha2",
 ]
 
 [[package]]

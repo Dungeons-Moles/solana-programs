@@ -584,30 +584,28 @@ mod tests {
     use super::*;
 
     /// Validates that END_SESSION_DISCRIMINATOR matches sha256("global:end_session")[..8].
-    /// This test ensures the exported discriminator stays in sync with the instruction.
+    /// Computes the hash at test time so a rename is caught immediately.
     #[test]
     fn test_end_session_discriminator() {
-        // The discriminator is sha256("global:end_session")[..8]
-        // Pre-computed value - if instruction is renamed, this test should be updated
-        // along with the constant.
-        let expected: [u8; 8] = [0x0b, 0xf4, 0x3d, 0x9a, 0xd4, 0xf9, 0x0f, 0x42];
+        use sha2::{Sha256, Digest};
+        let hash = Sha256::digest(b"global:end_session");
+        let expected: [u8; 8] = hash[..8].try_into().unwrap();
         assert_eq!(
             END_SESSION_DISCRIMINATOR, expected,
-            "END_SESSION_DISCRIMINATOR doesn't match expected value"
+            "END_SESSION_DISCRIMINATOR doesn't match sha256(\"global:end_session\")[..8]"
         );
     }
 
     /// Validates that INITIALIZE_MAP_POIS_DISCRIMINATOR matches sha256("global:initialize_map_pois")[..8].
-    /// This test ensures the manual CPI discriminator stays in sync with poi-system.
+    /// Computes the hash at test time so a rename is caught immediately.
     #[test]
     fn test_initialize_map_pois_discriminator() {
-        // The discriminator is sha256("global:initialize_map_pois")[..8]
-        // Pre-computed value - if instruction is renamed, update both this test
-        // and INITIALIZE_MAP_POIS_DISCRIMINATOR.
-        let expected: [u8; 8] = [0xa8, 0xec, 0xff, 0x37, 0xee, 0xd2, 0x19, 0xfb];
+        use sha2::{Sha256, Digest};
+        let hash = Sha256::digest(b"global:initialize_map_pois");
+        let expected: [u8; 8] = hash[..8].try_into().unwrap();
         assert_eq!(
             INITIALIZE_MAP_POIS_DISCRIMINATOR, expected,
-            "INITIALIZE_MAP_POIS_DISCRIMINATOR doesn't match expected value"
+            "INITIALIZE_MAP_POIS_DISCRIMINATOR doesn't match sha256(\"global:initialize_map_pois\")[..8]"
         );
     }
 }

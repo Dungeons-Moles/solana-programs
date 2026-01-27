@@ -96,10 +96,23 @@ pub mod poi_system {
         Ok(())
     }
 
-    /// Close MapPois account, returning rent to payer.
-    pub fn close_map_pois(_ctx: Context<CloseMapPois>) -> Result<()> {
+    /// Close MapPois account, returning rent to the session owner.
+    pub fn close_map_pois(ctx: Context<CloseMapPois>) -> Result<()> {
+        // Verify the signer is the session owner by reading GameSession.player
+        // (first 32 bytes after the 8-byte Anchor discriminator).
+        let session_data = ctx.accounts.game_session.try_borrow_data()?;
+        require!(session_data.len() >= 40, PoiSystemError::Unauthorized);
+        let stored_player = Pubkey::from(
+            <[u8; 32]>::try_from(&session_data[8..40]).unwrap(),
+        );
+        require!(
+            stored_player == ctx.accounts.player.key(),
+            PoiSystemError::Unauthorized
+        );
+        drop(session_data);
+
         emit!(PoisClosed {
-            session: _ctx.accounts.map_pois.session,
+            session: ctx.accounts.map_pois.session,
         });
         Ok(())
     }
@@ -799,17 +812,24 @@ pub struct InitializeMapPois<'info> {
 pub struct CloseMapPois<'info> {
     #[account(
         mut,
-        close = rent_destination,
+        close = player,
         seeds = [MAP_POIS_SEED, map_pois.session.as_ref()],
         bump = map_pois.bump
     )]
     pub map_pois: Account<'info, MapPois>,
 
-    pub authority: Signer<'info>,
+    /// The session that owns this MapPois.
+    /// CHECK: Validated by constraint (address match) and owner check (session-manager program).
+    /// Player field is extracted from account data in the instruction body.
+    #[account(
+        constraint = game_session.key() == map_pois.session @ PoiSystemError::Unauthorized,
+        owner = SESSION_MANAGER_PROGRAM_ID @ PoiSystemError::InvalidSessionOwner,
+    )]
+    pub game_session: AccountInfo<'info>,
 
-    /// CHECK: Rent destination can be any account
+    /// Session owner — must match GameSession.player (validated in instruction body).
     #[account(mut)]
-    pub rent_destination: AccountInfo<'info>,
+    pub player: Signer<'info>,
 }
 
 /// Context for querying POI definition (view instruction)
@@ -1348,16 +1368,15 @@ mod discriminator_tests {
     use super::*;
 
     /// Validates that INITIALIZE_MAP_POIS_DISCRIMINATOR matches sha256("global:initialize_map_pois")[..8].
-    /// This test ensures the exported discriminator stays in sync with the instruction.
+    /// Computes the hash at test time so a rename is caught immediately.
     #[test]
     fn test_initialize_map_pois_discriminator() {
-        // The discriminator is sha256("global:initialize_map_pois")[..8]
-        // Pre-computed value - if instruction is renamed, update both this test
-        // and INITIALIZE_MAP_POIS_DISCRIMINATOR.
-        let expected: [u8; 8] = [0xa8, 0xec, 0xff, 0x37, 0xee, 0xd2, 0x19, 0xfb];
+        use sha2::{Sha256, Digest};
+        let hash = Sha256::digest(b"global:initialize_map_pois");
+        let expected: [u8; 8] = hash[..8].try_into().unwrap();
         assert_eq!(
             INITIALIZE_MAP_POIS_DISCRIMINATOR, expected,
-            "INITIALIZE_MAP_POIS_DISCRIMINATOR doesn't match expected value"
+            "INITIALIZE_MAP_POIS_DISCRIMINATOR doesn't match sha256(\"global:initialize_map_pois\")[..8]"
         );
     }
 }

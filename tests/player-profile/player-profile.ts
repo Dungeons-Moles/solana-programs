@@ -19,7 +19,7 @@ describe("player-profile", () => {
     );
   };
 
-  describe("T020: Initialize Profile", () => {
+  describe("Initialize Profile", () => {
     it("initializes player profile with name", async () => {
       const user = Keypair.generate();
 
@@ -57,7 +57,7 @@ describe("player-profile", () => {
     });
   });
 
-  describe("T021: Reject Duplicate Profile", () => {
+  describe("Reject Duplicate Profile", () => {
     it("rejects duplicate profile creation", async () => {
       const user = Keypair.generate();
 
@@ -100,7 +100,7 @@ describe("player-profile", () => {
     });
   });
 
-  describe("T022: Update Profile Name", () => {
+  describe("Update Profile Name", () => {
     it("updates profile name", async () => {
       const user = Keypair.generate();
 
@@ -141,7 +141,7 @@ describe("player-profile", () => {
     });
   });
 
-  describe("T023: Reject Name Too Long", () => {
+  describe("Reject Name Too Long", () => {
     it("rejects name longer than 32 characters", async () => {
       const user = Keypair.generate();
 
@@ -177,7 +177,7 @@ describe("player-profile", () => {
   // ==========================================================================
 
   describe("Run Completion (US5)", () => {
-    it("T094: records run completion", async () => {
+    it("records run completion", async () => {
       const user = Keypair.generate();
 
       // Airdrop SOL
@@ -216,7 +216,7 @@ describe("player-profile", () => {
       expect((profile as any).availableRuns).to.equal(19);
     });
 
-    it("T095: increments total_runs on completion", async () => {
+    it("increments total_runs on completion", async () => {
       const user = Keypair.generate();
 
       // Airdrop SOL
@@ -257,7 +257,7 @@ describe("player-profile", () => {
       expect((profile as any).availableRuns).to.equal(15);
     });
 
-    it("T096: advances level on victory", async () => {
+    it("advances level on victory", async () => {
       const user = Keypair.generate();
 
       // Airdrop SOL
@@ -316,7 +316,7 @@ describe("player-profile", () => {
       expect((profile as any).availableRuns).to.equal(18);
     });
 
-    it("T097: does not advance level on defeat", async () => {
+    it("does not advance level on defeat", async () => {
       const user = Keypair.generate();
 
       // Airdrop SOL

@@ -57,7 +57,8 @@ fn apply_status_effect(
     status_id: u8,
     log: &mut Vec<CombatLogEntry>,
 ) {
-    *status_field = status_field.saturating_add(value as u8);
+    let add = u8::try_from(value).unwrap_or(u8::MAX);
+    *status_field = status_field.saturating_add(add);
     if value > 0 {
         log.push(CombatLogEntry::apply_status(turn, is_target_player, status_id, value));
     }

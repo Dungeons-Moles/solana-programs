@@ -63,16 +63,15 @@
 | started_at       | i64      | Unix timestamp                     | -      |
 | last_activity    | i64      | Last action timestamp              | -      |
 | is_delegated     | bool     | MagicBlock delegation flag         | -      |
-| state_hash       | [u8; 32] | State verification hash            | -      |
 | bump             | u8       | PDA bump                           | -      |
 | active_item_pool | [u8; 10] | Snapshot of player's pool at start | NEW    |
 | burner_wallet    | Pubkey   | Burner wallet for gameplay         | NEW    |
 
 **Size Calculation**:
 
-- Base: 32 + 8 + 1 + 8 + 8 + 1 + 32 + 1 = 91 bytes
+- Base: 32 + 8 + 1 + 8 + 8 + 1 + 1 = 59 bytes
 - New fields: 10 + 32 = 42 bytes
-- **Total**: 133 bytes (+ 8 discriminator = 141 bytes)
+- **Total**: 101 bytes (+ 8 discriminator = 109 bytes)
 
 **Validation Rules**:
 

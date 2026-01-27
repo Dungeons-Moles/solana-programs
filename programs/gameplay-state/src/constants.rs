@@ -4,23 +4,24 @@ pub const DAY_MOVES: u8 = 50;
 /// Moves allowed per night phase
 pub const NIGHT_MOVES: u8 = 30;
 
-/// Default starting HP
-pub const DEFAULT_HP: i8 = 10;
+// =============================================================================
+// Base Stats (derived from inventory at runtime)
+// =============================================================================
 
-/// Default maximum HP
-pub const DEFAULT_MAX_HP: u8 = 10;
+/// Base HP before item bonuses
+pub const BASE_HP: i16 = 10;
 
-/// Default attack stat
-pub const DEFAULT_ATK: i8 = 1;
+/// Base attack stat before item bonuses
+pub const BASE_ATK: i16 = 0;
 
-/// Default armor stat
-pub const DEFAULT_ARM: i8 = 0;
+/// Base armor stat before item bonuses
+pub const BASE_ARM: i16 = 0;
 
-/// Default speed stat
-pub const DEFAULT_SPD: i8 = 0;
+/// Base speed stat before item bonuses
+pub const BASE_SPD: i16 = 0;
 
-/// Default dig stat
-pub const DEFAULT_DIG: i8 = 1;
+/// Base dig stat before item bonuses
+pub const BASE_DIG: i16 = 1;
 
 /// Initial gear slots at game start
 pub const INITIAL_GEAR_SLOTS: u8 = 4;

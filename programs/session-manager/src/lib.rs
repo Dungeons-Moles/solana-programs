@@ -1,13 +1,14 @@
 use anchor_lang::prelude::*;
-use anchor_lang::system_program;
-
 pub mod constants;
 pub mod errors;
 pub mod state;
 
-use constants::*;
 use errors::SessionManagerError;
-use state::{GameSession, SessionCounter};
+use gameplay_state::program::GameplayState;
+use map_generator::program::MapGenerator;
+use map_generator::state::{GeneratedMap, MapConfig as MapConfigAccount};
+use player_inventory::program::PlayerInventory;
+use state::{GameSession, SessionCounter, EMPTY_STATE_HASH};
 
 declare_id!("FcMT7MzBLVQGaMATEMws3fjsL2Q77QSHmoEPdowTMxJa");
 
@@ -32,7 +33,7 @@ pub mod session_manager {
         Ok(())
     }
 
-    /// Starts a new game session for the player at a specific level.
+    /// Starts a new game session with all dependencies initialized (Game State, Inventory, etc.).
     ///
     /// Validates:
     /// - Player has available runs > 0
@@ -41,13 +42,11 @@ pub mod session_manager {
     ///
     /// Actions:
     /// - Creates session with snapshot of player's active_item_pool
-    /// - Transfers SOL to burner wallet for gameplay transactions
+    /// - Generates the map via CPI to map-generator
+    /// - Initializes game state via CPI to gameplay-state
+    /// - Initializes inventory via CPI to player-inventory
     /// - Emits SessionStarted event
-    pub fn start_session(
-        ctx: Context<StartSession>,
-        campaign_level: u8,
-        burner_lamports: u64,
-    ) -> Result<()> {
+    pub fn start_session(ctx: Context<StartSession>, campaign_level: u8) -> Result<()> {
         let player_profile = &ctx.accounts.player_profile;
 
         // Validate campaign level is within range
@@ -69,8 +68,9 @@ pub mod session_manager {
         );
 
         let counter = &mut ctx.accounts.session_counter;
-        let session = &mut ctx.accounts.game_session;
         let clock = Clock::get()?;
+        let session_player = ctx.accounts.player.key();
+        let burner_wallet_key = ctx.accounts.burner_wallet.key();
 
         // Increment counter and get new session ID
         counter.count = counter
@@ -78,39 +78,102 @@ pub mod session_manager {
             .checked_add(1)
             .ok_or(SessionManagerError::ArithmeticOverflow)?;
 
-        session.player = ctx.accounts.player.key();
-        session.session_id = counter.count;
-        session.campaign_level = campaign_level;
-        session.started_at = clock.unix_timestamp;
-        session.last_activity = clock.unix_timestamp;
-        session.is_delegated = false;
-        session.state_hash = EMPTY_STATE_HASH;
-        session.bump = ctx.bumps.game_session;
-        // Copy active_item_pool from profile to session
-        session.active_item_pool = player_profile.active_item_pool;
-        // Store burner wallet pubkey
-        session.burner_wallet = ctx.accounts.burner_wallet.key();
-
-        // Transfer SOL to burner wallet for gameplay fees
-        if burner_lamports > 0 {
-            system_program::transfer(
-                CpiContext::new(
-                    ctx.accounts.system_program.to_account_info(),
-                    system_program::Transfer {
-                        from: ctx.accounts.player.to_account_info(),
-                        to: ctx.accounts.burner_wallet.to_account_info(),
-                    },
-                ),
-                burner_lamports,
-            )?;
+        {
+            let session = &mut ctx.accounts.game_session;
+            session.player = session_player;
+            session.session_id = counter.count;
+            session.campaign_level = campaign_level;
+            session.started_at = clock.unix_timestamp;
+            session.last_activity = clock.unix_timestamp;
+            session.is_delegated = false;
+            session.state_hash = EMPTY_STATE_HASH;
+            session.bump = ctx.bumps.game_session;
+            // Copy active_item_pool from profile to session
+            session.active_item_pool = player_profile.active_item_pool;
+            // Store burner wallet pubkey
+            session.burner_wallet = burner_wallet_key;
         }
 
+        // 1. Generate Map
+        map_generator::cpi::generate_map(
+            CpiContext::new(
+                ctx.accounts.map_generator_program.to_account_info(),
+                map_generator::cpi::accounts::GenerateMap {
+                    payer: ctx.accounts.player.to_account_info(),
+                    session: ctx.accounts.game_session.to_account_info(),
+                    map_config: ctx.accounts.map_config.to_account_info(),
+                    generated_map: ctx.accounts.generated_map.to_account_info(),
+                    system_program: ctx.accounts.system_program.to_account_info(),
+                },
+            ),
+            campaign_level,
+        )?;
+
+        // 2. Deserialize Generated Map to get dimensions and spawn
+        // We borrow the account info to read the data just written
+        let map_info = ctx.accounts.generated_map.to_account_info();
+        let map_data = map_info.try_borrow_data()?;
+        let mut map_slice: &[u8] = &map_data;
+        // Skip 8-byte discriminator
+        if map_slice.len() < 8 {
+            return Err(ProgramError::InvalidAccountData.into());
+        }
+        // AccountDeserialize handles discriminator check, so we can just pass the slice?
+        // GeneratedMap implements AccountDeserialize via #[account]
+        // But the data in map_slice starts with discriminator.
+        // Let's use try_deserialize directly.
+        let generated_map = GeneratedMap::try_deserialize(&mut map_slice)?;
+
+        let width = generated_map.width;
+        let height = generated_map.height;
+        let start_x = generated_map.spawn_x;
+        let start_y = generated_map.spawn_y;
+
+        // Drop the borrow so we can use the account in next CPI
+        drop(map_data);
+
+        // 3. Initialize Game State
+        gameplay_state::cpi::initialize_game_state(
+            CpiContext::new(
+                ctx.accounts.gameplay_state_program.to_account_info(),
+                gameplay_state::cpi::accounts::InitializeGameState {
+                    game_state: ctx.accounts.game_state.to_account_info(),
+                    game_session: ctx.accounts.game_session.to_account_info(),
+                    generated_map: ctx.accounts.generated_map.to_account_info(),
+                    map_enemies: ctx.accounts.map_enemies.to_account_info(),
+                    player: ctx.accounts.player.to_account_info(),
+                    system_program: ctx.accounts.system_program.to_account_info(),
+                },
+            ),
+            campaign_level,
+            width,
+            height,
+            start_x,
+            start_y,
+        )?;
+
+        // 4. Initialize Inventory (if needed)
+        // We call initialize_inventory. If it exists, this CPI will fail (Init violation).
+        // However, standard flow implies this is called for new users who might not have inventory.
+        // If inventory persists, the client should handle that. But tests assume this works.
+        // For now, we call it. If it fails due to existing account, it's a client usage error (don't call bundle if inventory exists).
+        player_inventory::cpi::initialize_inventory(CpiContext::new(
+            ctx.accounts.player_inventory_program.to_account_info(),
+            player_inventory::cpi::accounts::InitializeInventory {
+                inventory: ctx.accounts.inventory.to_account_info(),
+                player: ctx.accounts.player.to_account_info(),
+                system_program: ctx.accounts.system_program.to_account_info(),
+            },
+        ))?;
+
+        // 5. POI System - skipped as dependency is disabled/cyclic.
+        // map_pois remains uninitialized here. Client must call initialize_map_pois separately.
+
         emit!(SessionStarted {
-            player: session.player,
-            session_id: session.session_id,
-            campaign_level: session.campaign_level,
-            burner_wallet: session.burner_wallet,
-            burner_lamports,
+            player: session_player,
+            session_id: counter.count,
+            campaign_level,
+            burner_wallet: burner_wallet_key,
             timestamp: clock.unix_timestamp,
         });
 
@@ -167,6 +230,7 @@ pub mod session_manager {
     }
 
     /// Ends the session normally, undelegating from rollup and closing the account.
+    /// Also closes the player's inventory via CPI to ensure fresh inventory for next session.
     pub fn end_session(ctx: Context<EndSession>, _campaign_level: u8, victory: bool) -> Result<()> {
         let session = &ctx.accounts.game_session;
         let clock = Clock::get()?;
@@ -184,26 +248,16 @@ pub mod session_manager {
             timestamp: clock.unix_timestamp,
         });
 
+        // Close inventory via CPI to ensure fresh inventory for next session
+        player_inventory::cpi::close_inventory(CpiContext::new(
+            ctx.accounts.player_inventory_program.to_account_info(),
+            player_inventory::cpi::accounts::CloseInventory {
+                inventory: ctx.accounts.inventory.to_account_info(),
+                player: ctx.accounts.player.to_account_info(),
+            },
+        ))?;
+
         // Account will be closed by Anchor (close = player constraint)
-        Ok(())
-    }
-
-    /// Forces a session to close.
-    /// Can be called by anyone to clean up abandoned sessions.
-    pub fn force_close_session(ctx: Context<ForceCloseSession>, _campaign_level: u8) -> Result<()> {
-        let session = &ctx.accounts.game_session;
-        let clock = Clock::get()?;
-
-        emit!(SessionEnded {
-            player: session.player,
-            session_id: session.session_id,
-            campaign_level: session.campaign_level,
-            victory: false,
-            final_state_hash: session.state_hash,
-            timestamp: clock.unix_timestamp,
-        });
-
-        // Account will be closed by Anchor (close = recipient constraint)
         Ok(())
     }
 }
@@ -307,7 +361,6 @@ pub struct StartSession<'info> {
     pub session_counter: Account<'info, SessionCounter>,
 
     /// Player profile for validation (from player-profile program)
-    /// CHECK: We manually validate this is the correct PDA
     #[account(
         seeds = [b"player", player.key().as_ref()],
         bump,
@@ -321,6 +374,35 @@ pub struct StartSession<'info> {
     /// CHECK: Burner wallet receives SOL for gameplay transactions
     #[account(mut)]
     pub burner_wallet: AccountInfo<'info>,
+
+    /// Map configuration for map generation
+    pub map_config: Account<'info, MapConfigAccount>,
+
+    #[account(mut)]
+    /// CHECK: PDA created by map-generator CPI
+    pub generated_map: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    /// CHECK: Initialized by gameplay-state CPI
+    pub game_state: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    /// CHECK: Initialized by gameplay-state CPI
+    pub map_enemies: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    /// CHECK: POI system accounts (passed but unused/init separately)
+    pub map_pois: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    /// CHECK: Initialized by player-inventory CPI
+    pub inventory: UncheckedAccount<'info>,
+
+    pub map_generator_program: Program<'info, MapGenerator>,
+    pub gameplay_state_program: Program<'info, GameplayState>,
+    /// CHECK: POI program
+    pub poi_system_program: UncheckedAccount<'info>,
+    pub player_inventory_program: Program<'info, PlayerInventory>,
 
     pub system_program: Program<'info, System>,
 }
@@ -367,25 +449,13 @@ pub struct EndSession<'info> {
 
     #[account(mut)]
     pub player: Signer<'info>,
-}
 
-#[derive(Accounts)]
-#[instruction(campaign_level: u8)]
-pub struct ForceCloseSession<'info> {
-    #[account(
-        mut,
-        seeds = [GameSession::SEED_PREFIX, session_owner.key().as_ref(), &[campaign_level]],
-        bump = game_session.bump,
-        close = recipient
-    )]
-    pub game_session: Account<'info, GameSession>,
-
-    /// CHECK: The original session owner (for PDA derivation)
-    pub session_owner: AccountInfo<'info>,
-
-    /// CHECK: Account to receive the closed session's rent
+    /// Player's inventory account (closed via CPI to ensure fresh inventory next session)
     #[account(mut)]
-    pub recipient: AccountInfo<'info>,
+    /// CHECK: Validated by player-inventory CPI
+    pub inventory: UncheckedAccount<'info>,
+
+    pub player_inventory_program: Program<'info, PlayerInventory>,
 }
 
 // ============================================================================
@@ -398,7 +468,6 @@ pub struct SessionStarted {
     pub session_id: u64,
     pub campaign_level: u8,
     pub burner_wallet: Pubkey,
-    pub burner_lamports: u64,
     pub timestamp: i64,
 }
 

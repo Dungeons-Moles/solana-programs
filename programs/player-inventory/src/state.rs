@@ -81,57 +81,8 @@ impl Tier {
     }
 }
 
-/// When an effect triggers (matches combat-system)
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
-pub enum TriggerType {
-    /// At the start of battle
-    BattleStart,
-    /// Only on the first turn
-    FirstTurn,
-    /// At the start of each turn
-    TurnStart,
-    /// Every other turn
-    EveryOtherTurn,
-    /// When hitting the enemy
-    OnHit,
-    /// When enemy has no armor
-    Exposed,
-    /// When player HP is below 50%
-    Wounded,
-}
-
-/// Effect types (matches combat-system)
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
-pub enum EffectType {
-    /// Deal weapon damage
-    DealDamage,
-    /// Deal non-weapon damage (bombs, etc.)
-    DealNonWeaponDamage,
-    /// Heal HP
-    Heal,
-    /// Gain armor
-    GainArmor,
-    /// Gain ATK
-    GainAtk,
-    /// Gain SPD
-    GainSpd,
-    /// Apply Chill stacks to enemy
-    ApplyChill,
-    /// Apply Shrapnel stacks to self
-    ApplyShrapnel,
-    /// Apply Rust stacks to enemy
-    ApplyRust,
-    /// Apply Bleed stacks to enemy
-    ApplyBleed,
-    /// Remove armor from enemy
-    RemoveArmor,
-    /// Gain DIG
-    GainDig,
-    /// Gain gold
-    GainGold,
-    /// Apply bomb countdown
-    ApplyBomb,
-}
+/// Combat-system trigger/effect types shared across gameplay.
+pub use combat_system::state::{EffectType, ItemEffect, TriggerType};
 
 /// Effect definition with tier-scaled values (compile-time constant)
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -178,28 +129,13 @@ impl EffectDefinition {
     }
 }
 
-/// Combat effect (matches combat-system types)
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
-pub struct ItemEffect {
-    /// When effect activates
-    pub trigger: TriggerType,
-    /// Whether effect is limited to once per turn
-    pub once_per_turn: bool,
-    /// What the effect does
-    pub effect_type: EffectType,
-    /// Effect value
-    pub value: i16,
-}
-
-impl ItemEffect {
-    /// Create a stat bonus effect (BattleStart trigger)
-    pub fn stat_bonus(effect_type: EffectType, value: i16) -> Self {
-        Self {
-            trigger: TriggerType::BattleStart,
-            once_per_turn: false,
-            effect_type,
-            value,
-        }
+/// Create a stat bonus effect (BattleStart trigger)
+pub fn stat_bonus(effect_type: EffectType, value: i16) -> ItemEffect {
+    ItemEffect {
+        trigger: TriggerType::BattleStart,
+        once_per_turn: false,
+        effect_type,
+        value,
     }
 }
 

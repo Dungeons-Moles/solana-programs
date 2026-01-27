@@ -22,8 +22,8 @@ pub const STARTER_ITEMS_COUNT: u8 = 40;
 /// Minimum size for active item pool
 pub const MIN_ACTIVE_POOL_SIZE: u8 = 40;
 
-/// Cost to purchase runs in lamports (0.001 SOL)
-pub const RUN_PURCHASE_COST_LAMPORTS: u64 = 1_000_000;
+/// Cost to purchase runs in lamports (0.005 SOL)
+pub const RUN_PURCHASE_COST_LAMPORTS: u64 = 5_000_000;
 
 /// Number of runs received per purchase
 pub const RUNS_PER_PURCHASE: u32 = 20;

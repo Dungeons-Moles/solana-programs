@@ -5,18 +5,13 @@ description = "Field Enemies Program for dungeon crawl enemy spawning and manage
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib", "lib"]
+crate-type = ["lib"]
 name = "field_enemies"
 
 [features]
 default = []
-cpi = ["no-entrypoint"]
-no-entrypoint = []
-no-idl = []
-no-log-ix-name = []
 idl-build = ["anchor-lang/idl-build"]
 
 [dependencies]
 anchor-lang = "0.32.0"
-combat-system = { path = "../combat-system", features = ["cpi"] }
-map-generator = { path = "../map-generator", features = ["cpi"] }
+combat-system = { path = "../../crates/combat-system" }

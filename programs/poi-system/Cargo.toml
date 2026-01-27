@@ -19,6 +19,6 @@ idl-build = ["anchor-lang/idl-build"]
 [dependencies]
 anchor-lang = "0.32.0"
 player-inventory = { path = "../player-inventory", features = ["cpi"] }
-boss-system = { path = "../boss-system", features = ["cpi"] }
+boss-system = { path = "../../crates/boss-system" }
 gameplay-state = { path = "../gameplay-state", features = ["cpi"] }
 session-manager = { path = "../session-manager", features = ["cpi"] }

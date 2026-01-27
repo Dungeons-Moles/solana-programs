@@ -1,4 +1,7 @@
-use crate::state::{EffectType, ItemEffect, StatusEffects, TriggerType};
+use crate::state::{
+    CombatLogEntry, EffectType, ItemEffect, StatusEffects, TriggerType, STATUS_BLEED, STATUS_CHILL,
+    STATUS_REFLECTION, STATUS_RUST, STATUS_SHRAPNEL,
+};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CombatantStats {
@@ -18,7 +21,8 @@ pub fn should_trigger(trigger_type: TriggerType, turn: u8, is_first_turn: bool) 
         TriggerType::EveryOtherTurn => turn % 2 == 0,
         TriggerType::OnHit => true,
         TriggerType::Exposed | TriggerType::Wounded => true,
-        TriggerType::Countdown { turns } => turn >= turns,
+        // Countdown fires every N turns (turn 2, 4, 6... for turns=2)
+        TriggerType::Countdown { turns } => turns > 0 && turn > 0 && turn % turns == 0,
     }
 }
 
@@ -32,11 +36,18 @@ pub fn check_wounded(hp: i16, max_hp: u16) -> bool {
     hp_value * 2 < max_value
 }
 
+/// Applies an effect and logs it.
+/// `is_target_player` indicates whether the effect target is the player (for logging purposes).
+/// `gold_change` tracks net gold changes during combat (positive = player gains).
 pub fn apply_effect(
     effect_type: EffectType,
     value: i16,
     stats: &mut CombatantStats,
     status: &mut StatusEffects,
+    turn: u8,
+    is_target_player: bool,
+    gold_change: &mut i16,
+    log: &mut Vec<CombatLogEntry>,
 ) {
     let value = value.max(0);
 
@@ -44,44 +55,137 @@ pub fn apply_effect(
         EffectType::DealDamage => {
             let damage = (value - stats.arm).max(0);
             stats.hp = stats.hp.checked_sub(damage).unwrap_or(i16::MIN);
+            if damage > 0 {
+                log.push(CombatLogEntry::attack(turn, !is_target_player, damage));
+            }
         }
         EffectType::DealNonWeaponDamage => {
             stats.hp = stats.hp.checked_sub(value).unwrap_or(i16::MIN);
+            if value > 0 {
+                log.push(CombatLogEntry::non_weapon_damage(
+                    turn,
+                    is_target_player,
+                    value,
+                ));
+            }
         }
         EffectType::Heal => {
             let max_hp = i16::try_from(stats.max_hp).unwrap_or(i16::MAX);
+            let old_hp = stats.hp;
             let healed = stats.hp.checked_add(value).unwrap_or(i16::MAX);
             stats.hp = healed.min(max_hp);
+            let actual_heal = stats.hp - old_hp;
+            if actual_heal > 0 {
+                log.push(CombatLogEntry::heal(turn, is_target_player, actual_heal));
+            }
         }
         EffectType::GainArmor => {
             stats.arm = stats.arm.checked_add(value).unwrap_or(i16::MAX);
+            if value > 0 {
+                log.push(CombatLogEntry::armor_change(turn, is_target_player, value));
+            }
         }
         EffectType::GainAtk => {
             stats.atk = stats.atk.checked_add(value).unwrap_or(i16::MAX);
+            if value > 0 {
+                log.push(CombatLogEntry::atk_change(turn, is_target_player, value));
+            }
         }
         EffectType::GainSpd => {
             stats.spd = stats.spd.checked_add(value).unwrap_or(i16::MAX);
+            if value > 0 {
+                log.push(CombatLogEntry::spd_change(turn, is_target_player, value));
+            }
         }
         EffectType::ApplyChill => {
             status.chill = status.chill.saturating_add(value as u8);
+            if value > 0 {
+                log.push(CombatLogEntry::apply_status(
+                    turn,
+                    is_target_player,
+                    STATUS_CHILL,
+                    value,
+                ));
+            }
         }
         EffectType::ApplyShrapnel => {
             status.shrapnel = status.shrapnel.saturating_add(value as u8);
+            if value > 0 {
+                log.push(CombatLogEntry::apply_status(
+                    turn,
+                    is_target_player,
+                    STATUS_SHRAPNEL,
+                    value,
+                ));
+            }
         }
         EffectType::ApplyRust => {
             status.rust = status.rust.saturating_add(value as u8);
+            if value > 0 {
+                log.push(CombatLogEntry::apply_status(
+                    turn,
+                    is_target_player,
+                    STATUS_RUST,
+                    value,
+                ));
+            }
         }
         EffectType::ApplyBleed => {
             status.bleed = status.bleed.saturating_add(value as u8);
+            if value > 0 {
+                log.push(CombatLogEntry::apply_status(
+                    turn,
+                    is_target_player,
+                    STATUS_BLEED,
+                    value,
+                ));
+            }
         }
         EffectType::RemoveArmor => {
+            let old_arm = stats.arm;
             let reduced = stats.arm.checked_sub(value).unwrap_or(i16::MIN);
             stats.arm = reduced.max(0);
+            let actual_reduction = old_arm - stats.arm;
+            if actual_reduction > 0 {
+                log.push(CombatLogEntry::armor_change(
+                    turn,
+                    is_target_player,
+                    -actual_reduction,
+                ));
+            }
         }
-        // Boss-specific effects (handled by boss-system or gameplay-state)
-        EffectType::GainStrikes | EffectType::StealGold | EffectType::GoldToArmor => {
-            // These effects are processed outside the combat system
+        EffectType::StealGold => {
+            // Enemy steals gold from player (target is player) or player steals from enemy
+            // Positive value = amount to steal
+            // If target is player, player loses gold (gold_change decreases)
+            // If target is enemy (player is stealing), player gains gold (gold_change increases)
+            if is_target_player {
+                // Enemy is stealing from player
+                *gold_change = gold_change.saturating_sub(value);
+                log.push(CombatLogEntry::gold_stolen(turn, false, -value));
+            } else {
+                // Player is stealing from enemy
+                *gold_change = gold_change.saturating_add(value);
+                log.push(CombatLogEntry::gold_stolen(turn, true, value));
+            }
         }
+        EffectType::ApplyReflection => {
+            status.reflection = status.reflection.saturating_add(value as u8);
+            if value > 0 {
+                log.push(CombatLogEntry::apply_status(
+                    turn,
+                    is_target_player,
+                    STATUS_REFLECTION,
+                    value,
+                ));
+            }
+        }
+        // These effects are processed outside the combat system
+        EffectType::GainStrikes
+        | EffectType::GoldToArmor
+        | EffectType::GainDig
+        | EffectType::GainGold
+        | EffectType::ApplyBomb => {}
     }
 }
 
@@ -95,6 +199,9 @@ pub fn process_triggers_for_phase(
     opponent_stats: &mut CombatantStats,
     opponent_status: &mut StatusEffects,
     triggered_flags: &mut [bool],
+    is_owner_player: bool,
+    gold_change: &mut i16,
+    log: &mut Vec<CombatLogEntry>,
 ) {
     let is_first_turn = turn == 1;
 
@@ -118,14 +225,49 @@ pub fn process_triggers_for_phase(
         }
 
         if targets_opponent(effect.effect_type) {
+            // Check for reflection on status effects (excluding ApplyReflection itself)
+            let is_reflectable_status = is_status_effect(effect.effect_type)
+                && !matches!(effect.effect_type, EffectType::ApplyReflection);
+
+            if is_reflectable_status && opponent_status.reflection > 0 {
+                // Reflection: status is reflected back to the source (owner)
+                opponent_status.reflection = opponent_status.reflection.saturating_sub(1);
+
+                apply_effect(
+                    effect.effect_type,
+                    effect.value,
+                    owner_stats,
+                    owner_status,
+                    turn,
+                    is_owner_player, // Reflected back to owner
+                    gold_change,
+                    log,
+                );
+            } else {
+                // Normal: effect targets the opponent
+                apply_effect(
+                    effect.effect_type,
+                    effect.value,
+                    opponent_stats,
+                    opponent_status,
+                    turn,
+                    !is_owner_player, // Target is opponent
+                    gold_change,
+                    log,
+                );
+            }
+        } else {
+            // Effect targets self (owner)
             apply_effect(
                 effect.effect_type,
                 effect.value,
-                opponent_stats,
-                opponent_status,
+                owner_stats,
+                owner_status,
+                turn,
+                is_owner_player, // Target is owner
+                gold_change,
+                log,
             );
-        } else {
-            apply_effect(effect.effect_type, effect.value, owner_stats, owner_status);
         }
 
         if effect.once_per_turn {
@@ -134,6 +276,18 @@ pub fn process_triggers_for_phase(
             }
         }
     }
+}
+
+/// Returns true if the effect applies a status that can be reflected
+fn is_status_effect(effect_type: EffectType) -> bool {
+    matches!(
+        effect_type,
+        EffectType::ApplyChill
+            | EffectType::ApplyShrapnel
+            | EffectType::ApplyRust
+            | EffectType::ApplyBleed
+            | EffectType::ApplyReflection
+    )
 }
 
 pub fn reset_once_per_turn_flags(flags: &mut [bool]) {
@@ -152,6 +306,9 @@ fn targets_opponent(effect_type: EffectType) -> bool {
             | EffectType::ApplyRust
             | EffectType::ApplyBleed
             | EffectType::RemoveArmor
+            | EffectType::ApplyBomb
+            | EffectType::StealGold
+            | EffectType::ApplyReflection
     )
 }
 
@@ -233,6 +390,8 @@ mod tests {
             },
         ];
         let mut flags = vec![false; effects.len()];
+        let mut gold_change = 0i16;
+        let mut log = Vec::new();
 
         process_triggers_for_phase(
             &mut effects,
@@ -243,8 +402,13 @@ mod tests {
             &mut opponent_stats,
             &mut opponent_status,
             &mut flags,
+            true, // is_owner_player
+            &mut gold_change,
+            &mut log,
         );
 
         assert_eq!(stats.atk, 4);
+        // Should have logged 2 ATK changes
+        assert_eq!(log.len(), 2);
     }
 }

@@ -1,0 +1,11 @@
+[package]
+name = "boss-system"
+version = "0.1.0"
+description = "Boss System Library for dungeon crawl boss definitions, scaling, and combat integration"
+edition = "2021"
+
+[lib]
+name = "boss_system"
+
+[dependencies]
+combat-system = { path = "../combat-system" }

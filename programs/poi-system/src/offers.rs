@@ -30,7 +30,7 @@ impl Xorshift64 {
     }
 
     /// Generate the next random u64 value.
-    pub fn next(&mut self) -> u64 {
+    pub fn next_u64(&mut self) -> u64 {
         let mut x = self.state;
         x ^= x << 13;
         x ^= x >> 7;
@@ -44,7 +44,7 @@ impl Xorshift64 {
         if max == 0 {
             return 0;
         }
-        self.next() % max
+        self.next_u64() % max
     }
 
     /// Get current state (for persistence/resumption).
@@ -606,8 +606,7 @@ pub fn generate_counter_cache_offers(
         let item_seed = seed.wrapping_add(i as u64 * 1337);
         let rarity = get_rarity_from_table(&COUNTER_CACHE_RARITY, act, item_seed);
 
-        // Select only from weakness tags
-        let use_tag1 = (item_seed >> 16) % 2 == 0;
+        let use_tag1 = (item_seed >> 16) & 1 == 0;
         let tag = if use_tag1 { weakness1 } else { weakness2 };
         let item_id = select_gear_by_tag_and_rarity(tag, rarity, item_seed >> 24);
 
@@ -1093,7 +1092,7 @@ mod tests {
         let mut rng2 = Xorshift64::new(12345);
 
         for _ in 0..100 {
-            assert_eq!(rng1.next(), rng2.next());
+            assert_eq!(rng1.next_u64(), rng2.next_u64());
         }
     }
 
@@ -1103,14 +1102,14 @@ mod tests {
         let mut rng1 = Xorshift64::new(12345);
         let mut rng2 = Xorshift64::new(54321);
 
-        assert_ne!(rng1.next(), rng2.next());
+        assert_ne!(rng1.next_u64(), rng2.next_u64());
     }
 
     #[test]
     fn test_xorshift64_zero_seed_handled() {
         // Zero seed should be clamped to 1
         let mut rng = Xorshift64::new(0);
-        assert_ne!(rng.next(), 0); // Should produce non-zero output
+        assert_ne!(rng.next_u64(), 0); // Should produce non-zero output
     }
 
     #[test]
@@ -1410,17 +1409,15 @@ pub fn item_id_to_pool_index(item_id: &[u8; 8]) -> Option<u8> {
     // Tools: items 64-79 (8 tags * 2 items)
     match item_id[0] {
         b'G' => {
-            if item_num < 1 || item_num > 8 {
+            if !(1..=8).contains(&item_num) {
                 return None;
             }
-            // Gear index: tag * 8 + (num - 1)
             Some(tag_code * 8 + (item_num - 1))
         }
         b'T' => {
-            if item_num < 1 || item_num > 2 {
+            if !(1..=2).contains(&item_num) {
                 return None;
             }
-            // Tool index: 64 + tag * 2 + (num - 1)
             Some(64 + tag_code * 2 + (item_num - 1))
         }
         _ => None,

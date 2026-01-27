@@ -244,6 +244,17 @@ pub mod player_inventory {
 
         Ok(offer)
     }
+
+    /// Closes the PlayerInventory account, returning rent to the player.
+    /// Called automatically when a session ends (victory, defeat, or quit)
+    /// to ensure fresh inventory for the next session.
+    pub fn close_inventory(ctx: Context<CloseInventory>) -> Result<()> {
+        emit!(InventoryClosed {
+            player: ctx.accounts.inventory.player,
+        });
+
+        Ok(())
+    }
 }
 
 // =============================================================================
@@ -365,6 +376,21 @@ pub struct GenerateOffer<'info> {
     pub signer: Signer<'info>,
 }
 
+#[derive(Accounts)]
+pub struct CloseInventory<'info> {
+    #[account(
+        mut,
+        seeds = [b"inventory", player.key().as_ref()],
+        bump = inventory.bump,
+        has_one = player @ InventoryError::Unauthorized,
+        close = player
+    )]
+    pub inventory: Account<'info, PlayerInventory>,
+
+    #[account(mut)]
+    pub player: Signer<'info>,
+}
+
 // =============================================================================
 // Events
 // =============================================================================
@@ -408,4 +434,9 @@ pub struct GearSlotsExpanded {
 pub struct ToolOilApplied {
     pub player: Pubkey,
     pub modification: ToolOilModification,
+}
+
+#[event]
+pub struct InventoryClosed {
+    pub player: Pubkey,
 }

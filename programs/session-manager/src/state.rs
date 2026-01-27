@@ -3,6 +3,9 @@ use anchor_lang::prelude::*;
 /// Size of item bitmask in bytes (80 bits = 10 bytes)
 pub const SESSION_ITEM_BITMASK_SIZE: usize = 10;
 
+/// Empty state hash constant (all zeros)
+pub const EMPTY_STATE_HASH: [u8; 32] = [0u8; 32];
+
 /// Represents an active game session for a player.
 /// PDA Seeds: [b"session", player.key(), &[campaign_level]]
 /// Changed from single session per player to one session per (player, level) pair.
@@ -20,8 +23,6 @@ pub struct GameSession {
     pub last_activity: i64,
     /// Whether state is delegated to ephemeral rollup
     pub is_delegated: bool,
-    /// Hash of current game state (for verification)
-    pub state_hash: [u8; 32],
     /// PDA bump seed
     pub bump: u8,
     /// Snapshot of player's active_item_pool at session start
@@ -30,6 +31,8 @@ pub struct GameSession {
     /// Burner wallet pubkey for gameplay transactions
     /// SOL is transferred to this wallet at session start
     pub burner_wallet: Pubkey,
+    /// Hash of the current game state (for validation)
+    pub state_hash: [u8; 32],
 }
 
 impl GameSession {
@@ -38,9 +41,9 @@ impl GameSession {
 
     /// Account space calculation
     /// 8 (discriminator) + 32 (player) + 8 (session_id) + 1 (campaign_level) +
-    /// 8 (started_at) + 8 (last_activity) + 1 (is_delegated) + 32 (state_hash) +
-    /// 1 (bump) + 10 (active_item_pool) + 32 (burner_wallet)
-    pub const INIT_SPACE: usize = 32 + 8 + 1 + 8 + 8 + 1 + 32 + 1 + 10 + 32;
+    /// 8 (started_at) + 8 (last_activity) + 1 (is_delegated) + 1 (bump) +
+    /// 10 (active_item_pool) + 32 (burner_wallet) + 32 (state_hash)
+    pub const INIT_SPACE: usize = 32 + 8 + 1 + 8 + 8 + 1 + 1 + 10 + 32 + 32;
 }
 
 /// Global counter for generating unique session IDs

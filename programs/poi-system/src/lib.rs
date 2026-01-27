@@ -7,11 +7,57 @@ pub mod pois;
 pub mod spawn;
 pub mod state;
 
+use anchor_lang::context::CpiContext;
 use errors::PoiSystemError;
+use gameplay_state::state::GameState;
 pub use pois::PoiDefinition;
-use state::{MapPois, ShopState, MAP_POIS_SEED};
+use state::{ActiveCondition, MapPois, ShopState, UseType, MAP_POIS_SEED};
 
 declare_id!("FJVnZE45hxcd7BJeci27BiTx23XD6inN4paiM2EkMaoB");
+
+/// Seed for POI authority PDA used to sign CPI calls to gameplay-state
+pub const POI_AUTHORITY_SEED: &[u8] = b"poi_authority";
+
+/// Session manager program ID for session ownership checks
+pub const SESSION_MANAGER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
+    217, 18, 17, 128, 79, 140, 152, 73, 103, 95, 134, 179, 31, 109, 34, 82, 250, 167, 91, 67, 186,
+    23, 209, 2, 80, 255, 118, 192, 175, 242, 222, 183,
+]);
+
+/// Validates POI index, retrieves POI and definition, and validates interaction.
+/// Use `skip_usage_check` for Repeatable/RepeatablePerTool POIs.
+fn get_and_validate_poi<'a>(
+    map_pois: &'a MapPois,
+    game_state: &GameState,
+    poi_index: u8,
+    skip_usage_check: bool,
+) -> Result<(&'a state::PoiInstance, pois::PoiDefinition)> {
+    require!(
+        (poi_index as usize) < map_pois.pois.len(),
+        PoiSystemError::InvalidPoiIndex
+    );
+
+    let poi = &map_pois.pois[poi_index as usize];
+    let poi_def = *pois::get_poi_definition(poi.poi_type).ok_or(PoiSystemError::InvalidPoiType)?;
+
+    // Position check
+    require!(
+        game_state.position_x == poi.x && game_state.position_y == poi.y,
+        PoiSystemError::PlayerNotOnPoiTile
+    );
+
+    // Usage check (unless skipped for repeatable POIs)
+    if !skip_usage_check && poi_def.use_type == UseType::OneTime {
+        require!(!poi.used, PoiSystemError::PoiAlreadyUsed);
+    }
+
+    // Time check
+    if poi_def.active_condition == ActiveCondition::NightOnly {
+        require!(game_state.phase.is_night(), PoiSystemError::NightOnlyPoi);
+    }
+
+    Ok((poi, poi_def))
+}
 
 #[program]
 pub mod poi_system {
@@ -24,6 +70,11 @@ pub mod poi_system {
         week: u8,
         seed: u64,
     ) -> Result<()> {
+        require_keys_eq!(
+            *ctx.accounts.session.owner,
+            SESSION_MANAGER_PROGRAM_ID,
+            PoiSystemError::InvalidSessionOwner
+        );
         require!((1..=4).contains(&act), PoiSystemError::InvalidAct);
 
         let map_pois = &mut ctx.accounts.map_pois;
@@ -76,28 +127,21 @@ pub mod poi_system {
     /// - L1: Full heal, repeatable, night-only
     /// - L5: Heal 10 HP, one-time, night-only
     ///
-    /// # Design Note
     /// This instruction validates the interaction, marks the POI as used (if applicable),
-    /// and emits a `RestCompleted` event with `heal_amount`. The caller (client or
-    /// orchestrator program) must invoke `gameplay-state::modify_hp` with the heal amount
-    /// to actually update the player's HP. This separation keeps poi-system decoupled
-    /// from gameplay-state.
-    pub fn interact_rest(
-        ctx: Context<InteractRest>,
-        poi_index: u8,
-        current_hp: u8,
-        max_hp: u8,
-        is_night: bool,
-    ) -> Result<()> {
+    /// and atomically updates the player's HP via CPI to gameplay-state.
+    /// Max HP is derived from the player's inventory.
+    pub fn interact_rest(ctx: Context<InteractRest>, poi_index: u8) -> Result<()> {
         let map_pois = &mut ctx.accounts.map_pois;
+        let game_state = &ctx.accounts.game_state;
+        let inventory = &ctx.accounts.inventory;
 
-        // Validate POI index
-        require!(
-            (poi_index as usize) < map_pois.pois.len(),
-            PoiSystemError::InvalidPoiIndex
-        );
+        let (poi, _) = get_and_validate_poi(map_pois, game_state, poi_index, false)?;
+        let player_stats = gameplay_state::stats::calculate_stats(inventory);
 
-        let poi = &map_pois.pois[poi_index as usize];
+        // Get values for rest interaction
+        let current_hp = game_state.hp as u8;
+        let max_hp = player_stats.max_hp as u8;
+        let is_night = game_state.phase.is_night();
 
         // Execute rest interaction
         let result = interactions::execute_rest_interaction(poi, current_hp, max_hp, is_night)?;
@@ -105,6 +149,23 @@ pub mod poi_system {
         // Mark POI as used if needed
         if result.mark_used {
             map_pois.pois[poi_index as usize].used = true;
+        }
+
+        // CPI to gameplay-state to heal player atomically
+        if result.heal_amount > 0 {
+            let seeds = &[POI_AUTHORITY_SEED, &[ctx.bumps.poi_authority]];
+            gameplay_state::cpi::heal_player(
+                CpiContext::new_with_signer(
+                    ctx.accounts.gameplay_state_program.to_account_info(),
+                    gameplay_state::cpi::accounts::HealPlayer {
+                        game_state: ctx.accounts.game_state.to_account_info(),
+                        inventory: ctx.accounts.inventory.to_account_info(),
+                        poi_authority: ctx.accounts.poi_authority.to_account_info(),
+                    },
+                    &[&seeds[..]],
+                ),
+                result.heal_amount as u16,
+            )?;
         }
 
         let poi = &map_pois.pois[poi_index as usize];
@@ -133,26 +194,21 @@ pub mod poi_system {
         ctx: Context<InteractPickItem>,
         poi_index: u8,
         choice_index: u8,
-        is_night: bool,
         weakness1: u8, // Boss weakness tag 1 (0-7)
         weakness2: u8, // Boss weakness tag 2 (0-7)
         seed: u64,
     ) -> Result<()> {
         let map_pois = &mut ctx.accounts.map_pois;
+        let game_state = &ctx.accounts.game_state;
 
-        // Validate POI index
-        require!(
-            (poi_index as usize) < map_pois.pois.len(),
-            PoiSystemError::InvalidPoiIndex
-        );
+        let (poi, _) = get_and_validate_poi(map_pois, game_state, poi_index, false)?;
 
-        let poi = &map_pois.pois[poi_index as usize];
         let poi_type = poi.poi_type;
         let x = poi.x;
         let y = poi.y;
         let act = map_pois.act;
+        let is_night = game_state.phase.is_night();
 
-        // Generate offers for this POI
         let w1 = offers::WeaknessTag::try_from(weakness1).unwrap_or(offers::WeaknessTag::Stone);
         let w2 = offers::WeaknessTag::try_from(weakness2).unwrap_or(offers::WeaknessTag::Frost);
 
@@ -200,28 +256,23 @@ pub mod poi_system {
     /// - `poi_index`: Index of the POI in map_pois.pois
     /// - `current_oil_flags`: Current tool oil flags (tracked by client/gameplay-state)
     /// - `modification`: Oil type (1=ATK, 2=SPD, 4=DIG)
-    /// - `is_night`: Whether it's currently night
     pub fn interact_tool_oil(
         ctx: Context<InteractToolOil>,
         poi_index: u8,
         current_oil_flags: u8,
         modification: u8,
-        is_night: bool,
     ) -> Result<()> {
-        let map_pois = &ctx.accounts.map_pois;
+        let map_pois = &mut ctx.accounts.map_pois;
+        let game_state = &ctx.accounts.game_state;
 
-        // Validate POI index
-        require!(
-            (poi_index as usize) < map_pois.pois.len(),
-            PoiSystemError::InvalidPoiIndex
-        );
+        // RepeatablePerTool has special usage rules, so skip usage check
+        let (poi, _) = get_and_validate_poi(map_pois, game_state, poi_index, true)?;
 
-        let poi = &map_pois.pois[poi_index as usize];
         let poi_type = poi.poi_type;
         let x = poi.x;
         let y = poi.y;
+        let is_night = game_state.phase.is_night();
 
-        // Execute tool oil interaction
         let result = interactions::execute_tool_oil_interaction(
             poi,
             current_oil_flags,
@@ -256,29 +307,24 @@ pub mod poi_system {
     pub fn enter_shop(
         ctx: Context<EnterShop>,
         poi_index: u8,
-        is_night: bool,
         weakness1: u8,
         weakness2: u8,
         seed: u64,
     ) -> Result<()> {
         let map_pois = &mut ctx.accounts.map_pois;
+        let game_state = &ctx.accounts.game_state;
 
-        // Check no shop is already active
         require!(
             !map_pois.shop_state.active,
             PoiSystemError::ShopAlreadyActive
         );
 
-        // Validate POI index
-        require!(
-            (poi_index as usize) < map_pois.pois.len(),
-            PoiSystemError::InvalidPoiIndex
-        );
+        // L9 is Repeatable, so skip usage check
+        let (poi, _) = get_and_validate_poi(map_pois, game_state, poi_index, true)?;
 
-        let poi = &map_pois.pois[poi_index as usize];
         let act = map_pois.act;
+        let is_night = game_state.phase.is_night();
 
-        // Validate this is a shop POI
         interactions::validate_shop_poi(poi, is_night)?;
 
         // Generate offers
@@ -309,19 +355,12 @@ pub mod poi_system {
 
     /// Purchase an item from the active shop.
     ///
-    /// Validates player has enough gold and marks the offer as purchased.
-    ///
-    /// # Design Note
-    /// Emits `ItemPurchased` with `price`. The caller must invoke:
-    /// - `gameplay-state::modify_gold` with `-price` to deduct gold
-    /// - `player-inventory::add_item` to add the item
-    /// This keeps poi-system decoupled from other programs.
-    pub fn shop_purchase(
-        ctx: Context<ShopPurchase>,
-        offer_index: u8,
-        player_gold: u16,
-    ) -> Result<()> {
+    /// Validates player has enough gold, marks the offer as purchased,
+    /// and atomically deducts gold via CPI to gameplay-state.
+    pub fn shop_purchase(ctx: Context<ShopPurchase>, offer_index: u8) -> Result<()> {
         let map_pois = &mut ctx.accounts.map_pois;
+        let game_state = &ctx.accounts.game_state;
+        let player_gold = game_state.gold;
 
         // Execute purchase validation
         let (offer, price) =
@@ -329,6 +368,20 @@ pub mod poi_system {
 
         // Mark offer as purchased
         map_pois.shop_state.offers[offer_index as usize].purchased = true;
+
+        // CPI to gameplay-state to deduct gold atomically
+        let seeds = &[POI_AUTHORITY_SEED, &[ctx.bumps.poi_authority]];
+        gameplay_state::cpi::modify_gold_authorized(
+            CpiContext::new_with_signer(
+                ctx.accounts.gameplay_state_program.to_account_info(),
+                gameplay_state::cpi::accounts::ModifyGoldAuthorized {
+                    game_state: ctx.accounts.game_state.to_account_info(),
+                    poi_authority: ctx.accounts.poi_authority.to_account_info(),
+                },
+                &[&seeds[..]],
+            ),
+            -(price as i16),
+        )?;
 
         emit!(ItemPurchased {
             session: map_pois.session,
@@ -342,23 +395,35 @@ pub mod poi_system {
     /// Reroll the shop offers for a gold cost.
     ///
     /// Cost increases with each reroll: 4, 6, 8, 10, ...
-    ///
-    /// # Design Note
-    /// Emits `ShopRerolled` with `cost`. The caller must invoke
-    /// `gameplay-state::modify_gold` with `-cost` to deduct gold.
+    /// Gold is deducted atomically via CPI to gameplay-state.
     pub fn shop_reroll(
         ctx: Context<ShopReroll>,
-        player_gold: u16,
         weakness1: u8,
         weakness2: u8,
         seed: u64,
     ) -> Result<()> {
         let map_pois = &mut ctx.accounts.map_pois;
+        let game_state = &ctx.accounts.game_state;
+        let player_gold = game_state.gold;
 
         // Calculate and validate reroll cost
         let cost = interactions::calculate_shop_reroll_cost(&map_pois.shop_state)?;
 
         require!(player_gold >= cost, PoiSystemError::InsufficientGold);
+
+        // CPI to gameplay-state to deduct gold atomically
+        let seeds = &[POI_AUTHORITY_SEED, &[ctx.bumps.poi_authority]];
+        gameplay_state::cpi::modify_gold_authorized(
+            CpiContext::new_with_signer(
+                ctx.accounts.gameplay_state_program.to_account_info(),
+                gameplay_state::cpi::accounts::ModifyGoldAuthorized {
+                    game_state: ctx.accounts.game_state.to_account_info(),
+                    poi_authority: ctx.accounts.poi_authority.to_account_info(),
+                },
+                &[&seeds[..]],
+            ),
+            -(cost as i16),
+        )?;
 
         // Increment reroll count
         map_pois.shop_state.reroll_count = map_pois.shop_state.reroll_count.saturating_add(1);
@@ -410,36 +475,40 @@ pub mod poi_system {
     /// Upgrade a tool at the Rusty Anvil (L10).
     ///
     /// Tier I -> II costs 8 Gold, II -> III costs 16 Gold.
-    /// POI is one-time use.
-    ///
-    /// # Design Note
-    /// Emits `ToolUpgraded` with `cost`. The caller must invoke:
-    /// - `gameplay-state::modify_gold` with `-cost` to deduct gold
-    /// - `player-inventory::upgrade_item` to update the item tier
+    /// POI is one-time use. Gold is deducted atomically via CPI.
     pub fn interact_rusty_anvil(
         ctx: Context<InteractRustyAnvil>,
         poi_index: u8,
         item_id: [u8; 8],
         current_tier: u8,
-        player_gold: u16,
-        is_night: bool,
     ) -> Result<()> {
         let map_pois = &mut ctx.accounts.map_pois;
+        let game_state = &ctx.accounts.game_state;
 
-        // Validate POI index
-        require!(
-            (poi_index as usize) < map_pois.pois.len(),
-            PoiSystemError::InvalidPoiIndex
-        );
+        let (poi, _) = get_and_validate_poi(map_pois, game_state, poi_index, false)?;
 
-        let poi = &map_pois.pois[poi_index as usize];
+        let player_gold = game_state.gold;
+        let is_night = game_state.phase.is_night();
 
-        // Execute upgrade
         let result =
             interactions::execute_anvil_upgrade(poi, item_id, current_tier, player_gold, is_night)?;
 
         // Mark POI as used (one-time)
         map_pois.pois[poi_index as usize].used = true;
+
+        // CPI to gameplay-state to deduct gold atomically
+        let seeds = &[POI_AUTHORITY_SEED, &[ctx.bumps.poi_authority]];
+        gameplay_state::cpi::modify_gold_authorized(
+            CpiContext::new_with_signer(
+                ctx.accounts.gameplay_state_program.to_account_info(),
+                gameplay_state::cpi::accounts::ModifyGoldAuthorized {
+                    game_state: ctx.accounts.game_state.to_account_info(),
+                    poi_authority: ctx.accounts.poi_authority.to_account_info(),
+                },
+                &[&seeds[..]],
+            ),
+            -(result.cost as i16),
+        )?;
 
         emit!(ToolUpgraded {
             session: map_pois.session,
@@ -463,19 +532,15 @@ pub mod poi_system {
         item1_tier: u8,
         item2_id: [u8; 8],
         item2_tier: u8,
-        is_night: bool,
     ) -> Result<()> {
         let map_pois = &ctx.accounts.map_pois;
+        let game_state = &ctx.accounts.game_state;
 
-        // Validate POI index
-        require!(
-            (poi_index as usize) < map_pois.pois.len(),
-            PoiSystemError::InvalidPoiIndex
-        );
+        // L11 is Repeatable, so skip usage check
+        let (poi, _) = get_and_validate_poi(map_pois, game_state, poi_index, true)?;
 
-        let poi = &map_pois.pois[poi_index as usize];
+        let is_night = game_state.phase.is_night();
 
-        // Execute fusion
         let result = interactions::execute_kiln_fusion(
             poi, item1_id, item1_tier, item2_id, item2_tier, is_night,
         )?;
@@ -497,22 +562,14 @@ pub mod poi_system {
     ///
     /// On first visit, marks the waypoint as discovered for fast travel.
     /// Must be called when player first reaches a waypoint.
-    pub fn discover_waypoint(
-        ctx: Context<DiscoverWaypoint>,
-        poi_index: u8,
-        is_night: bool,
-    ) -> Result<()> {
+    pub fn discover_waypoint(ctx: Context<DiscoverWaypoint>, poi_index: u8) -> Result<()> {
         let map_pois = &mut ctx.accounts.map_pois;
+        let game_state = &ctx.accounts.game_state;
 
-        // Validate POI index
-        require!(
-            (poi_index as usize) < map_pois.pois.len(),
-            PoiSystemError::InvalidPoiIndex
-        );
+        // L8 is Repeatable, so skip usage check
+        let (poi, _) = get_and_validate_poi(map_pois, game_state, poi_index, true)?;
 
-        let poi = &map_pois.pois[poi_index as usize];
-
-        // Execute discover
+        let is_night = game_state.phase.is_night();
         let result = interactions::execute_waypoint_discover(poi, is_night)?;
 
         // Mark as discovered if new
@@ -537,9 +594,9 @@ pub mod poi_system {
         ctx: Context<FastTravel>,
         from_poi_index: u8,
         to_poi_index: u8,
-        is_night: bool,
     ) -> Result<()> {
         let map_pois = &ctx.accounts.map_pois;
+        let game_state = &ctx.accounts.game_state;
 
         // Validate POI indices
         require!(
@@ -553,6 +610,14 @@ pub mod poi_system {
 
         let from_poi = &map_pois.pois[from_poi_index as usize];
         let to_poi = &map_pois.pois[to_poi_index as usize];
+
+        // Validate player is at the from_poi
+        require!(
+            game_state.position_x == from_poi.x && game_state.position_y == from_poi.y,
+            PoiSystemError::PlayerNotOnPoiTile
+        );
+
+        let is_night = game_state.phase.is_night();
 
         // Execute fast travel
         let result = interactions::execute_fast_travel(from_poi, to_poi, is_night)?;
@@ -576,24 +641,16 @@ pub mod poi_system {
     ///
     /// Reveals all tiles within radius 13 of the beacon.
     /// POI is one-time use.
-    pub fn interact_survey_beacon(
-        ctx: Context<InteractSurveyBeacon>,
-        poi_index: u8,
-        map_width: u8,
-        map_height: u8,
-        is_night: bool,
-    ) -> Result<()> {
+    pub fn interact_survey_beacon(ctx: Context<InteractSurveyBeacon>, poi_index: u8) -> Result<()> {
         let map_pois = &mut ctx.accounts.map_pois;
+        let game_state = &ctx.accounts.game_state;
 
-        // Validate POI index
-        require!(
-            (poi_index as usize) < map_pois.pois.len(),
-            PoiSystemError::InvalidPoiIndex
-        );
+        let (poi, _) = get_and_validate_poi(map_pois, game_state, poi_index, false)?;
 
-        let poi = &map_pois.pois[poi_index as usize];
+        let map_width = game_state.map_width;
+        let map_height = game_state.map_height;
+        let is_night = game_state.phase.is_night();
 
-        // Execute survey beacon
         let result = interactions::execute_survey_beacon(poi, map_width, map_height, is_night)?;
 
         // Mark POI as used (one-time)
@@ -617,17 +674,12 @@ pub mod poi_system {
         ctx: Context<InteractSeismicScanner>,
         poi_index: u8,
         category: u8,
-        is_night: bool,
     ) -> Result<()> {
         let map_pois = &mut ctx.accounts.map_pois;
+        let game_state = &ctx.accounts.game_state;
 
-        // Validate POI index
-        require!(
-            (poi_index as usize) < map_pois.pois.len(),
-            PoiSystemError::InvalidPoiIndex
-        );
+        let (poi, _) = get_and_validate_poi(map_pois, game_state, poi_index, false)?;
 
-        // Parse category
         let cat = match category {
             0 => state::PoiCategory::Items,
             1 => state::PoiCategory::Upgrades,
@@ -636,8 +688,8 @@ pub mod poi_system {
             _ => return Err(PoiSystemError::InvalidInteraction.into()),
         };
 
-        let poi = &map_pois.pois[poi_index as usize];
         let pois_snapshot: Vec<_> = map_pois.pois.clone();
+        let is_night = game_state.phase.is_night();
 
         // Execute seismic scanner
         let result = interactions::execute_seismic_scanner(
@@ -673,31 +725,40 @@ pub mod poi_system {
     /// Scrap a gear item at the Scrap Chute (L14).
     ///
     /// Destroys one gear item for a gold cost (8-12 depending on act).
-    /// POI is one-time use.
+    /// POI is one-time use. Gold is deducted atomically via CPI.
     /// The caller is responsible for removing the item from inventory via CPI.
     pub fn interact_scrap_chute(
         ctx: Context<InteractScrapChute>,
         poi_index: u8,
         item_id: [u8; 8],
-        player_gold: u16,
-        is_night: bool,
     ) -> Result<()> {
         let map_pois = &mut ctx.accounts.map_pois;
+        let game_state = &ctx.accounts.game_state;
         let act = map_pois.act;
 
-        // Validate POI index
-        require!(
-            (poi_index as usize) < map_pois.pois.len(),
-            PoiSystemError::InvalidPoiIndex
-        );
+        let (poi, _) = get_and_validate_poi(map_pois, game_state, poi_index, false)?;
 
-        let poi = &map_pois.pois[poi_index as usize];
+        let player_gold = game_state.gold;
+        let is_night = game_state.phase.is_night();
 
-        // Execute scrap
         let result = interactions::execute_scrap_gear(poi, item_id, player_gold, act, is_night)?;
 
         // Mark POI as used (one-time)
         map_pois.pois[poi_index as usize].used = true;
+
+        // CPI to gameplay-state to deduct gold atomically
+        let seeds = &[POI_AUTHORITY_SEED, &[ctx.bumps.poi_authority]];
+        gameplay_state::cpi::modify_gold_authorized(
+            CpiContext::new_with_signer(
+                ctx.accounts.gameplay_state_program.to_account_info(),
+                gameplay_state::cpi::accounts::ModifyGoldAuthorized {
+                    game_state: ctx.accounts.game_state.to_account_info(),
+                    poi_authority: ctx.accounts.poi_authority.to_account_info(),
+                },
+                &[&seeds[..]],
+            ),
+            -(result.cost as i16),
+        )?;
 
         emit!(GearScrapped {
             session: map_pois.session,
@@ -765,6 +826,34 @@ pub struct InteractRest<'info> {
     )]
     pub map_pois: Account<'info, MapPois>,
 
+    /// Player's GameState for position/time validation (mut for CPI)
+    #[account(
+        mut,
+        seeds = [b"game_state", map_pois.session.as_ref()],
+        bump = game_state.bump,
+        seeds::program = gameplay_state::ID,
+    )]
+    pub game_state: Account<'info, GameState>,
+
+    /// Player's inventory for deriving max_hp (passed to heal CPI)
+    #[account(
+        seeds = [b"inventory", game_state.player.as_ref()],
+        bump = inventory.bump,
+        seeds::program = player_inventory::ID,
+    )]
+    pub inventory: Account<'info, player_inventory::state::PlayerInventory>,
+
+    /// POI authority PDA for signing CPI calls
+    /// CHECK: PDA derived from this program, used as signer in CPI
+    #[account(
+        seeds = [POI_AUTHORITY_SEED],
+        bump,
+    )]
+    pub poi_authority: AccountInfo<'info>,
+
+    /// Gameplay state program for CPI
+    pub gameplay_state_program: Program<'info, gameplay_state::program::GameplayState>,
+
     /// Player initiating the interaction
     pub player: Signer<'info>,
 }
@@ -779,6 +868,14 @@ pub struct InteractPickItem<'info> {
     )]
     pub map_pois: Account<'info, MapPois>,
 
+    /// Player's GameState for position/time validation
+    #[account(
+        seeds = [b"game_state", map_pois.session.as_ref()],
+        bump = game_state.bump,
+        seeds::program = gameplay_state::ID,
+    )]
+    pub game_state: Account<'info, GameState>,
+
     /// Player initiating the interaction
     pub player: Signer<'info>,
 }
@@ -787,10 +884,19 @@ pub struct InteractPickItem<'info> {
 #[derive(Accounts)]
 pub struct InteractToolOil<'info> {
     #[account(
+        mut,
         seeds = [MAP_POIS_SEED, map_pois.session.as_ref()],
         bump = map_pois.bump
     )]
     pub map_pois: Account<'info, MapPois>,
+
+    /// Player's GameState for position/time validation
+    #[account(
+        seeds = [b"game_state", map_pois.session.as_ref()],
+        bump = game_state.bump,
+        seeds::program = gameplay_state::ID,
+    )]
+    pub game_state: Account<'info, GameState>,
 
     /// Player initiating the interaction
     pub player: Signer<'info>,
@@ -806,6 +912,14 @@ pub struct EnterShop<'info> {
     )]
     pub map_pois: Account<'info, MapPois>,
 
+    /// Player's GameState for position/time validation
+    #[account(
+        seeds = [b"game_state", map_pois.session.as_ref()],
+        bump = game_state.bump,
+        seeds::program = gameplay_state::ID,
+    )]
+    pub game_state: Account<'info, GameState>,
+
     /// Player initiating the interaction
     pub player: Signer<'info>,
 }
@@ -820,6 +934,26 @@ pub struct ShopPurchase<'info> {
     )]
     pub map_pois: Account<'info, MapPois>,
 
+    /// Player's GameState for gold deduction via CPI
+    #[account(
+        mut,
+        seeds = [b"game_state", map_pois.session.as_ref()],
+        bump = game_state.bump,
+        seeds::program = gameplay_state::ID,
+    )]
+    pub game_state: Account<'info, GameState>,
+
+    /// POI authority PDA for signing CPI calls
+    /// CHECK: PDA derived from this program, used as signer in CPI
+    #[account(
+        seeds = [POI_AUTHORITY_SEED],
+        bump,
+    )]
+    pub poi_authority: AccountInfo<'info>,
+
+    /// Gameplay state program for CPI
+    pub gameplay_state_program: Program<'info, gameplay_state::program::GameplayState>,
+
     /// Player making the purchase
     pub player: Signer<'info>,
 }
@@ -833,6 +967,26 @@ pub struct ShopReroll<'info> {
         bump = map_pois.bump
     )]
     pub map_pois: Account<'info, MapPois>,
+
+    /// Player's GameState for gold deduction via CPI
+    #[account(
+        mut,
+        seeds = [b"game_state", map_pois.session.as_ref()],
+        bump = game_state.bump,
+        seeds::program = gameplay_state::ID,
+    )]
+    pub game_state: Account<'info, GameState>,
+
+    /// POI authority PDA for signing CPI calls
+    /// CHECK: PDA derived from this program, used as signer in CPI
+    #[account(
+        seeds = [POI_AUTHORITY_SEED],
+        bump,
+    )]
+    pub poi_authority: AccountInfo<'info>,
+
+    /// Gameplay state program for CPI
+    pub gameplay_state_program: Program<'info, gameplay_state::program::GameplayState>,
 
     /// Player rerolling
     pub player: Signer<'info>,
@@ -862,6 +1016,26 @@ pub struct InteractRustyAnvil<'info> {
     )]
     pub map_pois: Account<'info, MapPois>,
 
+    /// Player's GameState for position/time validation and gold deduction via CPI
+    #[account(
+        mut,
+        seeds = [b"game_state", map_pois.session.as_ref()],
+        bump = game_state.bump,
+        seeds::program = gameplay_state::ID,
+    )]
+    pub game_state: Account<'info, GameState>,
+
+    /// POI authority PDA for signing CPI calls
+    /// CHECK: PDA derived from this program, used as signer in CPI
+    #[account(
+        seeds = [POI_AUTHORITY_SEED],
+        bump,
+    )]
+    pub poi_authority: AccountInfo<'info>,
+
+    /// Gameplay state program for CPI
+    pub gameplay_state_program: Program<'info, gameplay_state::program::GameplayState>,
+
     /// Player upgrading
     pub player: Signer<'info>,
 }
@@ -874,6 +1048,14 @@ pub struct InteractRuneKiln<'info> {
         bump = map_pois.bump
     )]
     pub map_pois: Account<'info, MapPois>,
+
+    /// Player's GameState for position/time validation
+    #[account(
+        seeds = [b"game_state", map_pois.session.as_ref()],
+        bump = game_state.bump,
+        seeds::program = gameplay_state::ID,
+    )]
+    pub game_state: Account<'info, GameState>,
 
     /// Player fusing
     pub player: Signer<'info>,
@@ -889,6 +1071,14 @@ pub struct DiscoverWaypoint<'info> {
     )]
     pub map_pois: Account<'info, MapPois>,
 
+    /// Player's GameState for position/time validation
+    #[account(
+        seeds = [b"game_state", map_pois.session.as_ref()],
+        bump = game_state.bump,
+        seeds::program = gameplay_state::ID,
+    )]
+    pub game_state: Account<'info, GameState>,
+
     /// Player discovering
     pub player: Signer<'info>,
 }
@@ -901,6 +1091,14 @@ pub struct FastTravel<'info> {
         bump = map_pois.bump
     )]
     pub map_pois: Account<'info, MapPois>,
+
+    /// Player's GameState for position/time validation
+    #[account(
+        seeds = [b"game_state", map_pois.session.as_ref()],
+        bump = game_state.bump,
+        seeds::program = gameplay_state::ID,
+    )]
+    pub game_state: Account<'info, GameState>,
 
     /// Player traveling
     pub player: Signer<'info>,
@@ -916,6 +1114,14 @@ pub struct InteractSurveyBeacon<'info> {
     )]
     pub map_pois: Account<'info, MapPois>,
 
+    /// Player's GameState for position/time validation
+    #[account(
+        seeds = [b"game_state", map_pois.session.as_ref()],
+        bump = game_state.bump,
+        seeds::program = gameplay_state::ID,
+    )]
+    pub game_state: Account<'info, GameState>,
+
     /// Player activating
     pub player: Signer<'info>,
 }
@@ -930,6 +1136,14 @@ pub struct InteractSeismicScanner<'info> {
     )]
     pub map_pois: Account<'info, MapPois>,
 
+    /// Player's GameState for position/time validation
+    #[account(
+        seeds = [b"game_state", map_pois.session.as_ref()],
+        bump = game_state.bump,
+        seeds::program = gameplay_state::ID,
+    )]
+    pub game_state: Account<'info, GameState>,
+
     /// Player activating
     pub player: Signer<'info>,
 }
@@ -943,6 +1157,26 @@ pub struct InteractScrapChute<'info> {
         bump = map_pois.bump
     )]
     pub map_pois: Account<'info, MapPois>,
+
+    /// Player's GameState for position/time validation and gold deduction via CPI
+    #[account(
+        mut,
+        seeds = [b"game_state", map_pois.session.as_ref()],
+        bump = game_state.bump,
+        seeds::program = gameplay_state::ID,
+    )]
+    pub game_state: Account<'info, GameState>,
+
+    /// POI authority PDA for signing CPI calls
+    /// CHECK: PDA derived from this program, used as signer in CPI
+    #[account(
+        seeds = [POI_AUTHORITY_SEED],
+        bump,
+    )]
+    pub poi_authority: AccountInfo<'info>,
+
+    /// Gameplay state program for CPI
+    pub gameplay_state_program: Program<'info, gameplay_state::program::GameplayState>,
 
     /// Player scrapping
     pub player: Signer<'info>,

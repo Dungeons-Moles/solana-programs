@@ -6,12 +6,11 @@ use combat_system::state::{EffectType, ItemEffect, TriggerType};
 use crate::archetypes::ids;
 
 /// Tunnel Rat: On Hit (once/turn): steal 1 Gold
-/// Note: StealGold effect requires custom handling in gameplay-state
 pub static TUNNEL_RAT_TRAITS: [ItemEffect; 1] = [ItemEffect {
     trigger: TriggerType::OnHit,
     once_per_turn: true,
-    effect_type: EffectType::DealDamage, // Placeholder - actual gold theft handled separately
-    value: 0,                            // No damage, just triggers gold theft logic
+    effect_type: EffectType::StealGold,
+    value: 1,
 }];
 
 /// Cave Bat: Every other turn: restore 1 HP
@@ -79,10 +78,10 @@ pub static FROST_WISP_TRAITS: [ItemEffect; 1] = [ItemEffect {
     value: 2,
 }];
 
-/// Powder Tick: Countdown(2): deal 6 damage to player and itself (non-weapon)
-/// Note: Countdown mechanic requires combat engine extension
+/// Powder Tick: Countdown(2): deal 6 damage to player (non-weapon)
+/// Fires every 2 turns (turn 2, 4, 6, etc.)
 pub static POWDER_TICK_TRAITS: [ItemEffect; 1] = [ItemEffect {
-    trigger: TriggerType::TurnStart, // Fires each turn, countdown handled externally
+    trigger: TriggerType::Countdown { turns: 2 },
     once_per_turn: false,
     effect_type: EffectType::DealNonWeaponDamage,
     value: 6,
@@ -105,6 +104,15 @@ pub static BLOOD_MOSQUITO_TRAITS: [ItemEffect; 1] = [ItemEffect {
     value: 1,
 }];
 
+
+/// Crystal Mimic: Battle Start: gain 1 Reflection
+pub static CRYSTAL_MIMIC_TRAITS: [ItemEffect; 1] = [ItemEffect {
+    trigger: TriggerType::BattleStart,
+    once_per_turn: false,
+    effect_type: EffectType::ApplyReflection,
+    value: 1,
+}];
+
 /// Get the trait effects for an enemy archetype
 pub fn get_enemy_traits(archetype_id: u8) -> &'static [ItemEffect] {
     match archetype_id {
@@ -120,6 +128,7 @@ pub fn get_enemy_traits(archetype_id: u8) -> &'static [ItemEffect] {
         ids::POWDER_TICK => &POWDER_TICK_TRAITS,
         ids::COIN_SLUG => &COIN_SLUG_TRAITS,
         ids::BLOOD_MOSQUITO => &BLOOD_MOSQUITO_TRAITS,
+        ids::CRYSTAL_MIMIC => &CRYSTAL_MIMIC_TRAITS,
         _ => &[],
     }
 }
@@ -158,7 +167,7 @@ mod tests {
 
     #[test]
     fn test_all_archetypes_have_traits() {
-        for id in 0..12u8 {
+        for id in 0..13u8 {
             let traits = get_enemy_traits(id);
             assert!(!traits.is_empty(), "Archetype {} has no traits", id);
         }
@@ -166,7 +175,7 @@ mod tests {
 
     #[test]
     fn test_invalid_archetype_returns_empty() {
-        let traits = get_enemy_traits(12);
+        let traits = get_enemy_traits(13);
         assert!(traits.is_empty());
         let traits = get_enemy_traits(255);
         assert!(traits.is_empty());

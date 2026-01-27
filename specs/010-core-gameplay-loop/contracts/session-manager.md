@@ -86,12 +86,6 @@ Delegates session to MagicBlock ephemeral rollup. (No changes)
 
 ---
 
-### commit_session
-
-Commits state from ephemeral rollup. (No changes)
-
----
-
 ### force_close_session
 
 Force closes abandoned session. (No changes)
@@ -123,7 +117,6 @@ pub struct SessionEnded {
     pub session_id: u64,
     pub campaign_level: u8,
     pub victory: bool,
-    pub final_state_hash: [u8; 32],
     pub timestamp: i64,
 }
 ```

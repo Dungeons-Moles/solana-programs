@@ -37,6 +37,7 @@ pub fn decay_status_effects(status: &mut StatusEffects) {
     status.chill = status.chill.saturating_sub(1);
     status.bleed = status.bleed.saturating_sub(1);
     status.shrapnel = 0;
+    // Reflection does not decay - it consumes stacks when triggered
 }
 
 #[cfg(test)]

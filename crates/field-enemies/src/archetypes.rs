@@ -5,7 +5,7 @@ use crate::state::EnemyStats;
 use combat_system::state::CombatantInput;
 
 /// Number of enemy archetypes
-pub const ARCHETYPE_COUNT: usize = 12;
+pub const ARCHETYPE_COUNT: usize = 13;
 
 /// Enemy archetype IDs
 pub mod ids {
@@ -21,6 +21,7 @@ pub mod ids {
     pub const POWDER_TICK: u8 = 9;
     pub const COIN_SLUG: u8 = 10;
     pub const BLOOD_MOSQUITO: u8 = 11;
+    pub const CRYSTAL_MIMIC: u8 = 12;
 }
 
 /// Enemy archetype metadata
@@ -28,7 +29,6 @@ pub mod ids {
 pub struct EnemyArchetype {
     pub id: u8,
     pub name: &'static str,
-    pub emoji: &'static str,
     pub biome_a_weight: u8,
     pub biome_b_weight: u8,
 }
@@ -38,86 +38,80 @@ pub static ENEMY_ARCHETYPES: [EnemyArchetype; ARCHETYPE_COUNT] = [
     EnemyArchetype {
         id: 0,
         name: "Tunnel Rat",
-        emoji: "🐀",
         biome_a_weight: 2,
         biome_b_weight: 1,
     },
     EnemyArchetype {
         id: 1,
         name: "Cave Bat",
-        emoji: "🦇",
         biome_a_weight: 1,
         biome_b_weight: 1,
     },
     EnemyArchetype {
         id: 2,
         name: "Spore Slime",
-        emoji: "🟢",
         biome_a_weight: 1,
         biome_b_weight: 1,
     },
     EnemyArchetype {
         id: 3,
         name: "Rust Mite Swarm",
-        emoji: "🐜",
         biome_a_weight: 1,
         biome_b_weight: 2,
     },
     EnemyArchetype {
         id: 4,
         name: "Collapsed Miner",
-        emoji: "🧟",
         biome_a_weight: 2,
         biome_b_weight: 1,
     },
     EnemyArchetype {
         id: 5,
         name: "Shard Beetle",
-        emoji: "🪲",
         biome_a_weight: 2,
         biome_b_weight: 1,
     },
     EnemyArchetype {
         id: 6,
         name: "Tunnel Warden",
-        emoji: "🦀",
         biome_a_weight: 1,
         biome_b_weight: 1,
     },
     EnemyArchetype {
         id: 7,
         name: "Burrow Ambusher",
-        emoji: "🦂",
         biome_a_weight: 1,
         biome_b_weight: 2,
     },
     EnemyArchetype {
         id: 8,
         name: "Frost Wisp",
-        emoji: "🧊",
         biome_a_weight: 1,
         biome_b_weight: 2,
     },
     EnemyArchetype {
         id: 9,
         name: "Powder Tick",
-        emoji: "🧨",
         biome_a_weight: 1,
         biome_b_weight: 2,
     },
     EnemyArchetype {
         id: 10,
         name: "Coin Slug",
-        emoji: "🐌",
         biome_a_weight: 2,
         biome_b_weight: 1,
     },
     EnemyArchetype {
         id: 11,
         name: "Blood Mosquito",
-        emoji: "🦟",
         biome_a_weight: 1,
         biome_b_weight: 2,
+    },
+    EnemyArchetype {
+        id: 12,
+        name: "Crystal Mimic",
+        biome_a_weight: 1,
+        biome_b_weight: 1,
     },
 ];
 
@@ -413,6 +407,30 @@ pub static ENEMY_STATS: [[EnemyStats; 3]; ARCHETYPE_COUNT] = [
             dig: 2,
         },
     ],
+    // 12: Crystal Mimic - 10/2/4/2/1, 14/3/5/3/1, 18/4/6/4/2
+    [
+        EnemyStats {
+            hp: 10,
+            atk: 2,
+            arm: 4,
+            spd: 2,
+            dig: 1,
+        },
+        EnemyStats {
+            hp: 14,
+            atk: 3,
+            arm: 5,
+            spd: 3,
+            dig: 1,
+        },
+        EnemyStats {
+            hp: 18,
+            atk: 4,
+            arm: 6,
+            spd: 4,
+            dig: 2,
+        },
+    ],
 ];
 
 /// Get stats for an enemy by archetype ID and tier
@@ -475,7 +493,7 @@ mod tests {
 
     #[test]
     fn test_invalid_archetype_id() {
-        assert!(get_enemy_stats(12, 0).is_none());
+        assert!(get_enemy_stats(13, 0).is_none());
         assert!(get_enemy_stats(255, 0).is_none());
     }
 
@@ -488,7 +506,7 @@ mod tests {
     #[test]
     fn test_all_36_configurations() {
         // Verify all 12 archetypes × 3 tiers are valid
-        for archetype_id in 0..12u8 {
+        for archetype_id in 0..13u8 {
             for tier in 0..3u8 {
                 let stats = get_enemy_stats(archetype_id, tier);
                 assert!(

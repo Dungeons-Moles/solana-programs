@@ -1,2 +1,8 @@
-/// Empty state hash (32 zero bytes)
-pub const EMPTY_STATE_HASH: [u8; 32] = [0u8; 32];
+/// Map width in tiles (fixed for all sessions)
+pub const MAP_WIDTH: u8 = 50;
+
+/// Map height in tiles (fixed for all sessions)
+pub const MAP_HEIGHT: u8 = 50;
+
+/// Campaign levels per act
+pub const LEVELS_PER_ACT: u8 = 10;

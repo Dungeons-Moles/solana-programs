@@ -22,4 +22,20 @@ pub enum MapGeneratorError {
     /// Batch update exceeds maximum allowed
     #[msg("Batch update exceeds maximum allowed")]
     TooManyUpdates,
+
+    /// Map generation failed (could not find valid spawn point)
+    #[msg("Map generation failed")]
+    MapGenerationFailed,
+
+    /// Map already exists for this session
+    #[msg("Map already exists for this session")]
+    MapAlreadyExists,
+
+    /// Session account is not owned by session manager
+    #[msg("Invalid session owner")]
+    InvalidSessionOwner,
+
+    /// POI index is out of bounds
+    #[msg("POI index out of bounds")]
+    InvalidPoiIndex,
 }

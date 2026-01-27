@@ -18,5 +18,8 @@ idl-build = ["anchor-lang/idl-build"]
 
 [dependencies]
 anchor-lang = "0.32.0"
-field-enemies = { path = "../field-enemies", features = ["cpi"] }
-boss-system = { path = "../boss-system", features = ["cpi"] }
+combat-system = { path = "../../crates/combat-system" }
+map-generator = { path = "../map-generator", features = ["no-entrypoint"] }
+field-enemies = { path = "../../crates/field-enemies" }
+boss-system = { path = "../../crates/boss-system" }
+player-inventory = { path = "../player-inventory", features = ["cpi"] }

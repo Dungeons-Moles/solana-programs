@@ -46,19 +46,9 @@ impl Phase {
     }
 }
 
-/// Stat type enumeration for modify_stat instruction
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug, InitSpace)]
-pub enum StatType {
-    Hp,
-    MaxHp,
-    Atk,
-    Arm,
-    Spd,
-    Dig,
-}
-
 /// Core gameplay state account linked to a GameSession.
 /// Contains all mutable game data for a single run.
+/// Stats (ATK, ARM, SPD, DIG, MaxHP) are derived from inventory at runtime.
 /// PDA Seeds: ["game_state", session_pda.as_ref()]
 #[account]
 #[derive(InitSpace)]
@@ -81,23 +71,8 @@ pub struct GameState {
     /// Map boundary Y (immutable after init)
     pub map_height: u8,
 
-    /// Current health points (0 <= hp <= max_hp)
-    pub hp: i8,
-
-    /// Maximum health points
-    pub max_hp: u8,
-
-    /// Attack stat (allows negative for debuffs)
-    pub atk: i8,
-
-    /// Armor stat (allows negative for debuffs)
-    pub arm: i8,
-
-    /// Speed stat (allows negative for debuffs)
-    pub spd: i8,
-
-    /// Digging stat (affects wall dig cost)
-    pub dig: i8,
+    /// Current health points (0 <= hp <= derived max_hp)
+    pub hp: i16,
 
     /// Gear slot capacity (4 -> 6 -> 8)
     pub gear_slots: u8,
@@ -136,4 +111,43 @@ impl GameState {
     pub fn seeds(session: &Pubkey) -> [&[u8]; 2] {
         [GAME_STATE_SEED, session.as_ref()]
     }
+}
+
+/// A spawned enemy instance on the map
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, Default, InitSpace)]
+pub struct EnemyInstance {
+    /// References EnemyArchetype ID (0-11)
+    pub archetype_id: u8,
+    /// Tier: 0=T1, 1=T2, 2=T3
+    pub tier: u8,
+    /// Map X coordinate
+    pub x: u8,
+    /// Map Y coordinate
+    pub y: u8,
+    /// True if already defeated
+    pub defeated: bool,
+}
+
+/// On-chain account storing all enemy instances for a map
+/// PDA Seeds: ["map_enemies", session.as_ref()]
+#[account]
+#[derive(InitSpace)]
+pub struct MapEnemies {
+    /// Parent session PDA
+    pub session: Pubkey,
+
+    /// Enemy instances (max 48)
+    #[max_len(48)]
+    pub enemies: Vec<EnemyInstance>,
+
+    /// Actual count of enemies
+    pub count: u8,
+
+    /// PDA bump seed
+    pub bump: u8,
+}
+
+impl MapEnemies {
+    /// PDA seed prefix
+    pub const SEED_PREFIX: &'static [u8] = b"map_enemies";
 }

@@ -1,6 +1,6 @@
 use crate::constants::{MAX_TURNS, SUDDEN_DEATH_TURN};
 use crate::effects::process_shrapnel_retaliation;
-use crate::state::{ItemEffect, StatusEffects, TriggerType};
+use crate::state::{CombatLogEntry, ItemEffect, StatusEffects, TriggerType};
 use crate::triggers::{process_triggers_for_phase, CombatantStats};
 
 pub fn calculate_weapon_damage(attacker_atk: i16, defender_arm: i16) -> i16 {
@@ -61,6 +61,9 @@ pub fn execute_strikes(
     on_hit_effects: &mut [ItemEffect],
     triggered_flags: &mut [bool],
     turn: u8,
+    is_player_attacking: bool,
+    gold_change: &mut i16,
+    log: &mut Vec<CombatLogEntry>,
 ) -> (i16, i16) {
     let mut total_damage: i16 = 0;
 
@@ -69,6 +72,11 @@ pub fn execute_strikes(
             execute_strike(attacker_stats.atk, defender_stats.arm, defender_stats.hp);
         defender_stats.hp = new_hp;
         total_damage = total_damage.saturating_add(damage);
+
+        // Log the attack
+        if damage > 0 {
+            log.push(CombatLogEntry::attack(turn, is_player_attacking, damage));
+        }
 
         if damage > 0 {
             process_triggers_for_phase(
@@ -80,11 +88,24 @@ pub fn execute_strikes(
                 defender_stats,
                 defender_status,
                 triggered_flags,
+                is_player_attacking,
+                gold_change,
+                log,
             );
         }
 
+        // Process shrapnel retaliation
+        let old_attacker_hp = attacker_stats.hp;
         attacker_stats.hp =
             process_shrapnel_retaliation(defender_status.shrapnel, attacker_stats.hp);
+        let shrapnel_damage = old_attacker_hp - attacker_stats.hp;
+        if shrapnel_damage > 0 {
+            log.push(CombatLogEntry::shrapnel_retaliation(
+                turn,
+                is_player_attacking, // The attacker takes the damage
+                shrapnel_damage,
+            ));
+        }
 
         if defender_stats.hp <= 0 {
             break;
@@ -148,6 +169,8 @@ mod tests {
         let mut defender_status = StatusEffects::default();
         let mut effects: Vec<ItemEffect> = Vec::new();
         let mut flags: Vec<bool> = Vec::new();
+        let mut gold_change: i16 = 0;
+        let mut log: Vec<CombatLogEntry> = Vec::new();
 
         let (_, total_damage_first) = execute_strikes(
             2,
@@ -158,6 +181,9 @@ mod tests {
             &mut effects,
             &mut flags,
             1,
+            true,
+            &mut gold_change,
+            &mut log,
         );
         let hp_after_first = defender.hp;
 
@@ -179,6 +205,8 @@ mod tests {
         let mut defender_status_again = StatusEffects::default();
         let mut effects_again: Vec<ItemEffect> = Vec::new();
         let mut flags_again: Vec<bool> = Vec::new();
+        let mut gold_change_again: i16 = 0;
+        let mut log_again: Vec<CombatLogEntry> = Vec::new();
 
         let (_, total_damage_second) = execute_strikes(
             2,
@@ -189,10 +217,15 @@ mod tests {
             &mut effects_again,
             &mut flags_again,
             1,
+            true,
+            &mut gold_change_again,
+            &mut log_again,
         );
 
         assert_eq!(total_damage_first, total_damage_second);
         assert_eq!(hp_after_first, defender_again.hp);
+        // Both should have the same log length
+        assert_eq!(log.len(), log_again.len());
     }
 
     #[test]

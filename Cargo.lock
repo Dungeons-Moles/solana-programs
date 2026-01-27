@@ -341,7 +341,6 @@ dependencies = [
 name = "boss-system"
 version = "0.1.0"
 dependencies = [
- "anchor-lang",
  "combat-system",
 ]
 
@@ -500,7 +499,6 @@ version = "0.1.0"
 dependencies = [
  "anchor-lang",
  "combat-system",
- "map-generator",
 ]
 
 [[package]]
@@ -533,7 +531,10 @@ version = "0.1.0"
 dependencies = [
  "anchor-lang",
  "boss-system",
+ "combat-system",
  "field-enemies",
+ "map-generator",
+ "player-inventory",
 ]
 
 [[package]]
@@ -692,6 +693,7 @@ name = "player-inventory"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
+ "combat-system",
 ]
 
 [[package]]
@@ -886,6 +888,9 @@ name = "session-manager"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
+ "gameplay-state",
+ "map-generator",
+ "player-inventory",
 ]
 
 [[package]]

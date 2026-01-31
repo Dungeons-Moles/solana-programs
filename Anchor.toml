@@ -7,16 +7,16 @@ player_profile = "29DPbP1zuCCRg63PiShMjxAmZos97BR5TmhpijUYQzze"
 session_manager = "FcMT7MzBLVQGaMATEMws3fjsL2Q77QSHmoEPdowTMxJa"
 map_generator = "BYdGuEGf8NqtLnHpSRuZFrPGEgvdxMfGfTt71QVBxYHa"
 gameplay_state = "5VAaGSSoBP4UEt3RL2EXvDwpeDxAXMndsJn7QX96nc4n"
-player_inventory = "8vNWjVvz8ZZvPLCKhNJcJH6vxCqNKJgq3hLYAqYdQmQZ"
-poi_system = "FJVnZE45hxcd7BJeci27BiTx23XD6inN4paiM2EkMaoB"
+player_inventory = "5BtqiWegvVAgEnTRUofB9oUoQvPztYqSkMPwRpYQacP8"
+poi_system = "6E27r1Cyo2CNPvtRsonn3uHUAdznS3cMXEBX4HRbfBQY"
 
 [programs.devnet]
 player_profile = "29DPbP1zuCCRg63PiShMjxAmZos97BR5TmhpijUYQzze"
 session_manager = "FcMT7MzBLVQGaMATEMws3fjsL2Q77QSHmoEPdowTMxJa"
 map_generator = "BYdGuEGf8NqtLnHpSRuZFrPGEgvdxMfGfTt71QVBxYHa"
 gameplay_state = "5VAaGSSoBP4UEt3RL2EXvDwpeDxAXMndsJn7QX96nc4n"
-player_inventory = "8vNWjVvz8ZZvPLCKhNJcJH6vxCqNKJgq3hLYAqYdQmQZ"
-poi_system = "FJVnZE45hxcd7BJeci27BiTx23XD6inN4paiM2EkMaoB"
+player_inventory = "5BtqiWegvVAgEnTRUofB9oUoQvPztYqSkMPwRpYQacP8"
+poi_system = "6E27r1Cyo2CNPvtRsonn3uHUAdznS3cMXEBX4HRbfBQY"
 
 [registry]
 url = "https://api.apr.dev"

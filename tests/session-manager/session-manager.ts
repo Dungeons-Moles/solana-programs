@@ -213,7 +213,7 @@ describe("session-manager", () => {
         systemProgram: SystemProgram.programId,
       } as any)
       .preInstructions([anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({ units: 1400000 }), anchor.web3.ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 })])
-      .signers([user])
+      .signers([user, burnerWallet])
       .rpc();
 
     return {
@@ -283,10 +283,11 @@ describe("session-manager", () => {
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
+          burnerWallet: burnerWallet.publicKey,
           inventory: inventoryPDA,
           playerInventoryProgram: playerInventoryProgram.programId,
         } as any)
-        .signers([user])
+        .signers([user, burnerWallet])
         .rpc();
     });
 
@@ -326,7 +327,7 @@ describe("session-manager", () => {
           inventoryPDA,
         );
       expect(inventory.player.toString()).to.equal(
-        user.publicKey.toString(),
+        burnerWallet.publicKey.toString(),
       );
 
       await gameplayProgram.methods
@@ -343,10 +344,11 @@ describe("session-manager", () => {
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
+          burnerWallet: burnerWallet.publicKey,
           inventory: inventoryPDA,
           playerInventoryProgram: playerInventoryProgram.programId,
         } as any)
-        .signers([user])
+        .signers([user, burnerWallet])
         .rpc();
     });
   });
@@ -389,10 +391,11 @@ describe("session-manager", () => {
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
+          burnerWallet: burnerWallet.publicKey,
           inventory: inventoryPDA,
           playerInventoryProgram: playerInventoryProgram.programId,
         } as any)
-        .signers([user])
+        .signers([user, burnerWallet])
         .rpc();
     });
   });
@@ -434,10 +437,11 @@ describe("session-manager", () => {
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
+          burnerWallet: burnerWallet.publicKey,
           inventory: inventoryPDA,
           playerInventoryProgram: playerInventoryProgram.programId,
         } as any)
-        .signers([user])
+        .signers([user, burnerWallet])
         .rpc();
     });
   });
@@ -475,10 +479,11 @@ describe("session-manager", () => {
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
+          burnerWallet: burnerWallet.publicKey,
           inventory: inventoryPDA,
           playerInventoryProgram: playerInventoryProgram.programId,
         } as any)
-        .signers([user])
+        .signers([user, burnerWallet])
         .rpc();
 
       // Verify session account is closed

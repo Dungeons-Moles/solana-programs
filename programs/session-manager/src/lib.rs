@@ -22,11 +22,20 @@ pub const PLAYER_PROFILE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
 
 /// POI System program ID for manual CPI.
 /// Must match the declare_id! in poi-system/src/lib.rs
-/// FJVnZE45hxcd7BJeci27BiTx23XD6inN4paiM2EkMaoB
+/// 6E27r1Cyo2CNPvtRsonn3uHUAdznS3cMXEBX4HRbfBQY
 pub const POI_SYSTEM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
-    0xd4, 0x7f, 0x09, 0xdc, 0xd0, 0xbf, 0x8e, 0xd8, 0xa9, 0xdf, 0xab, 0x1d, 0x5a, 0xe3, 0xda, 0xea,
-    0x4c, 0xc3, 0x28, 0x0c, 0xe4, 0xdf, 0x73, 0xe8, 0x6e, 0xc5, 0xc3, 0xd7, 0x13, 0xf1, 0xd1, 0x4a,
+    0x4d, 0xa0, 0x3f, 0xd1, 0xb6, 0x38, 0x95, 0xb5, 0x02, 0xc3, 0xad, 0x5f, 0x41, 0x88, 0x58, 0x7a,
+    0xeb, 0xa6, 0xeb, 0xd8, 0xf1, 0x6b, 0x02, 0x23, 0xb9, 0x0e, 0xb1, 0x15, 0x96, 0x67, 0xd7, 0x4d,
 ]);
+
+/// Discriminator for player_profile::consume_run instruction.
+/// Computed as sha256("global:consume_run")[..8].
+///
+/// NOTE: This is manually specified because session-manager already has a
+/// manual PlayerProfile struct (avoiding circular deps). If player-profile's
+/// consume_run instruction changes, this must be updated.
+pub const CONSUME_RUN_DISCRIMINATOR: [u8; 8] =
+    [0x6b, 0x65, 0x36, 0x52, 0x84, 0x9c, 0x0f, 0x22];
 
 /// Discriminator for poi_system::initialize_map_pois instruction.
 /// Computed as sha256("global:initialize_map_pois")[..8].
@@ -82,6 +91,13 @@ pub mod session_manager {
             campaign_level <= player_profile.highest_level_unlocked,
             SessionManagerError::LevelNotUnlocked
         );
+
+        // Consume one run from player profile via CPI
+        consume_run_cpi(
+            &ctx.accounts.player_profile_program,
+            &ctx.accounts.player_profile.to_account_info(),
+            &ctx.accounts.player.to_account_info(),
+        )?;
 
         let counter = &mut ctx.accounts.session_counter;
         let clock = Clock::get()?;
@@ -158,6 +174,7 @@ pub mod session_manager {
                     generated_map: ctx.accounts.generated_map.to_account_info(),
                     map_enemies: ctx.accounts.map_enemies.to_account_info(),
                     player: ctx.accounts.player.to_account_info(),
+                    burner_wallet: ctx.accounts.burner_wallet.to_account_info(),
                     system_program: ctx.accounts.system_program.to_account_info(),
                 },
             ),
@@ -171,12 +188,14 @@ pub mod session_manager {
         // 4. Initialize Inventory for this session
         // Each session gets its own inventory (PDA derived from session key).
         // This ensures clean inventory state per run and allows concurrent sessions.
+        // IMPORTANT: Use burner_wallet as the inventory owner since all gameplay
+        // transactions (equip, fuse, etc.) are signed by the burner wallet.
         player_inventory::cpi::initialize_inventory(CpiContext::new(
             ctx.accounts.player_inventory_program.to_account_info(),
             player_inventory::cpi::accounts::InitializeInventory {
                 inventory: ctx.accounts.inventory.to_account_info(),
                 session: ctx.accounts.game_session.to_account_info(),
-                player: ctx.accounts.player.to_account_info(),
+                player: ctx.accounts.burner_wallet.to_account_info(),
                 system_program: ctx.accounts.system_program.to_account_info(),
             },
         ))?;
@@ -191,6 +210,7 @@ pub mod session_manager {
             &ctx.accounts.poi_system_program,
             &ctx.accounts.map_pois,
             &ctx.accounts.game_session.to_account_info(),
+            &ctx.accounts.generated_map.to_account_info(),
             &ctx.accounts.player.to_account_info(),
             &ctx.accounts.system_program.to_account_info(),
             act,
@@ -278,11 +298,12 @@ pub mod session_manager {
         });
 
         // Close inventory via CPI to ensure fresh inventory for next session
+        // Use burner_wallet since it's the inventory owner (set during start_session)
         player_inventory::cpi::close_inventory(CpiContext::new(
             ctx.accounts.player_inventory_program.to_account_info(),
             player_inventory::cpi::accounts::CloseInventory {
                 inventory: ctx.accounts.inventory.to_account_info(),
-                player: ctx.accounts.player.to_account_info(),
+                player: ctx.accounts.burner_wallet.to_account_info(),
             },
         ))?;
 
@@ -389,8 +410,9 @@ pub struct StartSession<'info> {
     )]
     pub session_counter: Account<'info, SessionCounter>,
 
-    /// Player profile for validation (from player-profile program)
+    /// Player profile for validation and run consumption (from player-profile program)
     #[account(
+        mut,
         seeds = [b"player", player.key().as_ref()],
         bump,
         seeds::program = PlayerProfileRef::id()
@@ -400,9 +422,10 @@ pub struct StartSession<'info> {
     #[account(mut)]
     pub player: Signer<'info>,
 
-    /// CHECK: Burner wallet receives SOL for gameplay transactions
+    /// Burner wallet that will own all session-specific accounts (inventory, etc.)
+    /// Must be a signer so it can be set as the inventory owner for gameplay transactions.
     #[account(mut)]
-    pub burner_wallet: AccountInfo<'info>,
+    pub burner_wallet: Signer<'info>,
 
     /// Map configuration for map generation
     pub map_config: Account<'info, MapConfigAccount>,
@@ -433,6 +456,9 @@ pub struct StartSession<'info> {
     /// CHECK: POI system program for manual CPI, validated by address constraint
     pub poi_system_program: UncheckedAccount<'info>,
     pub player_inventory_program: Program<'info, PlayerInventory>,
+    #[account(address = PLAYER_PROFILE_PROGRAM_ID)]
+    /// CHECK: Player profile program for manual CPI, validated by address constraint
+    pub player_profile_program: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -473,12 +499,17 @@ pub struct EndSession<'info> {
         seeds = [GameSession::SEED_PREFIX, player.key().as_ref(), &[campaign_level]],
         bump = game_session.bump,
         has_one = player @ SessionManagerError::Unauthorized,
+        has_one = burner_wallet @ SessionManagerError::Unauthorized,
         close = player
     )]
     pub game_session: Account<'info, GameSession>,
 
     #[account(mut)]
     pub player: Signer<'info>,
+
+    /// Burner wallet that owns the inventory (must sign to close inventory)
+    #[account(mut)]
+    pub burner_wallet: Signer<'info>,
 
     /// Player's inventory account (closed via CPI to ensure fresh inventory next session)
     #[account(mut)]
@@ -527,6 +558,44 @@ pub struct SessionEnded {
 /// 2. Update gameplay-state's END_SESSION_DISCRIMINATOR constant
 pub const END_SESSION_DISCRIMINATOR: [u8; 8] = [0x0b, 0xf4, 0x3d, 0x9a, 0xd4, 0xf9, 0x0f, 0x42];
 
+/// Manual CPI to player_profile::consume_run.
+///
+/// This uses manual instruction construction because session-manager already
+/// has a manual PlayerProfile struct (avoiding full CPI dependency).
+/// The discriminator is validated by `test_consume_run_discriminator`.
+fn consume_run_cpi<'info>(
+    player_profile_program: &AccountInfo<'info>,
+    player_profile: &AccountInfo<'info>,
+    owner: &AccountInfo<'info>,
+) -> Result<()> {
+    use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
+    use anchor_lang::solana_program::program::invoke;
+
+    let data = CONSUME_RUN_DISCRIMINATOR.to_vec();
+
+    let accounts = vec![
+        AccountMeta::new(player_profile.key(), false),
+        AccountMeta::new_readonly(owner.key(), true),
+    ];
+
+    let instruction = Instruction {
+        program_id: PLAYER_PROFILE_PROGRAM_ID,
+        accounts,
+        data,
+    };
+
+    invoke(
+        &instruction,
+        &[
+            player_profile.clone(),
+            owner.clone(),
+            player_profile_program.clone(),
+        ],
+    )?;
+
+    Ok(())
+}
+
 /// Manual CPI to poi_system::initialize_map_pois.
 ///
 /// This uses manual instruction construction because session-manager cannot depend
@@ -537,6 +606,7 @@ fn initialize_map_pois_cpi<'info>(
     poi_system_program: &AccountInfo<'info>,
     map_pois: &AccountInfo<'info>,
     session: &AccountInfo<'info>,
+    generated_map: &AccountInfo<'info>,
     payer: &AccountInfo<'info>,
     system_program: &AccountInfo<'info>,
     act: u8,
@@ -555,6 +625,7 @@ fn initialize_map_pois_cpi<'info>(
     let accounts = vec![
         AccountMeta::new(map_pois.key(), false),
         AccountMeta::new_readonly(session.key(), false),
+        AccountMeta::new_readonly(generated_map.key(), false),
         AccountMeta::new(payer.key(), true),
         AccountMeta::new_readonly(system_program.key(), false),
     ];
@@ -570,6 +641,7 @@ fn initialize_map_pois_cpi<'info>(
         &[
             map_pois.clone(),
             session.clone(),
+            generated_map.clone(),
             payer.clone(),
             system_program.clone(),
             poi_system_program.clone(),
@@ -593,6 +665,19 @@ mod tests {
         assert_eq!(
             END_SESSION_DISCRIMINATOR, expected,
             "END_SESSION_DISCRIMINATOR doesn't match sha256(\"global:end_session\")[..8]"
+        );
+    }
+
+    /// Validates that CONSUME_RUN_DISCRIMINATOR matches sha256("global:consume_run")[..8].
+    /// Computes the hash at test time so a rename is caught immediately.
+    #[test]
+    fn test_consume_run_discriminator() {
+        use sha2::{Sha256, Digest};
+        let hash = Sha256::digest(b"global:consume_run");
+        let expected: [u8; 8] = hash[..8].try_into().unwrap();
+        assert_eq!(
+            CONSUME_RUN_DISCRIMINATOR, expected,
+            "CONSUME_RUN_DISCRIMINATOR doesn't match sha256(\"global:consume_run\")[..8]"
         );
     }
 

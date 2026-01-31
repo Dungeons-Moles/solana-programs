@@ -91,6 +91,8 @@ pub enum ToolOilModification {
     PlusSpd,
     /// +1 DIG
     PlusDig,
+    /// +1 ARM
+    PlusArm,
 }
 
 /// Placement rule for spawn configuration
@@ -131,6 +133,18 @@ pub struct CacheOffer {
     pub poi_index: u8,
     /// The 3 items offered
     pub items: [OfferItem; 3],
+    /// Seed used to generate this offer (for verification)
+    pub generated_at_seed: u64,
+}
+
+/// Oil offer for Tool Oil Rack (L4).
+/// Stores 3 of 4 possible oils generated deterministically.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, InitSpace, Default)]
+pub struct OilOffer {
+    /// Which POI this offer belongs to
+    pub poi_index: u8,
+    /// The 3 oil flags offered (from OIL_FLAG_ATK, SPD, DIG, ARM)
+    pub oils: [u8; 3],
     /// Seed used to generate this offer (for verification)
     pub generated_at_seed: u64,
 }
@@ -198,6 +212,8 @@ pub struct MapPois {
     pub shop_state: ShopState,
     /// Current cache offer (for pick-item POIs)
     pub current_offer: Option<CacheOffer>,
+    /// Current oil offer (for Tool Oil Rack L4)
+    pub current_oil_offer: Option<OilOffer>,
 }
 
 impl MapPois {

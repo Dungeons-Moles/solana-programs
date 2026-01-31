@@ -5,11 +5,32 @@
 
 use anchor_lang::prelude::*;
 
-/// Starter items bitmask: bits 0-39 set (first 40 items unlocked)
-/// This represents 5 bytes of 0xFF followed by 5 bytes of 0x00
+/// Starter items bitmask: 40 specific items across all 8 tags.
+///
+/// Pool index mapping:
+/// - Gear: tag_code * 8 + (item_num - 1), indices 0-63
+/// - Tools: 64 + tag_code * 2 + (item_num - 1), indices 64-79
+///
+/// Starter items (40 total = 32 gear + 8 tools):
+/// - Stone: G-ST-01..04 (0-3), T-ST-01 (64)
+/// - Scout: G-SC-01..04 (8-11), T-SC-01 (66)
+/// - Greed: G-GR-01..03,05 (16-18,20), T-GR-01 (68) — note: skips G-GR-04
+/// - Blast: G-BL-01..04 (24-27), T-BL-01 (70)
+/// - Frost: G-FR-01..04 (32-35), T-FR-01 (72)
+/// - Rust: G-RU-01..04 (40-43), T-RU-01 (74)
+/// - Blood: G-BO-01..04 (48-51), T-BO-01 (76)
+/// - Tempo: G-TE-01..04 (56-59), T-TE-01 (78)
 pub const STARTER_ITEMS_BITMASK: [u8; 10] = [
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, // bits 0-39 set
-    0x00, 0x00, 0x00, 0x00, 0x00, // bits 40-79 clear
+    0x0F, // byte 0: bits 0-3 (Stone gear 01-04)
+    0x0F, // byte 1: bits 8-11 (Scout gear 01-04)
+    0x17, // byte 2: bits 16-18,20 (Greed gear 01-03,05)
+    0x0F, // byte 3: bits 24-27 (Blast gear 01-04)
+    0x0F, // byte 4: bits 32-35 (Frost gear 01-04)
+    0x0F, // byte 5: bits 40-43 (Rust gear 01-04)
+    0x0F, // byte 6: bits 48-51 (Blood gear 01-04)
+    0x0F, // byte 7: bits 56-59 (Tempo gear 01-04)
+    0x55, // byte 8: bits 64,66,68,70 (Tools -01: ST,SC,GR,BL)
+    0x55, // byte 9: bits 72,74,76,78 (Tools -01: FR,RU,BO,TE)
 ];
 
 /// Check if a specific bit is set in the bitmask.
@@ -95,7 +116,7 @@ pub fn is_subset(pool: [u8; 10], unlocked: [u8; 10]) -> bool {
     true
 }
 
-/// Select a random locked item from indices 40-79.
+/// Select a random locked item from all 80 indices (0-79).
 /// Uses deterministic PRNG based on player, level, and slot.
 ///
 /// # Arguments
@@ -112,11 +133,11 @@ pub fn select_random_locked_item(
     level: u8,
     slot: u64,
 ) -> Option<u8> {
-    // Find all locked items in range 40-79
-    let mut locked_items: [u8; 40] = [0; 40];
+    // Find all locked items in range 0-79
+    let mut locked_items: [u8; 80] = [0; 80];
     let mut locked_count: usize = 0;
 
-    for index in 40..80u8 {
+    for index in 0..80u8 {
         if !is_bit_set(unlocked_items, index) {
             locked_items[locked_count] = index;
             locked_count += 1;
@@ -218,12 +239,12 @@ mod tests {
         let empty: [u8; 10] = [0; 10];
         assert!(is_subset(empty, unlocked));
 
-        // Subset with fewer items
-        let subset: [u8; 10] = [0xFF, 0xFF, 0, 0, 0, 0, 0, 0, 0, 0];
+        // Subset with fewer items (only Stone gear 01-04)
+        let subset: [u8; 10] = [0x0F, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         assert!(is_subset(subset, unlocked));
 
-        // Pool with item not in unlocked is invalid
-        let invalid: [u8; 10] = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0, 0, 0, 0];
+        // Pool with item not in unlocked is invalid (bit 19 = G-GR-04 is NOT in starter)
+        let invalid: [u8; 10] = [0x0F, 0x0F, 0x1F, 0, 0, 0, 0, 0, 0, 0]; // 0x1F sets bit 19
         assert!(!is_subset(invalid, unlocked));
     }
 
@@ -231,8 +252,24 @@ mod tests {
     fn test_starter_items_bitmask_has_exactly_40_bits_set() {
         assert_eq!(count_bits(STARTER_ITEMS_BITMASK), 40);
 
-        // Verify first 40 bits are set
-        for i in 0..40 {
+        // Expected starter item indices:
+        // Gear (32 items): 0-3 (Stone), 8-11 (Scout), 16-18,20 (Greed), 24-27 (Blast),
+        //                  32-35 (Frost), 40-43 (Rust), 48-51 (Blood), 56-59 (Tempo)
+        // Tools (8 items): 64,66,68,70,72,74,76,78 (all -01 tools)
+        let expected_set: [u8; 40] = [
+            0, 1, 2, 3,       // Stone gear 01-04
+            8, 9, 10, 11,     // Scout gear 01-04
+            16, 17, 18, 20,   // Greed gear 01-03, 05 (skips 04)
+            24, 25, 26, 27,   // Blast gear 01-04
+            32, 33, 34, 35,   // Frost gear 01-04
+            40, 41, 42, 43,   // Rust gear 01-04
+            48, 49, 50, 51,   // Blood gear 01-04
+            56, 57, 58, 59,   // Tempo gear 01-04
+            64, 66, 68, 70,   // Tools -01: ST, SC, GR, BL
+            72, 74, 76, 78,   // Tools -01: FR, RU, BO, TE
+        ];
+
+        for &i in &expected_set {
             assert!(
                 is_bit_set(STARTER_ITEMS_BITMASK, i),
                 "Bit {} should be set",
@@ -240,19 +277,21 @@ mod tests {
             );
         }
 
-        // Verify bits 40-79 are not set
-        for i in 40..80 {
-            assert!(
-                !is_bit_set(STARTER_ITEMS_BITMASK, i),
-                "Bit {} should not be set",
-                i
-            );
+        // Verify non-starter bits are NOT set
+        for i in 0..80u8 {
+            if !expected_set.contains(&i) {
+                assert!(
+                    !is_bit_set(STARTER_ITEMS_BITMASK, i),
+                    "Bit {} should not be set",
+                    i
+                );
+            }
         }
     }
 
     #[test]
     fn test_select_random_locked_item_returns_locked_item() {
-        let unlocked = STARTER_ITEMS_BITMASK; // bits 0-39 set
+        let unlocked = STARTER_ITEMS_BITMASK; // 40 specific items set
         let player = Pubkey::new_unique();
         let level = 5u8;
         let slot = 12345u64;
@@ -262,13 +301,14 @@ mod tests {
 
         let index = result.unwrap();
         assert!(
-            index >= 40 && index < 80,
-            "Index {} should be in range 40-79",
+            index < 80,
+            "Index {} should be in range 0-79",
             index
         );
         assert!(
             !is_bit_set(unlocked, index),
-            "Selected item should be locked"
+            "Selected item at index {} should be locked",
+            index
         );
     }
 

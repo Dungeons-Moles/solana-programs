@@ -89,4 +89,19 @@ pub enum PoiSystemError {
 
     #[msg("Session account is not owned by session-manager program")]
     InvalidSessionOwner,
+
+    #[msg("Invalid generated map account")]
+    InvalidGeneratedMap,
+
+    #[msg("Invalid game session account")]
+    InvalidSession,
+
+    #[msg("Week must be 1-3")]
+    InvalidWeek,
+
+    #[msg("Failed to fetch boss weaknesses")]
+    InvalidBossWeek,
+
+    #[msg("Selected oil is not in the generated offer")]
+    InvalidOilSelection,
 }

@@ -12,6 +12,13 @@ use state::{GeneratedMap, MapConfig};
 
 declare_id!("BYdGuEGf8NqtLnHpSRuZFrPGEgvdxMfGfTt71QVBxYHa");
 
+/// Gameplay state program ID for authorized tile modifications (wall breaking)
+/// Derived from "5VAaGSSoBP4UEt3RL2EXvDwpeDxAXMndsJn7QX96nc4n"
+pub const GAMEPLAY_STATE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
+    66, 165, 213, 208, 125, 103, 44, 88, 115, 217, 192, 197, 1, 117, 7, 170, 78, 32, 208, 143, 119,
+    94, 47, 124, 229, 196, 47, 149, 235, 227, 237, 31,
+]);
+
 /// Session manager program ID for session ownership checks
 pub const SESSION_MANAGER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     217, 18, 17, 128, 79, 140, 152, 73, 103, 95, 134, 179, 31, 109, 34, 82, 250, 167, 91, 67, 186,
@@ -78,6 +85,26 @@ pub mod map_generator {
 
         let index = poi_index as usize;
         generated_map.pois[index].is_used = true;
+
+        Ok(())
+    }
+
+    /// Converts a wall tile to a floor tile, authorized by gameplay-state.
+    ///
+    /// This instruction is called via CPI from gameplay-state when a player
+    /// breaks through a wall. The change persists for the entire session,
+    /// so future movement to this tile costs only 1 move (floor cost).
+    ///
+    /// Authorization: Requires gameplay_authority PDA as signer.
+    pub fn set_tile_floor(ctx: Context<SetTileFloor>, x: u8, y: u8) -> Result<()> {
+        let generated_map = &mut ctx.accounts.generated_map;
+
+        require!(
+            x < generated_map.width && y < generated_map.height,
+            MapGeneratorError::TileOutOfBounds
+        );
+
+        generated_map.set_floor(x, y);
 
         Ok(())
     }
@@ -148,4 +175,31 @@ pub struct MarkPoiUsed<'info> {
     /// Game session PDA reference (validated by owner + has_one)
     /// CHECK: Session account is validated by owner check
     pub session: UncheckedAccount<'info>,
+}
+
+/// Context for setting a tile as floor, authorized by gameplay-state via CPI.
+/// Uses gameplay_authority PDA from gameplay-state as signer.
+#[derive(Accounts)]
+pub struct SetTileFloor<'info> {
+    /// Generated map to modify
+    #[account(
+        mut,
+        seeds = [GeneratedMap::SEED_PREFIX, session.key().as_ref()],
+        bump = generated_map.bump,
+        has_one = session
+    )]
+    pub generated_map: Account<'info, GeneratedMap>,
+
+    /// Game session PDA reference (validated by has_one)
+    /// CHECK: Session account is validated by has_one constraint
+    pub session: UncheckedAccount<'info>,
+
+    /// Gameplay authority PDA from gameplay-state that must sign
+    /// This ensures only gameplay-state can call this instruction
+    #[account(
+        seeds = [b"gameplay_authority"],
+        bump,
+        seeds::program = GAMEPLAY_STATE_PROGRAM_ID,
+    )]
+    pub gameplay_authority: Signer<'info>,
 }

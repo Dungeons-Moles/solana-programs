@@ -77,6 +77,12 @@ pub struct PoiSpawn {
 
 /// Generated map account storing tiles, enemies, and POI positions.
 /// PDA seeds: ["generated_map", session.key()]
+///
+/// **Persistence invariant:** This account is session-scoped and its layout
+/// (including `packed_tiles`) persists unchanged across week transitions.
+/// Week advancement in gameplay-state only modifies `GameState.week` —
+/// `packed_tiles` is never reset. Wall-to-floor conversions via `set_floor()`
+/// write directly to `packed_tiles` and persist for the entire session.
 #[account]
 pub struct GeneratedMap {
     /// Session this map belongs to

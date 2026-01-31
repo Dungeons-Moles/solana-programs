@@ -53,8 +53,11 @@ impl Phase {
 #[account]
 #[derive(InitSpace)]
 pub struct GameState {
-    /// Session owner's wallet
+    /// Session owner's main wallet (used for lifecycle operations like close)
     pub player: Pubkey,
+
+    /// Burner wallet authorized for gameplay transactions (move, boss fight)
+    pub burner_wallet: Pubkey,
 
     /// Linked GameSession PDA
     pub session: Pubkey,

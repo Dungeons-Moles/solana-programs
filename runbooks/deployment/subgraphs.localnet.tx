@@ -1,4 +1,8 @@
 
+// ============================================================================
+// session_manager events
+// ============================================================================
+
 action "session_manager_session_delegated" "svm::deploy_subgraph" {
     program_id = action.deploy_session_manager.program_id
     program_idl = action.deploy_session_manager.program_idl
@@ -25,6 +29,50 @@ action "session_manager_session_started" "svm::deploy_subgraph" {
         name = "SessionStarted"
     }
 }
+
+// ============================================================================
+// player_profile events
+// ============================================================================
+
+action "player_profile_created" "svm::deploy_subgraph" {
+    program_id = action.deploy_player_profile.program_id
+    program_idl = action.deploy_player_profile.program_idl
+    block_height = 0 // action.deploy_player_profile.block_height
+    event {
+        name = "ProfileCreated"
+    }
+}
+
+action "player_profile_run_completed" "svm::deploy_subgraph" {
+    program_id = action.deploy_player_profile.program_id
+    program_idl = action.deploy_player_profile.program_idl
+    block_height = 0 // action.deploy_player_profile.block_height
+    event {
+        name = "RunCompleted"
+    }
+}
+
+action "player_profile_item_unlocked" "svm::deploy_subgraph" {
+    program_id = action.deploy_player_profile.program_id
+    program_idl = action.deploy_player_profile.program_idl
+    block_height = 0 // action.deploy_player_profile.block_height
+    event {
+        name = "ItemUnlocked"
+    }
+}
+
+action "player_profile_runs_purchased" "svm::deploy_subgraph" {
+    program_id = action.deploy_player_profile.program_id
+    program_idl = action.deploy_player_profile.program_idl
+    block_height = 0 // action.deploy_player_profile.block_height
+    event {
+        name = "RunsPurchased"
+    }
+}
+
+// ============================================================================
+// gameplay_state events
+// ============================================================================
 
 action "gameplay_state_initialized" "svm::deploy_subgraph" {
     program_id = action.deploy_gameplay_state.program_id
@@ -62,15 +110,6 @@ action "gameplay_state_boss_ready" "svm::deploy_subgraph" {
     }
 }
 
-action "gameplay_state_stat_modified" "svm::deploy_subgraph" {
-    program_id = action.deploy_gameplay_state.program_id
-    program_idl = action.deploy_gameplay_state.program_idl
-    block_height = 0 // action.deploy_gameplay_state.block_height
-    event {
-        name = "StatModified"
-    }
-}
-
 action "gameplay_state_closed" "svm::deploy_subgraph" {
     program_id = action.deploy_gameplay_state.program_id
     program_idl = action.deploy_gameplay_state.program_idl
@@ -80,74 +119,317 @@ action "gameplay_state_closed" "svm::deploy_subgraph" {
     }
 }
 
-action "player_profile_created" "svm::deploy_subgraph" {
-    program_id = action.deploy_player_profile.program_id
-    program_idl = action.deploy_player_profile.program_idl
-    block_height = 0 // action.deploy_player_profile.block_height
+action "gameplay_state_player_healed" "svm::deploy_subgraph" {
+    program_id = action.deploy_gameplay_state.program_id
+    program_idl = action.deploy_gameplay_state.program_idl
+    block_height = 0 // action.deploy_gameplay_state.block_height
     event {
-        name = "ProfileCreated"
+        name = "PlayerHealed"
     }
 }
 
-action "player_profile_run_completed" "svm::deploy_subgraph" {
-    program_id = action.deploy_player_profile.program_id
-    program_idl = action.deploy_player_profile.program_idl
-    block_height = 0 // action.deploy_player_profile.block_height
+action "gameplay_state_gold_modified" "svm::deploy_subgraph" {
+    program_id = action.deploy_gameplay_state.program_id
+    program_idl = action.deploy_gameplay_state.program_idl
+    block_height = 0 // action.deploy_gameplay_state.block_height
     event {
-        name = "RunCompleted"
+        name = "GoldModifiedAuthorized"
     }
 }
 
-action "map_generator_config_updated" "svm::deploy_subgraph" {
-    program_id = action.deploy_map_generator.program_id
-    program_idl = action.deploy_map_generator.program_idl
-    block_height = 0 // action.deploy_map_generator.block_height
+action "gameplay_state_combat_started" "svm::deploy_subgraph" {
+    program_id = action.deploy_gameplay_state.program_id
+    program_idl = action.deploy_gameplay_state.program_idl
+    block_height = 0 // action.deploy_gameplay_state.block_height
     event {
-        name = "MapConfigUpdated"
+        name = "CombatStarted"
     }
 }
 
-action "map_generator_admin_transferred" "svm::deploy_subgraph" {
-    program_id = action.deploy_map_generator.program_id
-    program_idl = action.deploy_map_generator.program_idl
-    block_height = 0 // action.deploy_map_generator.block_height
+action "gameplay_state_combat_ended" "svm::deploy_subgraph" {
+    program_id = action.deploy_gameplay_state.program_id
+    program_idl = action.deploy_gameplay_state.program_idl
+    block_height = 0 // action.deploy_gameplay_state.block_height
     event {
-        name = "AdminTransferred"
+        name = "CombatEnded"
     }
 }
 
-action "combat_system_initialized" "svm::deploy_subgraph" {
-    program_id = action.deploy_combat_system.program_id
-    program_idl = action.deploy_combat_system.program_idl
-    block_height = 0 // action.deploy_combat_system.block_height
+action "gameplay_state_combat_log" "svm::deploy_subgraph" {
+    program_id = action.deploy_gameplay_state.program_id
+    program_idl = action.deploy_gameplay_state.program_idl
+    block_height = 0 // action.deploy_gameplay_state.block_height
     event {
-        name = "CombatInitialized"
+        name = "CombatLog"
     }
 }
 
-action "combat_system_turn_executed" "svm::deploy_subgraph" {
-    program_id = action.deploy_combat_system.program_id
-    program_idl = action.deploy_combat_system.program_idl
-    block_height = 0 // action.deploy_combat_system.block_height
+action "gameplay_state_enemy_moved" "svm::deploy_subgraph" {
+    program_id = action.deploy_gameplay_state.program_id
+    program_idl = action.deploy_gameplay_state.program_idl
+    block_height = 0 // action.deploy_gameplay_state.block_height
     event {
-        name = "TurnExecuted"
+        name = "EnemyMoved"
     }
 }
 
-action "combat_system_status_applied" "svm::deploy_subgraph" {
-    program_id = action.deploy_combat_system.program_id
-    program_idl = action.deploy_combat_system.program_idl
-    block_height = 0 // action.deploy_combat_system.block_height
+action "gameplay_state_boss_combat_started" "svm::deploy_subgraph" {
+    program_id = action.deploy_gameplay_state.program_id
+    program_idl = action.deploy_gameplay_state.program_idl
+    block_height = 0 // action.deploy_gameplay_state.block_height
     event {
-        name = "StatusApplied"
+        name = "BossCombatStarted"
     }
 }
 
-action "combat_system_result" "svm::deploy_subgraph" {
-    program_id = action.deploy_combat_system.program_id
-    program_idl = action.deploy_combat_system.program_idl
-    block_height = 0 // action.deploy_combat_system.block_height
+action "gameplay_state_player_defeated" "svm::deploy_subgraph" {
+    program_id = action.deploy_gameplay_state.program_id
+    program_idl = action.deploy_gameplay_state.program_idl
+    block_height = 0 // action.deploy_gameplay_state.block_height
     event {
-        name = "CombatResult"
+        name = "PlayerDefeated"
     }
 }
+
+action "gameplay_state_level_completed" "svm::deploy_subgraph" {
+    program_id = action.deploy_gameplay_state.program_id
+    program_idl = action.deploy_gameplay_state.program_idl
+    block_height = 0 // action.deploy_gameplay_state.block_height
+    event {
+        name = "LevelCompleted"
+    }
+}
+
+// ============================================================================
+// player_inventory events
+// ============================================================================
+
+action "player_inventory_initialized" "svm::deploy_subgraph" {
+    program_id = action.deploy_player_inventory.program_id
+    program_idl = action.deploy_player_inventory.program_idl
+    block_height = 0 // action.deploy_player_inventory.block_height
+    event {
+        name = "InventoryInitialized"
+    }
+}
+
+action "player_inventory_item_equipped" "svm::deploy_subgraph" {
+    program_id = action.deploy_player_inventory.program_id
+    program_idl = action.deploy_player_inventory.program_idl
+    block_height = 0 // action.deploy_player_inventory.block_height
+    event {
+        name = "ItemEquipped"
+    }
+}
+
+action "player_inventory_item_unequipped" "svm::deploy_subgraph" {
+    program_id = action.deploy_player_inventory.program_id
+    program_idl = action.deploy_player_inventory.program_idl
+    block_height = 0 // action.deploy_player_inventory.block_height
+    event {
+        name = "ItemUnequipped"
+    }
+}
+
+action "player_inventory_item_fused" "svm::deploy_subgraph" {
+    program_id = action.deploy_player_inventory.program_id
+    program_idl = action.deploy_player_inventory.program_idl
+    block_height = 0 // action.deploy_player_inventory.block_height
+    event {
+        name = "ItemFused"
+    }
+}
+
+action "player_inventory_gear_slots_expanded" "svm::deploy_subgraph" {
+    program_id = action.deploy_player_inventory.program_id
+    program_idl = action.deploy_player_inventory.program_idl
+    block_height = 0 // action.deploy_player_inventory.block_height
+    event {
+        name = "GearSlotsExpanded"
+    }
+}
+
+action "player_inventory_tool_oil_applied" "svm::deploy_subgraph" {
+    program_id = action.deploy_player_inventory.program_id
+    program_idl = action.deploy_player_inventory.program_idl
+    block_height = 0 // action.deploy_player_inventory.block_height
+    event {
+        name = "ToolOilApplied"
+    }
+}
+
+action "player_inventory_closed" "svm::deploy_subgraph" {
+    program_id = action.deploy_player_inventory.program_id
+    program_idl = action.deploy_player_inventory.program_idl
+    block_height = 0 // action.deploy_player_inventory.block_height
+    event {
+        name = "InventoryClosed"
+    }
+}
+
+// ============================================================================
+// poi_system events
+// ============================================================================
+
+action "poi_system_initialized" "svm::deploy_subgraph" {
+    program_id = action.deploy_poi_system.program_id
+    program_idl = action.deploy_poi_system.program_idl
+    block_height = 0 // action.deploy_poi_system.block_height
+    event {
+        name = "PoisInitialized"
+    }
+}
+
+action "poi_system_closed" "svm::deploy_subgraph" {
+    program_id = action.deploy_poi_system.program_id
+    program_idl = action.deploy_poi_system.program_idl
+    block_height = 0 // action.deploy_poi_system.block_height
+    event {
+        name = "PoisClosed"
+    }
+}
+
+action "poi_system_interacted" "svm::deploy_subgraph" {
+    program_id = action.deploy_poi_system.program_id
+    program_idl = action.deploy_poi_system.program_idl
+    block_height = 0 // action.deploy_poi_system.block_height
+    event {
+        name = "PoiInteracted"
+    }
+}
+
+action "poi_system_item_picked" "svm::deploy_subgraph" {
+    program_id = action.deploy_poi_system.program_id
+    program_idl = action.deploy_poi_system.program_idl
+    block_height = 0 // action.deploy_poi_system.block_height
+    event {
+        name = "ItemPicked"
+    }
+}
+
+action "poi_system_tool_oil_applied" "svm::deploy_subgraph" {
+    program_id = action.deploy_poi_system.program_id
+    program_idl = action.deploy_poi_system.program_idl
+    block_height = 0 // action.deploy_poi_system.block_height
+    event {
+        name = "ToolOilApplied"
+    }
+}
+
+action "poi_system_tiles_revealed" "svm::deploy_subgraph" {
+    program_id = action.deploy_poi_system.program_id
+    program_idl = action.deploy_poi_system.program_idl
+    block_height = 0 // action.deploy_poi_system.block_height
+    event {
+        name = "TilesRevealed"
+    }
+}
+
+action "poi_system_poi_revealed" "svm::deploy_subgraph" {
+    program_id = action.deploy_poi_system.program_id
+    program_idl = action.deploy_poi_system.program_idl
+    block_height = 0 // action.deploy_poi_system.block_height
+    event {
+        name = "PoiRevealed"
+    }
+}
+
+action "poi_system_waypoint_discovered" "svm::deploy_subgraph" {
+    program_id = action.deploy_poi_system.program_id
+    program_idl = action.deploy_poi_system.program_idl
+    block_height = 0 // action.deploy_poi_system.block_height
+    event {
+        name = "WaypointDiscovered"
+    }
+}
+
+action "poi_system_fast_travel_completed" "svm::deploy_subgraph" {
+    program_id = action.deploy_poi_system.program_id
+    program_idl = action.deploy_poi_system.program_idl
+    block_height = 0 // action.deploy_poi_system.block_height
+    event {
+        name = "FastTravelCompleted"
+    }
+}
+
+action "poi_system_shop_entered" "svm::deploy_subgraph" {
+    program_id = action.deploy_poi_system.program_id
+    program_idl = action.deploy_poi_system.program_idl
+    block_height = 0 // action.deploy_poi_system.block_height
+    event {
+        name = "ShopEntered"
+    }
+}
+
+action "poi_system_item_purchased" "svm::deploy_subgraph" {
+    program_id = action.deploy_poi_system.program_id
+    program_idl = action.deploy_poi_system.program_idl
+    block_height = 0 // action.deploy_poi_system.block_height
+    event {
+        name = "ItemPurchased"
+    }
+}
+
+action "poi_system_shop_rerolled" "svm::deploy_subgraph" {
+    program_id = action.deploy_poi_system.program_id
+    program_idl = action.deploy_poi_system.program_idl
+    block_height = 0 // action.deploy_poi_system.block_height
+    event {
+        name = "ShopRerolled"
+    }
+}
+
+action "poi_system_shop_exited" "svm::deploy_subgraph" {
+    program_id = action.deploy_poi_system.program_id
+    program_idl = action.deploy_poi_system.program_idl
+    block_height = 0 // action.deploy_poi_system.block_height
+    event {
+        name = "ShopExited"
+    }
+}
+
+action "poi_system_tool_upgraded" "svm::deploy_subgraph" {
+    program_id = action.deploy_poi_system.program_id
+    program_idl = action.deploy_poi_system.program_idl
+    block_height = 0 // action.deploy_poi_system.block_height
+    event {
+        name = "ToolUpgraded"
+    }
+}
+
+action "poi_system_items_fused" "svm::deploy_subgraph" {
+    program_id = action.deploy_poi_system.program_id
+    program_idl = action.deploy_poi_system.program_idl
+    block_height = 0 // action.deploy_poi_system.block_height
+    event {
+        name = "ItemsFused"
+    }
+}
+
+action "poi_system_gear_scrapped" "svm::deploy_subgraph" {
+    program_id = action.deploy_poi_system.program_id
+    program_idl = action.deploy_poi_system.program_idl
+    block_height = 0 // action.deploy_poi_system.block_height
+    event {
+        name = "GearScrapped"
+    }
+}
+
+action "poi_system_definition_queried" "svm::deploy_subgraph" {
+    program_id = action.deploy_poi_system.program_id
+    program_idl = action.deploy_poi_system.program_idl
+    block_height = 0 // action.deploy_poi_system.block_height
+    event {
+        name = "PoiDefinitionQueried"
+    }
+}
+
+action "poi_system_rest_completed" "svm::deploy_subgraph" {
+    program_id = action.deploy_poi_system.program_id
+    program_idl = action.deploy_poi_system.program_idl
+    block_height = 0 // action.deploy_poi_system.block_height
+    event {
+        name = "RestCompleted"
+    }
+}
+

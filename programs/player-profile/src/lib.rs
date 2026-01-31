@@ -126,6 +126,29 @@ pub mod player_profile {
         Ok(())
     }
 
+    /// Consumes one available run from the player's profile.
+    /// Called via CPI from session-manager when starting a new session.
+    pub fn consume_run(ctx: Context<ConsumeRun>) -> Result<()> {
+        let profile = &mut ctx.accounts.player_profile;
+
+        require!(
+            profile.available_runs > 0,
+            PlayerProfileError::NoAvailableRuns
+        );
+
+        profile.available_runs = profile
+            .available_runs
+            .checked_sub(1)
+            .ok_or(PlayerProfileError::ArithmeticOverflow)?;
+
+        emit!(RunConsumed {
+            owner: profile.owner,
+            available_runs: profile.available_runs,
+        });
+
+        Ok(())
+    }
+
     /// Purchase additional runs by paying SOL to the treasury.
     /// Each purchase adds 20 runs and costs 0.001 SOL.
     pub fn purchase_runs(ctx: Context<PurchaseRuns>) -> Result<()> {
@@ -233,6 +256,19 @@ pub struct PurchaseRuns<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+pub struct ConsumeRun<'info> {
+    #[account(
+        mut,
+        seeds = [PlayerProfile::SEED_PREFIX, owner.key().as_ref()],
+        bump = player_profile.bump,
+        has_one = owner @ PlayerProfileError::Unauthorized
+    )]
+    pub player_profile: Account<'info, PlayerProfile>,
+
+    pub owner: Signer<'info>,
+}
+
 // ============================================================================
 // Events
 // ============================================================================
@@ -260,6 +296,13 @@ pub struct ItemUnlocked {
     pub item_index: u8,
     pub level_completed: u8,
     pub timestamp: i64,
+}
+
+/// Emitted when a run is consumed at session start
+#[event]
+pub struct RunConsumed {
+    pub owner: Pubkey,
+    pub available_runs: u32,
 }
 
 /// Emitted when a player purchases additional runs

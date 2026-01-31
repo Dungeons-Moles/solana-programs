@@ -17,3 +17,6 @@ pub const TOOL_OIL_SPD: u8 = 0x02;
 
 /// Tool Oil flag for +1 DIG
 pub const TOOL_OIL_DIG: u8 = 0x04;
+
+/// Tool Oil flag for +1 ARM
+pub const TOOL_OIL_ARM: u8 = 0x08;

@@ -56,4 +56,7 @@ pub enum GameplayStateError {
     InvalidSession,
     #[msg("Invalid session owner program")]
     InvalidSessionOwner,
+
+    #[msg("Skip to day can only be used during night phases")]
+    NotNightPhase,
 }

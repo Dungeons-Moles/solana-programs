@@ -22,7 +22,7 @@ sha2 = "0.10"
 [dependencies]
 anchor-lang = "0.32.0"
 combat-system = { path = "../../crates/combat-system" }
-map-generator = { path = "../map-generator", features = ["no-entrypoint"] }
+map-generator = { path = "../map-generator", features = ["cpi"] }
 field-enemies = { path = "../../crates/field-enemies" }
 boss-system = { path = "../../crates/boss-system" }
 player-inventory = { path = "../player-inventory", features = ["cpi"] }

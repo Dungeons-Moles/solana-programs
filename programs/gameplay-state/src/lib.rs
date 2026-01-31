@@ -10,6 +10,9 @@ use combat_system::state::CombatantInput;
 use combat_system::{resolve_combat, CombatLogEntry, EffectType, ItemEffect};
 use constants::{BASE_HP, DAY_MOVES, GAME_STATE_SEED, INITIAL_GEAR_SLOTS, MAX_GEAR_SLOTS};
 use errors::GameplayStateError;
+
+/// Seed for gameplay_authority PDA used for CPI calls to other programs
+pub const GAMEPLAY_AUTHORITY_SEED: &[u8] = b"gameplay_authority";
 use movement::{
     calculate_move_cost, chebyshev_distance, get_boss_for_combat, get_boss_id, is_adjacent,
     is_within_bounds,
@@ -27,20 +30,11 @@ pub const SESSION_MANAGER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     23, 209, 2, 80, 255, 118, 192, 175, 242, 222, 183,
 ]);
 
-/// Discriminator for session_manager::end_session instruction.
-/// Computed as sha256("global:end_session")[..8].
-///
-/// NOTE: This is manually specified because gameplay-state cannot depend on session-manager
-/// (circular dependency: session-manager depends on gameplay-state for CPI).
-/// If session-manager's end_session instruction changes, this must be updated.
-/// The test `test_end_session_discriminator_matches` validates this value.
-pub const END_SESSION_DISCRIMINATOR: [u8; 8] = [0x0b, 0xf4, 0x3d, 0x9a, 0xd4, 0xf9, 0x0f, 0x42];
-
 /// POI system program ID for authorized HP/Gold modifications
-/// Derived from "FJVnZE45hxcd7BJeci27BiTx23XD6inN4paiM2EkMaoB"
+/// Derived from "6E27r1Cyo2CNPvtRsonn3uHUAdznS3cMXEBX4HRbfBQY"
 pub const POI_SYSTEM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
-    212, 127, 9, 220, 208, 191, 142, 216, 169, 223, 171, 29, 90, 227, 218, 234, 76, 195, 40, 12,
-    228, 223, 115, 232, 110, 197, 195, 215, 19, 241, 209, 74,
+    77, 160, 63, 209, 182, 56, 149, 181, 2, 195, 173, 95, 65, 136, 88, 122, 235, 166, 235, 216,
+    241, 107, 2, 35, 185, 14, 177, 21, 150, 103, 215, 77,
 ]);
 
 #[program]
@@ -69,6 +63,7 @@ pub mod gameplay_state {
 
         let game_state = &mut ctx.accounts.game_state;
         game_state.player = ctx.accounts.player.key();
+        game_state.burner_wallet = ctx.accounts.burner_wallet.key();
         game_state.session = ctx.accounts.game_session.key();
         game_state.position_x = start_x;
         game_state.position_y = start_y;
@@ -165,6 +160,121 @@ pub mod gameplay_state {
         Ok(())
     }
 
+    /// Skips to the next Day phase, authorized by poi-system.
+    ///
+    /// This instruction can only be called via CPI from poi-system using
+    /// the poi_authority PDA as signer. Used by rest POIs (L1 Mole Den, L5 Rest Alcove)
+    /// to skip the night phase.
+    ///
+    /// Behavior:
+    /// - Night1 → Day2 (reset moves to DAY_MOVES)
+    /// - Night2 → Day3 (reset moves to DAY_MOVES)
+    /// - Night3 → triggers boss fight (cannot skip end-of-week boss)
+    ///
+    /// Returns an error if called during a Day phase.
+    pub fn skip_to_day(ctx: Context<SkipToDay>) -> Result<()> {
+        let game_state = &mut ctx.accounts.game_state;
+        let inventory = &ctx.accounts.inventory;
+        let inventory_info = &ctx.accounts.inventory.to_account_info();
+        let player = &ctx.accounts.player;
+        let player_inventory_program = &ctx.accounts.player_inventory_program;
+
+        require!(!game_state.is_dead, GameplayStateError::PlayerDead);
+        require!(
+            !game_state.boss_fight_ready,
+            GameplayStateError::BossFightAlreadyTriggered
+        );
+        require!(
+            game_state.phase.is_night(),
+            GameplayStateError::NotNightPhase
+        );
+
+        if game_state.phase.is_night3() {
+            // Night3: Cannot skip the boss fight - trigger it instead
+            game_state.boss_fight_ready = true;
+
+            emit!(BossFightReady {
+                player: game_state.player,
+                week: game_state.week,
+            });
+
+            // Resolve boss fight inline (same as move_player does)
+            let player_won = resolve_boss_fight(
+                game_state,
+                inventory,
+                inventory_info,
+                player,
+                player_inventory_program,
+            )?;
+
+            if !player_won {
+                return Ok(());
+            }
+        } else {
+            // Night1 or Night2: Skip to the next Day phase
+            let next_day = match game_state.phase {
+                Phase::Night1 => Phase::Day2,
+                Phase::Night2 => Phase::Day3,
+                _ => unreachable!(), // Already validated is_night() and not is_night3()
+            };
+
+            game_state.phase = next_day;
+            game_state.moves_remaining = DAY_MOVES;
+
+            emit!(PhaseAdvanced {
+                player: game_state.player,
+                new_phase: next_day,
+                new_week: game_state.week,
+                moves_remaining: game_state.moves_remaining,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Syncs HP to reflect current inventory bonuses.
+    ///
+    /// This instruction should be called after equipping gear that provides +HP.
+    /// It calculates the new max_hp from the inventory and adjusts current HP:
+    /// - If player was at full base health (hp == BASE_HP), set hp to new max_hp
+    /// - If player was damaged, add the HP bonus (max_hp - BASE_HP) to current hp
+    /// - HP is always capped at the new max_hp
+    ///
+    /// This ensures that equipping +HP gear immediately grants that HP.
+    pub fn sync_hp_from_inventory(ctx: Context<SyncHpFromInventory>) -> Result<()> {
+        let game_state = &mut ctx.accounts.game_state;
+        let inventory = &ctx.accounts.inventory;
+        let player_stats = calculate_stats(inventory);
+
+        let old_hp = game_state.hp;
+        let old_max = BASE_HP; // Base max HP without gear bonuses
+        let new_max = player_stats.max_hp;
+        let hp_bonus = new_max.saturating_sub(old_max);
+
+        // Calculate new HP:
+        // - If at full base health, set to new max
+        // - If damaged, add the bonus (but cap at new max)
+        let new_hp = if old_hp >= old_max {
+            // Player was at or above base max (full health or already had bonuses)
+            new_max
+        } else {
+            // Player was damaged, add the bonus
+            old_hp.saturating_add(hp_bonus).min(new_max)
+        };
+
+        game_state.hp = new_hp;
+
+        emit!(HpSynced {
+            player: game_state.player,
+            old_hp,
+            new_hp: game_state.hp,
+            hp_bonus,
+            max_hp: new_max,
+        });
+
+        Ok(())
+    }
+
     /// Modifies the player's gold by a delta value, authorized by poi-system.
     ///
     /// This instruction can only be called via CPI from poi-system using
@@ -211,8 +321,6 @@ pub mod gameplay_state {
         let generated_map = &ctx.accounts.generated_map;
         let inventory = &ctx.accounts.inventory;
         let inventory_info = &ctx.accounts.inventory.to_account_info();
-        let game_session = &ctx.accounts.game_session;
-        let session_manager = &ctx.accounts.session_manager;
         let player = &ctx.accounts.player;
         let player_inventory_program = &ctx.accounts.player_inventory_program;
 
@@ -243,10 +351,25 @@ pub mod gameplay_state {
         let is_wall = !generated_map.is_walkable(target_x, target_y);
         let player_stats = calculate_stats(inventory);
         let move_cost = calculate_move_cost(is_wall, player_stats.dig);
-        require!(
-            game_state.moves_remaining >= move_cost,
-            GameplayStateError::InsufficientMoves
-        );
+
+        // Check if move can be afforded in current phase or by spanning phases
+        let needs_phase_span = game_state.moves_remaining < move_cost;
+        let can_span_phases = !game_state.phase.is_night3() && game_state.phase.next().is_some();
+
+        if needs_phase_span {
+            if !can_span_phases {
+                // Night3 or no next phase - cannot span
+                return Err(GameplayStateError::InsufficientMoves.into());
+            }
+            // Check if we can afford by spanning to next phase
+            let next_phase = game_state.phase.next().unwrap();
+            let total_available =
+                game_state.moves_remaining as u16 + next_phase.moves_allowed() as u16;
+            require!(
+                total_available >= move_cost as u16,
+                GameplayStateError::InsufficientMoves
+            );
+        }
 
         let is_last_move_of_week =
             game_state.phase.is_night3() && game_state.moves_remaining == move_cost;
@@ -327,13 +450,8 @@ pub mod gameplay_state {
                             let player_won = resolve_enemy_combat(
                                 game_state,
                                 inventory,
-                                inventory_info,
                                 map_enemies,
                                 enemy_idx,
-                                game_session,
-                                session_manager,
-                                player,
-                                player_inventory_program,
                             )?;
                             if !player_won {
                                 return Ok(());
@@ -350,12 +468,51 @@ pub mod gameplay_state {
             }
         }
 
+        // Convert wall to floor via CPI so the tile change persists on-chain
+        // (map_generator owns the GeneratedMap account, so we must use CPI)
+        if is_wall {
+            set_tile_floor_cpi(
+                &ctx.accounts.generated_map.to_account_info(),
+                &ctx.accounts.game_session,
+                &ctx.accounts.gameplay_authority,
+                &ctx.accounts.map_generator_program.to_account_info(),
+                ctx.bumps.gameplay_authority,
+                target_x,
+                target_y,
+            )?;
+        }
+
         game_state.position_x = target_x;
         game_state.position_y = target_y;
-        game_state.moves_remaining = game_state
-            .moves_remaining
-            .checked_sub(move_cost)
-            .ok_or(GameplayStateError::ArithmeticOverflow)?;
+
+        // Handle move cost consumption, potentially spanning phases
+        if needs_phase_span {
+            // Consume all moves from current phase
+            let moves_from_current = game_state.moves_remaining;
+            let remaining_cost = move_cost - moves_from_current;
+
+            // Advance to next phase
+            let next_phase = game_state.phase.next().unwrap();
+            game_state.phase = next_phase;
+            game_state.moves_remaining = next_phase
+                .moves_allowed()
+                .checked_sub(remaining_cost)
+                .ok_or(GameplayStateError::ArithmeticOverflow)?;
+
+            emit!(PhaseAdvanced {
+                player: game_state.player,
+                new_phase: next_phase,
+                new_week: game_state.week,
+                moves_remaining: game_state.moves_remaining,
+            });
+        } else {
+            // Simple subtraction within same phase
+            game_state.moves_remaining = game_state
+                .moves_remaining
+                .checked_sub(move_cost)
+                .ok_or(GameplayStateError::ArithmeticOverflow)?;
+        }
+
         game_state.total_moves = game_state
             .total_moves
             .checked_add(1)
@@ -366,17 +523,8 @@ pub mod gameplay_state {
         if !is_last_move_of_week {
             if let Some(enemy_idx) = target_enemy_idx {
                 combat_triggered = true;
-                let player_won = resolve_enemy_combat(
-                    game_state,
-                    inventory,
-                    inventory_info,
-                    map_enemies,
-                    enemy_idx,
-                    game_session,
-                    session_manager,
-                    player,
-                    player_inventory_program,
-                )?;
+                let player_won =
+                    resolve_enemy_combat(game_state, inventory, map_enemies, enemy_idx)?;
                 if !player_won {
                     return Ok(());
                 }
@@ -410,8 +558,6 @@ pub mod gameplay_state {
                     game_state,
                     inventory,
                     inventory_info,
-                    game_session,
-                    session_manager,
                     player,
                     player_inventory_program,
                 )?;
@@ -422,17 +568,8 @@ pub mod gameplay_state {
                 if let Some(enemy_idx) =
                     find_enemy_index(map_enemies, game_state.position_x, game_state.position_y)
                 {
-                    let player_won = resolve_enemy_combat(
-                        game_state,
-                        inventory,
-                        inventory_info,
-                        map_enemies,
-                        enemy_idx,
-                        game_session,
-                        session_manager,
-                        player,
-                        player_inventory_program,
-                    )?;
+                    let player_won =
+                        resolve_enemy_combat(game_state, inventory, map_enemies, enemy_idx)?;
                     if !player_won {
                         return Ok(());
                     }
@@ -462,8 +599,6 @@ pub mod gameplay_state {
         let map_enemies = &mut ctx.accounts.map_enemies;
         let inventory = &ctx.accounts.inventory;
         let inventory_info = &ctx.accounts.inventory.to_account_info();
-        let game_session = &ctx.accounts.game_session;
-        let session_manager = &ctx.accounts.session_manager;
         let player = &ctx.accounts.player;
         let player_inventory_program = &ctx.accounts.player_inventory_program;
 
@@ -477,8 +612,6 @@ pub mod gameplay_state {
             game_state,
             inventory,
             inventory_info,
-            game_session,
-            session_manager,
             player,
             player_inventory_program,
         )?;
@@ -489,17 +622,7 @@ pub mod gameplay_state {
         if let Some(enemy_idx) =
             find_enemy_index(map_enemies, game_state.position_x, game_state.position_y)
         {
-            let player_won = resolve_enemy_combat(
-                game_state,
-                inventory,
-                inventory_info,
-                map_enemies,
-                enemy_idx,
-                game_session,
-                session_manager,
-                player,
-                player_inventory_program,
-            )?;
+            let player_won = resolve_enemy_combat(game_state, inventory, map_enemies, enemy_idx)?;
             if !player_won {
                 return Ok(());
             }
@@ -509,6 +632,33 @@ pub mod gameplay_state {
 
         Ok(())
     }
+
+    /// TEST ONLY: Sets the game phase and moves remaining directly.
+    /// This instruction is intended for testing purposes to avoid
+    /// doing hundreds of move transactions to reach a specific phase.
+    ///
+    /// WARNING: This should only be used in test environments.
+    #[allow(unused_variables)]
+    pub fn set_phase_for_testing(
+        ctx: Context<SetPhaseForTesting>,
+        phase: Phase,
+        moves_remaining: u8,
+    ) -> Result<()> {
+        let game_state = &mut ctx.accounts.game_state;
+        game_state.phase = phase;
+        game_state.moves_remaining = moves_remaining;
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct SetPhaseForTesting<'info> {
+    #[account(
+        mut,
+        has_one = burner_wallet,
+    )]
+    pub game_state: Account<'info, GameState>,
+    pub burner_wallet: Signer<'info>,
 }
 
 fn find_enemy_index(map_enemies: &MapEnemies, x: u8, y: u8) -> Option<usize> {
@@ -577,16 +727,11 @@ fn preprocess_enemy_effects(archetype_id: u8, player_gold: u16) -> Vec<ItemEffec
     base_effects.to_vec()
 }
 
-fn resolve_enemy_combat<'info>(
+fn resolve_enemy_combat(
     game_state: &mut GameState,
     inventory: &PlayerInventory,
-    inventory_info: &AccountInfo<'info>,
     map_enemies: &mut MapEnemies,
     enemy_index: usize,
-    game_session: &AccountInfo<'info>,
-    session_manager: &AccountInfo<'info>,
-    player: &AccountInfo<'info>,
-    player_inventory_program: &AccountInfo<'info>,
 ) -> Result<bool> {
     let enemy = map_enemies.enemies[enemy_index];
     let enemy_input = match field_enemies::archetypes::get_enemy_combatant_input(
@@ -660,16 +805,8 @@ fn resolve_enemy_combat<'info>(
             final_hp: result.final_player_hp,
         });
 
-        end_session_cpi(
-            session_manager,
-            game_session,
-            player,
-            inventory_info,
-            player_inventory_program,
-            game_state.campaign_level,
-            false,
-        )?;
-
+        // Session cleanup is handled by the frontend calling end_session
+        // with the main wallet after detecting death.
         Ok(false)
     }
 }
@@ -678,8 +815,6 @@ fn resolve_boss_fight<'info>(
     game_state: &mut GameState,
     inventory: &PlayerInventory,
     inventory_info: &AccountInfo<'info>,
-    game_session: &AccountInfo<'info>,
-    session_manager: &AccountInfo<'info>,
     player: &AccountInfo<'info>,
     player_inventory_program: &AccountInfo<'info>,
 ) -> Result<bool> {
@@ -772,67 +907,10 @@ fn resolve_boss_fight<'info>(
             final_hp: result.final_player_hp,
         });
 
-        end_session_cpi(
-            session_manager,
-            game_session,
-            player,
-            inventory_info,
-            player_inventory_program,
-            game_state.campaign_level,
-            false,
-        )?;
-
+        // Session cleanup is handled by the frontend calling end_session
+        // with the main wallet after detecting death.
         Ok(false)
     }
-}
-
-/// Manual CPI to session_manager::end_session.
-///
-/// This uses manual instruction construction because gameplay-state cannot depend
-/// on session-manager (would create circular dependency). The discriminator is
-/// validated by `test_end_session_discriminator_matches`.
-fn end_session_cpi<'info>(
-    session_manager_program: &AccountInfo<'info>,
-    game_session: &AccountInfo<'info>,
-    player: &AccountInfo<'info>,
-    inventory: &AccountInfo<'info>,
-    player_inventory_program: &AccountInfo<'info>,
-    campaign_level: u8,
-    victory: bool,
-) -> Result<()> {
-    use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
-    use anchor_lang::solana_program::program::invoke;
-
-    let mut data = Vec::with_capacity(8 + 1 + 1);
-    data.extend_from_slice(&END_SESSION_DISCRIMINATOR);
-    data.push(campaign_level);
-    data.push(if victory { 1 } else { 0 });
-
-    let accounts = vec![
-        AccountMeta::new(game_session.key(), false),
-        AccountMeta::new(player.key(), true),
-        AccountMeta::new(inventory.key(), false),
-        AccountMeta::new_readonly(player_inventory_program.key(), false),
-    ];
-
-    let instruction = Instruction {
-        program_id: SESSION_MANAGER_PROGRAM_ID,
-        accounts,
-        data,
-    };
-
-    invoke(
-        &instruction,
-        &[
-            game_session.clone(),
-            player.clone(),
-            inventory.clone(),
-            player_inventory_program.clone(),
-            session_manager_program.clone(),
-        ],
-    )?;
-
-    Ok(())
 }
 
 fn expand_gear_slots_cpi<'info>(
@@ -847,6 +925,36 @@ fn expand_gear_slots_cpi<'info>(
             player: player.clone(),
         },
     ))?;
+
+    Ok(())
+}
+
+/// CPI call to map_generator::set_tile_floor to persist wall-to-floor conversion.
+/// Uses gameplay_authority PDA as signer for authorization.
+fn set_tile_floor_cpi<'info>(
+    generated_map: &AccountInfo<'info>,
+    session: &AccountInfo<'info>,
+    gameplay_authority: &AccountInfo<'info>,
+    map_generator_program: &AccountInfo<'info>,
+    gameplay_authority_bump: u8,
+    x: u8,
+    y: u8,
+) -> Result<()> {
+    let signer_seeds: &[&[&[u8]]] = &[&[GAMEPLAY_AUTHORITY_SEED, &[gameplay_authority_bump]]];
+
+    map_generator::cpi::set_tile_floor(
+        CpiContext::new_with_signer(
+            map_generator_program.clone(),
+            map_generator::cpi::accounts::SetTileFloor {
+                generated_map: generated_map.clone(),
+                session: session.clone(),
+                gameplay_authority: gameplay_authority.clone(),
+            },
+            signer_seeds,
+        ),
+        x,
+        y,
+    )?;
 
     Ok(())
 }
@@ -872,7 +980,11 @@ fn select_enemy_step(
         if delta == 0 {
             return None;
         }
-        Some(if delta > 0 { pos.saturating_add(1) } else { pos.saturating_sub(1) })
+        Some(if delta > 0 {
+            pos.saturating_add(1)
+        } else {
+            pos.saturating_sub(1)
+        })
     };
 
     let x_step = step_toward(enemy_x, dx).map(|x| (x, enemy_y));
@@ -971,6 +1083,10 @@ pub struct InitializeGameState<'info> {
     #[account(mut)]
     pub player: Signer<'info>,
 
+    /// CHECK: Burner wallet whose pubkey is stored in game_state.burner_wallet
+    /// for authorizing gameplay transactions (move, boss fight).
+    pub burner_wallet: AccountInfo<'info>,
+
     pub system_program: Program<'info, System>,
 }
 
@@ -1012,6 +1128,61 @@ pub struct HealPlayer<'info> {
     pub poi_authority: Signer<'info>,
 }
 
+/// Context for skipping to day, authorized by poi-system CPI.
+/// Used by rest POIs (L1 Mole Den, L5 Rest Alcove) to skip night phases.
+/// Includes accounts needed for boss fight resolution (Night3 triggers boss fight).
+#[derive(Accounts)]
+pub struct SkipToDay<'info> {
+    #[account(mut)]
+    pub game_state: Account<'info, GameState>,
+
+    /// Player inventory for stats calculation and boss fight resolution
+    #[account(
+        mut,
+        seeds = [b"inventory", game_state.session.as_ref()],
+        bump = inventory.bump,
+        seeds::program = player_inventory::ID,
+    )]
+    pub inventory: Account<'info, PlayerInventory>,
+
+    /// POI authority PDA from poi-system that must sign
+    #[account(
+        seeds = [b"poi_authority"],
+        bump,
+        seeds::program = POI_SYSTEM_PROGRAM_ID,
+    )]
+    pub poi_authority: Signer<'info>,
+
+    /// Player for CPI to player_inventory_program (expand gear slots on boss victory)
+    /// CHECK: Used for CPI context, validated by player_inventory_program
+    pub player: AccountInfo<'info>,
+
+    /// Player inventory program for CPI (expand gear slots on boss victory)
+    pub player_inventory_program: Program<'info, player_inventory::program::PlayerInventory>,
+}
+
+/// Context for syncing HP from inventory after equipping +HP gear.
+/// Can be called directly by the player (no CPI authorization needed).
+#[derive(Accounts)]
+pub struct SyncHpFromInventory<'info> {
+    #[account(
+        mut,
+        has_one = player @ GameplayStateError::Unauthorized,
+    )]
+    pub game_state: Account<'info, GameState>,
+
+    /// Player inventory for deriving max_hp (PDA derived from session)
+    #[account(
+        seeds = [b"inventory", game_state.session.as_ref()],
+        bump = inventory.bump,
+        seeds::program = player_inventory::ID,
+    )]
+    pub inventory: Account<'info, PlayerInventory>,
+
+    /// Player who owns this game state (main wallet)
+    pub player: Signer<'info>,
+}
+
 /// Context for authorized gold modification via poi-system CPI.
 /// Requires poi_authority PDA from poi-system as signer.
 #[derive(Accounts)]
@@ -1032,20 +1203,15 @@ pub struct ModifyGoldAuthorized<'info> {
 pub struct Move<'info> {
     #[account(
         mut,
-        has_one = player @ GameplayStateError::Unauthorized,
+        constraint = game_state.burner_wallet == player.key() @ GameplayStateError::Unauthorized,
     )]
     pub game_state: Account<'info, GameState>,
-
-    /// Session manager program ID for session ownership checks
-    #[account(address = SESSION_MANAGER_PROGRAM_ID)]
-    /// CHECK: Validated by address constraint
-    pub session_manager: AccountInfo<'info>,
 
     #[account(
         mut,
         constraint = game_state.session == game_session.key() @ GameplayStateError::InvalidSession
     )]
-    /// CHECK: Passed to session-manager for CPI. Validated by game_state.session match.
+    /// CHECK: Validated by game_state.session match.
     pub game_session: AccountInfo<'info>,
 
     #[account(
@@ -1056,6 +1222,7 @@ pub struct Move<'info> {
     pub map_enemies: Account<'info, MapEnemies>,
 
     #[account(
+        mut,
         seeds = [map_generator::state::GeneratedMap::SEED_PREFIX, game_state.session.as_ref()],
         bump = generated_map.bump,
         seeds::program = map_generator::ID,
@@ -1070,8 +1237,19 @@ pub struct Move<'info> {
     )]
     pub inventory: Account<'info, PlayerInventory>,
 
-    /// Player inventory program for CPI on defeat
+    /// Gameplay authority PDA for signing CPI calls to map_generator
+    /// CHECK: This is a PDA derived from gameplay_state program, validated by seeds
+    #[account(
+        seeds = [GAMEPLAY_AUTHORITY_SEED],
+        bump,
+    )]
+    pub gameplay_authority: AccountInfo<'info>,
+
+    /// Player inventory program for CPI (expand gear slots on boss victory)
     pub player_inventory_program: Program<'info, player_inventory::program::PlayerInventory>,
+
+    /// Map generator program for CPI (set tile floor on wall break)
+    pub map_generator_program: Program<'info, map_generator::program::MapGenerator>,
 
     #[account(mut)]
     pub player: Signer<'info>,
@@ -1081,20 +1259,15 @@ pub struct Move<'info> {
 pub struct TriggerBossFight<'info> {
     #[account(
         mut,
-        has_one = player @ GameplayStateError::Unauthorized,
+        constraint = game_state.burner_wallet == player.key() @ GameplayStateError::Unauthorized,
     )]
     pub game_state: Account<'info, GameState>,
-
-    /// Session manager program ID for session ownership checks
-    #[account(address = SESSION_MANAGER_PROGRAM_ID)]
-    /// CHECK: Validated by address constraint
-    pub session_manager: AccountInfo<'info>,
 
     #[account(
         mut,
         constraint = game_state.session == game_session.key() @ GameplayStateError::InvalidSession
     )]
-    /// CHECK: Passed to session-manager for CPI. Validated by game_state.session match.
+    /// CHECK: Validated by game_state.session match.
     pub game_session: AccountInfo<'info>,
 
     #[account(
@@ -1112,7 +1285,7 @@ pub struct TriggerBossFight<'info> {
     )]
     pub inventory: Account<'info, PlayerInventory>,
 
-    /// Player inventory program for CPI on defeat
+    /// Player inventory program for CPI (expand gear slots on boss victory)
     pub player_inventory_program: Program<'info, player_inventory::program::PlayerInventory>,
 
     pub player: Signer<'info>,
@@ -1170,6 +1343,16 @@ pub struct PlayerHealed {
     pub old_hp: i16,
     pub new_hp: i16,
     pub amount: u16,
+    pub max_hp: i16,
+}
+
+/// Emitted when HP is synced from inventory after equipping +HP gear
+#[event]
+pub struct HpSynced {
+    pub player: Pubkey,
+    pub old_hp: i16,
+    pub new_hp: i16,
+    pub hp_bonus: i16,
     pub max_hp: i16,
 }
 
@@ -1299,7 +1482,10 @@ mod hp_logic_tests {
 
         // Post-combat capping
         let new_persistent_hp = final_combat_hp.min(stats.max_hp);
-        assert_eq!(new_persistent_hp, 12, "HP should persist as 12 (below max 15)");
+        assert_eq!(
+            new_persistent_hp, 12,
+            "HP should persist as 12 (below max 15)"
+        );
     }
 
     #[test]
@@ -1450,27 +1636,8 @@ mod hp_logic_tests {
 
         // Non-Coin Slug enemies should not be affected
         let effects = preprocess_enemy_effects(0, 100); // Tunnel Rat
-        assert!(!effects.iter().any(|e| {
-            matches!(e.effect_type, EffectType::GainArmor) && e.value == 3
-        }));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Validates that END_SESSION_DISCRIMINATOR matches sha256("global:end_session")[..8].
-    /// Computes the hash at test time so a rename in session-manager is caught immediately.
-    #[test]
-    fn test_end_session_discriminator_matches() {
-        use sha2::{Sha256, Digest};
-        let hash = Sha256::digest(b"global:end_session");
-        let expected: [u8; 8] = hash[..8].try_into().unwrap();
-        assert_eq!(
-            END_SESSION_DISCRIMINATOR, expected,
-            "END_SESSION_DISCRIMINATOR doesn't match sha256(\"global:end_session\")[..8] — \
-             session-manager::end_session may have been renamed"
-        );
+        assert!(!effects
+            .iter()
+            .any(|e| { matches!(e.effect_type, EffectType::GainArmor) && e.value == 3 }));
     }
 }

@@ -29,6 +29,7 @@ pub const SURVEY_BEACON_RADIUS: u8 = 13;
 pub const OIL_FLAG_ATK: u8 = 0x01;
 pub const OIL_FLAG_SPD: u8 = 0x02;
 pub const OIL_FLAG_DIG: u8 = 0x04;
+pub const OIL_FLAG_ARM: u8 = 0x08;
 
 /// Result of a rest interaction
 #[derive(Clone, Debug)]
@@ -194,7 +195,10 @@ pub fn execute_tool_oil_interaction(
     }
 
     // Validate modification is a valid oil flag
-    if modification != OIL_FLAG_ATK && modification != OIL_FLAG_SPD && modification != OIL_FLAG_DIG
+    if modification != OIL_FLAG_ATK
+        && modification != OIL_FLAG_SPD
+        && modification != OIL_FLAG_DIG
+        && modification != OIL_FLAG_ARM
     {
         return Err(PoiSystemError::InvalidInteraction);
     }
@@ -1205,9 +1209,20 @@ mod tests {
     #[test]
     fn test_execute_tool_oil_invalid_modification() {
         let poi = create_test_poi(4, 5, 5, false, false);
-        let result = execute_tool_oil_interaction(&poi, 0, 0x08, true); // Invalid flag
+        let result = execute_tool_oil_interaction(&poi, 0, 0x10, true); // Invalid flag (0x10 is not a valid oil)
 
         assert!(matches!(result, Err(PoiSystemError::InvalidInteraction)));
+    }
+
+    #[test]
+    fn test_execute_tool_oil_apply_arm() {
+        let poi = create_test_poi(4, 5, 5, false, false);
+        let result = execute_tool_oil_interaction(&poi, 0, OIL_FLAG_ARM, true);
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.modification, OIL_FLAG_ARM);
+        assert_eq!(result.new_flags, OIL_FLAG_ARM);
     }
 
     #[test]

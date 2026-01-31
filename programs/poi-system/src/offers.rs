@@ -504,6 +504,7 @@ pub fn generate_poi_offers(
 
 /// Generate 3 Gear offers for Supply Cache (L2).
 /// Uses SUPPLY_CACHE_RARITY table for act-based rarity.
+/// Ensures all 3 items are unique by re-rolling duplicates.
 pub fn generate_supply_cache_offers(
     act: u8,
     weakness1: WeaknessTag,
@@ -512,18 +513,30 @@ pub fn generate_supply_cache_offers(
 ) -> GeneratedOffers {
     let tag_weights = calculate_tag_weights(weakness1, weakness2);
     let mut offers = Vec::with_capacity(3);
+    let mut rng = Xorshift64::new(seed);
+    let mut used_ids: [[u8; 8]; 3] = [[0; 8]; 3];
 
     for i in 0..3 {
-        let item_seed = seed.wrapping_add(i as u64 * 1337);
-        let rarity = get_rarity_from_table(&SUPPLY_CACHE_RARITY, act, item_seed);
-        let item_id = select_gear_by_rarity_weighted(rarity, &tag_weights, item_seed >> 8);
+        let mut attempts = 0;
+        loop {
+            let item_seed = rng.next_u64();
+            let rarity = get_rarity_from_table(&SUPPLY_CACHE_RARITY, act, item_seed);
+            let item_id = select_gear_by_rarity_weighted(rarity, &tag_weights, rng.next_u64());
 
-        offers.push(ItemOffer {
-            item_id,
-            tier: 1,  // Tier::I
-            price: 0, // Free POI
-            purchased: false,
-        });
+            // Check for duplicates
+            let is_duplicate = used_ids[..i].iter().any(|id| *id == item_id);
+            if !is_duplicate || attempts >= 10 {
+                used_ids[i] = item_id;
+                offers.push(ItemOffer {
+                    item_id,
+                    tier: 1,  // Tier::I
+                    price: 0, // Free POI
+                    purchased: false,
+                });
+                break;
+            }
+            attempts += 1;
+        }
     }
 
     GeneratedOffers {
@@ -534,6 +547,7 @@ pub fn generate_supply_cache_offers(
 
 /// Generate 3 Tool offers for Tool Crate (L3).
 /// Uses TOOL_CRATE_RARITY table (includes Heroic from Act 2+).
+/// Ensures all 3 items are unique by re-rolling duplicates.
 pub fn generate_tool_crate_offers(
     act: u8,
     weakness1: WeaknessTag,
@@ -542,18 +556,30 @@ pub fn generate_tool_crate_offers(
 ) -> GeneratedOffers {
     let tag_weights = calculate_tag_weights(weakness1, weakness2);
     let mut offers = Vec::with_capacity(3);
+    let mut rng = Xorshift64::new(seed);
+    let mut used_ids: [[u8; 8]; 3] = [[0; 8]; 3];
 
     for i in 0..3 {
-        let item_seed = seed.wrapping_add(i as u64 * 1337);
-        let rarity = get_rarity_from_table(&TOOL_CRATE_RARITY, act, item_seed);
-        let item_id = select_tool_by_rarity_weighted(rarity, &tag_weights, item_seed >> 8);
+        let mut attempts = 0;
+        loop {
+            let item_seed = rng.next_u64();
+            let rarity = get_rarity_from_table(&TOOL_CRATE_RARITY, act, item_seed);
+            let item_id = select_tool_by_rarity_weighted(rarity, &tag_weights, rng.next_u64());
 
-        offers.push(ItemOffer {
-            item_id,
-            tier: 1,
-            price: 0,
-            purchased: false,
-        });
+            // Check for duplicates
+            let is_duplicate = used_ids[..i].iter().any(|id| *id == item_id);
+            if !is_duplicate || attempts >= 10 {
+                used_ids[i] = item_id;
+                offers.push(ItemOffer {
+                    item_id,
+                    tier: 1,
+                    price: 0,
+                    purchased: false,
+                });
+                break;
+            }
+            attempts += 1;
+        }
     }
 
     GeneratedOffers {
@@ -564,6 +590,7 @@ pub fn generate_tool_crate_offers(
 
 /// Generate 3 Heroic+ offers for Geode Vault (L12).
 /// Uses GEODE_VAULT_RARITY table (higher rarity chance, includes Mythic).
+/// Ensures all 3 items are unique by re-rolling duplicates.
 pub fn generate_geode_vault_offers(
     act: u8,
     weakness1: WeaknessTag,
@@ -572,18 +599,30 @@ pub fn generate_geode_vault_offers(
 ) -> GeneratedOffers {
     let tag_weights = calculate_tag_weights(weakness1, weakness2);
     let mut offers = Vec::with_capacity(3);
+    let mut rng = Xorshift64::new(seed);
+    let mut used_ids: [[u8; 8]; 3] = [[0; 8]; 3];
 
     for i in 0..3 {
-        let item_seed = seed.wrapping_add(i as u64 * 1337);
-        let rarity = get_rarity_from_table(&GEODE_VAULT_RARITY, act, item_seed);
-        let item_id = select_gear_by_rarity_weighted(rarity, &tag_weights, item_seed >> 8);
+        let mut attempts = 0;
+        loop {
+            let item_seed = rng.next_u64();
+            let rarity = get_rarity_from_table(&GEODE_VAULT_RARITY, act, item_seed);
+            let item_id = select_gear_by_rarity_weighted(rarity, &tag_weights, rng.next_u64());
 
-        offers.push(ItemOffer {
-            item_id,
-            tier: 1,
-            price: 0,
-            purchased: false,
-        });
+            // Check for duplicates
+            let is_duplicate = used_ids[..i].iter().any(|id| *id == item_id);
+            if !is_duplicate || attempts >= 10 {
+                used_ids[i] = item_id;
+                offers.push(ItemOffer {
+                    item_id,
+                    tier: 1,
+                    price: 0,
+                    purchased: false,
+                });
+                break;
+            }
+            attempts += 1;
+        }
     }
 
     GeneratedOffers {
@@ -594,6 +633,7 @@ pub fn generate_geode_vault_offers(
 
 /// Generate 3 weakness-tagged offers for Counter Cache (L13).
 /// Only offers items matching boss weakness tags.
+/// Ensures all 3 items are unique by re-rolling duplicates.
 pub fn generate_counter_cache_offers(
     act: u8,
     weakness1: WeaknessTag,
@@ -601,21 +641,33 @@ pub fn generate_counter_cache_offers(
     seed: u64,
 ) -> GeneratedOffers {
     let mut offers = Vec::with_capacity(3);
+    let mut rng = Xorshift64::new(seed);
+    let mut used_ids: [[u8; 8]; 3] = [[0; 8]; 3];
 
     for i in 0..3 {
-        let item_seed = seed.wrapping_add(i as u64 * 1337);
-        let rarity = get_rarity_from_table(&COUNTER_CACHE_RARITY, act, item_seed);
+        let mut attempts = 0;
+        loop {
+            let item_seed = rng.next_u64();
+            let rarity = get_rarity_from_table(&COUNTER_CACHE_RARITY, act, item_seed);
 
-        let use_tag1 = (item_seed >> 16) & 1 == 0;
-        let tag = if use_tag1 { weakness1 } else { weakness2 };
-        let item_id = select_gear_by_tag_and_rarity(tag, rarity, item_seed >> 24);
+            let use_tag1 = rng.next_u64() & 1 == 0;
+            let tag = if use_tag1 { weakness1 } else { weakness2 };
+            let item_id = select_gear_by_tag_and_rarity(tag, rarity, rng.next_u64());
 
-        offers.push(ItemOffer {
-            item_id,
-            tier: 1,
-            price: 0,
-            purchased: false,
-        });
+            // Check for duplicates
+            let is_duplicate = used_ids[..i].iter().any(|id| *id == item_id);
+            if !is_duplicate || attempts >= 10 {
+                used_ids[i] = item_id;
+                offers.push(ItemOffer {
+                    item_id,
+                    tier: 1,
+                    price: 0,
+                    purchased: false,
+                });
+                break;
+            }
+            attempts += 1;
+        }
     }
 
     GeneratedOffers {
@@ -627,6 +679,7 @@ pub fn generate_counter_cache_offers(
 /// Generate 6 offers for Smuggler Hatch shop (L9): 1 Tool + 5 Gear.
 /// Uses SMUGGLER_TOOL_RARITY and SMUGGLER_GEAR_RARITY tables.
 /// Items have prices based on rarity.
+/// Ensures all 5 gear items are unique by re-rolling duplicates.
 pub fn generate_smuggler_hatch_offers(
     act: u8,
     weakness1: WeaknessTag,
@@ -635,12 +688,13 @@ pub fn generate_smuggler_hatch_offers(
 ) -> GeneratedOffers {
     let tag_weights = calculate_tag_weights(weakness1, weakness2);
     let mut offers = Vec::with_capacity(6);
+    let mut rng = Xorshift64::new(seed);
 
     // First offer: 1 Tool
     {
-        let item_seed = seed;
+        let item_seed = rng.next_u64();
         let rarity = get_rarity_from_table(&SMUGGLER_TOOL_RARITY, act, item_seed);
-        let item_id = select_tool_by_rarity_weighted(rarity, &tag_weights, item_seed >> 8);
+        let item_id = select_tool_by_rarity_weighted(rarity, &tag_weights, rng.next_u64());
         let price = calculate_price(ItemType::Tool, rarity);
 
         offers.push(ItemOffer {
@@ -651,25 +705,100 @@ pub fn generate_smuggler_hatch_offers(
         });
     }
 
-    // Next 5 offers: Gear
+    // Next 5 offers: Gear (with deduplication)
+    let mut used_ids: [[u8; 8]; 5] = [[0; 8]; 5];
     for i in 0..5 {
-        let item_seed = seed.wrapping_add((i + 1) as u64 * 1337);
-        let rarity = get_rarity_from_table(&SMUGGLER_GEAR_RARITY, act, item_seed);
-        let item_id = select_gear_by_rarity_weighted(rarity, &tag_weights, item_seed >> 8);
-        let price = calculate_price(ItemType::Gear, rarity);
+        let mut attempts = 0;
+        loop {
+            let item_seed = rng.next_u64();
+            let rarity = get_rarity_from_table(&SMUGGLER_GEAR_RARITY, act, item_seed);
+            let item_id = select_gear_by_rarity_weighted(rarity, &tag_weights, rng.next_u64());
+            let price = calculate_price(ItemType::Gear, rarity);
 
-        offers.push(ItemOffer {
-            item_id,
-            tier: 1,
-            price,
-            purchased: false,
-        });
+            // Check for duplicates among gear items
+            let is_duplicate = used_ids[..i].iter().any(|id| *id == item_id);
+            if !is_duplicate || attempts >= 10 {
+                used_ids[i] = item_id;
+                offers.push(ItemOffer {
+                    item_id,
+                    tier: 1,
+                    price,
+                    purchased: false,
+                });
+                break;
+            }
+            attempts += 1;
+        }
     }
 
     GeneratedOffers {
         offers,
         pick_count: 6, // Can purchase multiple
     }
+}
+
+// =============================================================================
+// Tool Oil Offer Generation
+// =============================================================================
+
+use crate::interactions::{OIL_FLAG_ARM, OIL_FLAG_ATK, OIL_FLAG_DIG, OIL_FLAG_SPD};
+use crate::state::OilOffer;
+
+/// All possible oil flags for selection
+const ALL_OILS: [u8; 4] = [OIL_FLAG_ATK, OIL_FLAG_SPD, OIL_FLAG_DIG, OIL_FLAG_ARM];
+
+/// Generate 3 tool oil offers from the 4 possible oils.
+///
+/// Uses Fisher-Yates shuffle to deterministically select 3 of 4 oils.
+/// The seed ensures the same POI always generates the same offers.
+///
+/// # Arguments
+/// * `seed` - RNG seed for deterministic selection
+///
+/// # Returns
+/// Array of 3 oil flags (from OIL_FLAG_ATK, SPD, DIG, ARM)
+pub fn generate_tool_oil_offers(seed: u64) -> [u8; 3] {
+    let mut rng = Xorshift64::new(seed);
+    let mut oils = ALL_OILS;
+
+    // Fisher-Yates shuffle (partial - only need 3 elements)
+    // Swap indices 0, 1, 2 with random elements from remaining array
+    for i in 0..3 {
+        let remaining = 4 - i;
+        let j = i + (rng.next_bounded(remaining as u64) as usize);
+        oils.swap(i, j);
+    }
+
+    // Return first 3 elements
+    [oils[0], oils[1], oils[2]]
+}
+
+/// Create an OilOffer struct for storage in MapPois.
+///
+/// # Arguments
+/// * `poi_index` - Index of the Tool Oil Rack POI
+/// * `seed` - RNG seed for the session/map
+///
+/// # Returns
+/// OilOffer containing the 3 generated oils
+pub fn create_oil_offer(poi_index: u8, seed: u64) -> OilOffer {
+    OilOffer {
+        poi_index,
+        oils: generate_tool_oil_offers(seed),
+        generated_at_seed: seed,
+    }
+}
+
+/// Validate that a selected oil is one of the offered oils.
+///
+/// # Arguments
+/// * `offer` - The OilOffer containing available oils
+/// * `selected_oil` - The oil flag the player selected
+///
+/// # Returns
+/// true if the selected oil is valid, false otherwise
+pub fn validate_oil_selection(offer: &OilOffer, selected_oil: u8) -> bool {
+    offer.oils.contains(&selected_oil)
 }
 
 // =============================================================================
@@ -1340,6 +1469,113 @@ mod tests {
                                  // Index 80+ should return false (out of bounds)
         assert!(!super::is_item_in_pool(&pool, 80));
         assert!(!super::is_item_in_pool(&pool, 255));
+    }
+
+    // =========================================================================
+    // Tool Oil Offer Tests
+    // =========================================================================
+
+    #[test]
+    fn test_generate_tool_oil_offers_returns_3_oils() {
+        let oils = generate_tool_oil_offers(12345);
+        assert_eq!(oils.len(), 3);
+    }
+
+    #[test]
+    fn test_generate_tool_oil_offers_unique_oils() {
+        let oils = generate_tool_oil_offers(12345);
+        // All 3 should be unique
+        assert_ne!(oils[0], oils[1]);
+        assert_ne!(oils[0], oils[2]);
+        assert_ne!(oils[1], oils[2]);
+    }
+
+    #[test]
+    fn test_generate_tool_oil_offers_valid_oil_flags() {
+        for seed in 0..100 {
+            let oils = generate_tool_oil_offers(seed * 12345);
+            for oil in &oils {
+                assert!(
+                    *oil == OIL_FLAG_ATK
+                        || *oil == OIL_FLAG_SPD
+                        || *oil == OIL_FLAG_DIG
+                        || *oil == OIL_FLAG_ARM,
+                    "Invalid oil flag: {}",
+                    oil
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_generate_tool_oil_offers_deterministic() {
+        let oils1 = generate_tool_oil_offers(12345);
+        let oils2 = generate_tool_oil_offers(12345);
+        assert_eq!(oils1, oils2, "Same seed should produce same oils");
+    }
+
+    #[test]
+    fn test_generate_tool_oil_offers_different_seeds() {
+        let oils1 = generate_tool_oil_offers(12345);
+        let oils2 = generate_tool_oil_offers(54321);
+        // Different seeds should produce different results (with high probability)
+        assert!(
+            oils1 != oils2,
+            "Different seeds should likely produce different oils"
+        );
+    }
+
+    #[test]
+    fn test_generate_tool_oil_offers_excludes_one() {
+        // For each seed, exactly one oil should be excluded
+        for seed in 0..100 {
+            let oils = generate_tool_oil_offers(seed * 12345);
+            let has_atk = oils.contains(&OIL_FLAG_ATK);
+            let has_spd = oils.contains(&OIL_FLAG_SPD);
+            let has_dig = oils.contains(&OIL_FLAG_DIG);
+            let has_arm = oils.contains(&OIL_FLAG_ARM);
+
+            let count = [has_atk, has_spd, has_dig, has_arm]
+                .iter()
+                .filter(|&&x| x)
+                .count();
+            assert_eq!(count, 3, "Should have exactly 3 oils present");
+        }
+    }
+
+    #[test]
+    fn test_create_oil_offer() {
+        let offer = create_oil_offer(5, 12345);
+        assert_eq!(offer.poi_index, 5);
+        assert_eq!(offer.generated_at_seed, 12345);
+        assert_eq!(offer.oils.len(), 3);
+    }
+
+    #[test]
+    fn test_validate_oil_selection_valid() {
+        let offer = create_oil_offer(0, 12345);
+        // All 3 oils in the offer should be valid
+        for &oil in &offer.oils {
+            assert!(
+                validate_oil_selection(&offer, oil),
+                "Oil {} should be valid",
+                oil
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_oil_selection_invalid() {
+        // Find the excluded oil
+        let offer = create_oil_offer(0, 12345);
+        let all_oils = [OIL_FLAG_ATK, OIL_FLAG_SPD, OIL_FLAG_DIG, OIL_FLAG_ARM];
+        let excluded_oil = all_oils.iter().find(|&&o| !offer.oils.contains(&o)).unwrap();
+
+        assert!(
+            !validate_oil_selection(&offer, *excluded_oil),
+            "Excluded oil {} should be invalid",
+            excluded_oil
+        );
     }
 }
 

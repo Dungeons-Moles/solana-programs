@@ -669,9 +669,12 @@ pub fn generate_map(map: &mut GeneratedMap, seed: u64, campaign_level: u8) -> bo
         Some((x, y)) => {
             map.spawn_x = x;
             map.spawn_y = y;
-            // Mole den is directly above spawn
+            // Mole den is directly above spawn — convert wall to floor so
+            // the den replaces the wall tile visually and is walkable.
             map.mole_den_x = x;
             map.mole_den_y = y - 1;
+            map.set_floor(x, y - 1);
+            map.walkable_count += 1;
         }
         None => {
             // Failed to find valid spawn point
@@ -747,10 +750,10 @@ mod tests {
         // Spawn should be on a floor tile
         assert!(map.is_walkable(map.spawn_x, map.spawn_y));
 
-        // Mole den should be directly above spawn (wall tile)
+        // Mole den should be directly above spawn (converted to floor tile)
         assert_eq!(map.mole_den_x, map.spawn_x);
         assert_eq!(map.mole_den_y, map.spawn_y - 1);
-        assert!(!map.is_walkable(map.mole_den_x, map.mole_den_y));
+        assert!(map.is_walkable(map.mole_den_x, map.mole_den_y));
     }
 
     #[test]
@@ -850,8 +853,9 @@ mod tests {
                 "Duplicate POI position at {key:?}"
             );
 
+            // All POIs (including mole den) should be on floor tiles
+            assert!(map.is_walkable(poi.x, poi.y));
             if idx > 0 {
-                assert!(map.is_walkable(poi.x, poi.y));
                 assert!(poi.x != map.spawn_x || poi.y != map.spawn_y);
             }
         }

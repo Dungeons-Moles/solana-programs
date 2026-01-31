@@ -368,7 +368,7 @@ describe("map-generator", () => {
   });
 
   describe("Map Tile Verification", () => {
-    it("verifies spawn point is on floor tile with wall above", async () => {
+    it("verifies spawn point and mole den are on floor tiles", async () => {
       await ensureConfigExists();
 
       const payer = provider.wallet;
@@ -401,8 +401,8 @@ describe("map-generator", () => {
       // Spawn point should be walkable
       expect(isWalkable(map.spawnX, map.spawnY)).to.be.true;
 
-      // Mole den (above spawn) should be a wall
-      expect(isWalkable(map.moleDenX, map.moleDenY)).to.be.false;
+      // Mole den (above spawn) should also be walkable (floor tile for POI interaction)
+      expect(isWalkable(map.moleDenX, map.moleDenY)).to.be.true;
     });
 
     it("verifies walkable count matches actual floor tiles", async () => {

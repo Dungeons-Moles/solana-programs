@@ -38,4 +38,8 @@ pub enum MapGeneratorError {
     /// POI index is out of bounds
     #[msg("POI index out of bounds")]
     InvalidPoiIndex,
+
+    /// Tile position is out of bounds
+    #[msg("Tile position out of bounds")]
+    TileOutOfBounds,
 }

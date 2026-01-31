@@ -13,7 +13,7 @@ use gameplay_state::state::GameState;
 pub use pois::PoiDefinition;
 use state::{ActiveCondition, MapPois, ShopState, UseType, MAP_POIS_SEED};
 
-declare_id!("FJVnZE45hxcd7BJeci27BiTx23XD6inN4paiM2EkMaoB");
+declare_id!("6E27r1Cyo2CNPvtRsonn3uHUAdznS3cMXEBX4HRbfBQY");
 
 /// Seed for POI authority PDA used to sign CPI calls to gameplay-state
 pub const POI_AUTHORITY_SEED: &[u8] = b"poi_authority";
@@ -22,6 +22,14 @@ pub const POI_AUTHORITY_SEED: &[u8] = b"poi_authority";
 pub const SESSION_MANAGER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     217, 18, 17, 128, 79, 140, 152, 73, 103, 95, 134, 179, 31, 109, 34, 82, 250, 167, 91, 67, 186,
     23, 209, 2, 80, 255, 118, 192, 175, 242, 222, 183,
+]);
+
+/// Map generator program ID for reading GeneratedMap account
+/// Must match the declare_id! in map-generator/src/lib.rs
+/// BYdGuEGf8NqtLnHpSRuZFrPGEgvdxMfGfTt71QVBxYHa
+pub const MAP_GENERATOR_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
+    156, 174, 227, 192, 77, 77, 237, 57, 57, 229, 227, 42, 100, 51, 52, 5,
+    241, 68, 44, 141, 222, 59, 35, 223, 249, 8, 30, 121, 140, 38, 69, 149,
 ]);
 
 /// Validates POI index, retrieves POI and definition, and validates interaction.
@@ -59,11 +67,24 @@ fn get_and_validate_poi<'a>(
     Ok((poi, poi_def))
 }
 
+/// Converts game_state.week (1-3) to boss_system::Week enum.
+fn to_boss_week(week: u8) -> Result<boss_system::Week> {
+    match week {
+        1 => Ok(boss_system::Week::One),
+        2 => Ok(boss_system::Week::Two),
+        3 => Ok(boss_system::Week::Three),
+        _ => Err(PoiSystemError::InvalidWeek.into()),
+    }
+}
+
 #[program]
 pub mod poi_system {
     use super::*;
 
-    /// Initializes POI state for a session.
+    /// Initializes POI state for a session by copying POIs from the generated map.
+    ///
+    /// The generated_map account contains POIs placed during map generation.
+    /// This instruction copies them to the MapPois account for runtime management.
     pub fn initialize_map_pois(
         ctx: Context<InitializeMapPois>,
         act: u8,
@@ -77,19 +98,66 @@ pub mod poi_system {
         );
         require!((1..=4).contains(&act), PoiSystemError::InvalidAct);
 
+        // Read POI data from the generated map account
+        let generated_map_info = &ctx.accounts.generated_map;
+        let generated_map_data = generated_map_info.try_borrow_data()?;
+
+        // Validate minimum size: 8 (discriminator) + 32 (session) + basic fields
+        require!(
+            generated_map_data.len() >= 8 + 32 + 1 + 1 + 8 + 1 + 1 + 1 + 1 + 2 + 313 + 1 + (48 * 4) + 1,
+            PoiSystemError::InvalidGeneratedMap
+        );
+
+        // Parse generated map fields:
+        // Offset: 8 (discriminator) + 32 (session) + 1 (width) + 1 (height) + 8 (seed)
+        //       + 1 (spawn_x) + 1 (spawn_y) + 1 (mole_den_x) + 1 (mole_den_y)
+        //       + 2 (walkable_count) + 313 (packed_tiles) + 1 (enemy_count)
+        //       + 192 (enemies: 48 * 4) = 562
+        // poi_count is at offset 562
+        let poi_count_offset = 8 + 32 + 1 + 1 + 8 + 1 + 1 + 1 + 1 + 2 + 313 + 1 + (48 * 4);
+        let poi_count = generated_map_data[poi_count_offset] as usize;
+
+        // POIs start at offset 563, each POI is 4 bytes: (poi_type, is_used, x, y)
+        let pois_offset = poi_count_offset + 1;
+
+        // Initialize the MapPois account
         let map_pois = &mut ctx.accounts.map_pois;
         map_pois.session = ctx.accounts.session.key();
         map_pois.bump = ctx.bumps.map_pois;
-        map_pois.count = 0;
         map_pois.act = act;
         map_pois.week = week;
         map_pois.seed = seed;
-        map_pois.pois = Vec::new();
         map_pois.shop_state = ShopState::default();
+
+        // Copy POIs from generated map to MapPois
+        let mut pois = Vec::with_capacity(poi_count);
+        for i in 0..poi_count {
+            let poi_start = pois_offset + (i * 4);
+            if poi_start + 4 > generated_map_data.len() {
+                break;
+            }
+
+            let poi_type = generated_map_data[poi_start];
+            let is_used = generated_map_data[poi_start + 1] != 0;
+            let x = generated_map_data[poi_start + 2];
+            let y = generated_map_data[poi_start + 3];
+
+            pois.push(state::PoiInstance {
+                poi_type,
+                x,
+                y,
+                used: is_used,
+                discovered: poi_type == 1, // Mole Den (L1) is always discovered
+                week_spawned: week,
+            });
+        }
+
+        map_pois.count = pois.len() as u8;
+        map_pois.pois = pois;
 
         emit!(PoisInitialized {
             session: map_pois.session,
-            count: 0,
+            count: map_pois.count,
             act,
         });
 
@@ -137,12 +205,12 @@ pub mod poi_system {
 
     /// Interact with a rest POI (L1 Mole Den or L5 Rest Alcove).
     ///
-    /// - L1: Full heal, repeatable, night-only
-    /// - L5: Heal 10 HP, one-time, night-only
+    /// - L1: Full heal, repeatable, night-only, skip to day
+    /// - L5: Heal 10 HP, one-time, night-only, skip to day
     ///
     /// This instruction validates the interaction, marks the POI as used (if applicable),
-    /// and atomically updates the player's HP via CPI to gameplay-state.
-    /// Max HP is derived from the player's inventory.
+    /// heals the player, and skips to the next day phase via CPI to gameplay-state.
+    /// If used during Night3, triggers the boss fight (cannot skip end-of-week boss).
     pub fn interact_rest(ctx: Context<InteractRest>, poi_index: u8) -> Result<()> {
         let map_pois = &mut ctx.accounts.map_pois;
         let game_state = &ctx.accounts.game_state;
@@ -164,9 +232,10 @@ pub mod poi_system {
             map_pois.pois[poi_index as usize].used = true;
         }
 
+        let seeds = &[POI_AUTHORITY_SEED, &[ctx.bumps.poi_authority]];
+
         // CPI to gameplay-state to heal player atomically
         if result.heal_amount > 0 {
-            let seeds = &[POI_AUTHORITY_SEED, &[ctx.bumps.poi_authority]];
             gameplay_state::cpi::heal_player(
                 CpiContext::new_with_signer(
                     ctx.accounts.gameplay_state_program.to_account_info(),
@@ -181,6 +250,21 @@ pub mod poi_system {
             )?;
         }
 
+        // CPI to gameplay-state to skip to day (or trigger boss fight if Night3)
+        gameplay_state::cpi::skip_to_day(
+            CpiContext::new_with_signer(
+                ctx.accounts.gameplay_state_program.to_account_info(),
+                gameplay_state::cpi::accounts::SkipToDay {
+                    game_state: ctx.accounts.game_state.to_account_info(),
+                    inventory: ctx.accounts.inventory.to_account_info(),
+                    poi_authority: ctx.accounts.poi_authority.to_account_info(),
+                    player: ctx.accounts.player.to_account_info(),
+                    player_inventory_program: ctx.accounts.player_inventory_program.to_account_info(),
+                },
+                &[&seeds[..]],
+            ),
+        )?;
+
         let poi = &map_pois.pois[poi_index as usize];
         emit!(RestCompleted {
             session: map_pois.session,
@@ -194,6 +278,79 @@ pub mod poi_system {
         Ok(())
     }
 
+    /// Generate and store cache offers for a pick-item POI (L2, L3, L12, L13).
+    ///
+    /// This instruction generates offers using an on-chain derived seed (Clock)
+    /// and stores them in `MapPois.current_offer` so the frontend can read them.
+    /// The user then calls `interact_pick_item` with their chosen index.
+    ///
+    /// Must be called before `interact_pick_item` for pick-item POIs.
+    pub fn generate_cache_offer(
+        ctx: Context<InteractPickItem>,
+        poi_index: u8,
+    ) -> Result<()> {
+        let map_pois = &mut ctx.accounts.map_pois;
+        let game_state = &ctx.accounts.game_state;
+
+        let (poi, _) = get_and_validate_poi(map_pois, game_state, poi_index, false)?;
+
+        let poi_type = poi.poi_type;
+        let act = map_pois.act;
+
+        // Derive seed from on-chain Clock to prevent client manipulation
+        let clock = Clock::get()?;
+        let session_bytes = map_pois.session.to_bytes();
+        let seed = (clock.unix_timestamp as u64)
+            ^ (poi_index as u64)
+            ^ (act as u64) << 8
+            ^ (session_bytes[0] as u64) << 16
+            ^ (session_bytes[1] as u64) << 24;
+
+        // Fetch boss weaknesses on-chain
+        let week = to_boss_week(game_state.week)?;
+        let weaknesses = boss_system::get_boss_weaknesses(game_state.campaign_level, week)
+            .map_err(|_| PoiSystemError::InvalidBossWeek)?;
+        let w1 = offers::WeaknessTag::try_from(weaknesses[0] as u8)
+            .unwrap_or(offers::WeaknessTag::Stone);
+        let w2 = offers::WeaknessTag::try_from(weaknesses[1] as u8)
+            .unwrap_or(offers::WeaknessTag::Frost);
+
+        let generated = offers::generate_poi_offers(poi_type, act, w1, w2, seed)
+            .ok_or(PoiSystemError::InvalidInteraction)?;
+
+        // Filter offers by active item pool from session
+        let filtered = offers::filter_offers_by_pool(
+            &generated.offers,
+            &ctx.accounts.game_session.active_item_pool,
+        );
+
+        // Convert filtered offers to OfferItems for storage
+        let mut items = [state::OfferItem::default(); 3];
+        for (i, offer) in filtered.iter().take(3).enumerate() {
+            items[i] = state::OfferItem {
+                item_id: offer.item_id,
+                rarity: offer.tier,
+            };
+        }
+
+        map_pois.current_offer = Some(state::CacheOffer {
+            poi_index,
+            items,
+            generated_at_seed: seed,
+        });
+
+        emit!(CacheOfferGenerated {
+            session: map_pois.session,
+            poi_index,
+            poi_type,
+            item0: items[0].item_id,
+            item1: items[1].item_id,
+            item2: items[2].item_id,
+        });
+
+        Ok(())
+    }
+
     /// Interact with a pick-item POI (L2, L3, L12, L13).
     ///
     /// - L2 (Supply Cache): Pick 1 of 3 Gear
@@ -201,15 +358,12 @@ pub mod poi_system {
     /// - L12 (Geode Vault): Pick 1 of 3 Heroic+ items
     /// - L13 (Counter Cache): Pick 1 of 3 weakness-tagged items
     ///
-    /// The offers are generated deterministically from the seed.
-    /// The instruction validates the interaction and emits an ItemPicked event.
+    /// Requires `generate_cache_offer` to have been called first.
+    /// Reads the stored offers from `current_offer` and applies the user's choice.
     pub fn interact_pick_item(
         ctx: Context<InteractPickItem>,
         poi_index: u8,
         choice_index: u8,
-        weakness1: u8, // Boss weakness tag 1 (0-7)
-        weakness2: u8, // Boss weakness tag 2 (0-7)
-        seed: u64,
     ) -> Result<()> {
         let map_pois = &mut ctx.accounts.map_pois;
         let game_state = &ctx.accounts.game_state;
@@ -219,20 +373,29 @@ pub mod poi_system {
         let poi_type = poi.poi_type;
         let x = poi.x;
         let y = poi.y;
-        let act = map_pois.act;
         let is_night = game_state.phase.is_night();
 
-        let w1 = offers::WeaknessTag::try_from(weakness1).unwrap_or(offers::WeaknessTag::Stone);
-        let w2 = offers::WeaknessTag::try_from(weakness2).unwrap_or(offers::WeaknessTag::Frost);
+        // Read cached offers instead of regenerating
+        let cached = map_pois.current_offer.ok_or(PoiSystemError::NoActiveInteraction)?;
+        require!(cached.poi_index == poi_index, PoiSystemError::InvalidPoiIndex);
 
-        let generated = offers::generate_poi_offers(poi_type, act, w1, w2, seed)
-            .ok_or(PoiSystemError::InvalidInteraction)?;
+        // Convert cached OfferItems to ItemOffers for pick interaction
+        let offers: Vec<state::ItemOffer> = cached
+            .items
+            .iter()
+            .map(|item| state::ItemOffer {
+                item_id: item.item_id,
+                tier: item.rarity,
+                price: 0,
+                purchased: false,
+            })
+            .collect();
 
         // Execute pick interaction
         let poi = &map_pois.pois[poi_index as usize];
         let result = interactions::execute_pick_item_interaction(
             poi,
-            &generated.offers,
+            &offers,
             choice_index,
             is_night,
         )?;
@@ -241,6 +404,9 @@ pub mod poi_system {
         if result.mark_used {
             map_pois.pois[poi_index as usize].used = true;
         }
+
+        // Clear current offer after pick
+        map_pois.current_offer = None;
 
         emit!(ItemPicked {
             session: map_pois.session,
@@ -260,38 +426,101 @@ pub mod poi_system {
         Ok(())
     }
 
+    /// Generate and store oil offers for a Tool Oil Rack (L4).
+    ///
+    /// This instruction generates 3 of 4 possible oils using an on-chain derived seed
+    /// and stores them in `MapPois.current_oil_offer` so the frontend can read them.
+    /// The user then calls `interact_tool_oil` with their chosen oil.
+    ///
+    /// Must be called before `interact_tool_oil` for Tool Oil Rack POIs.
+    pub fn generate_oil_offer(
+        ctx: Context<InteractToolOil>,
+        poi_index: u8,
+    ) -> Result<()> {
+        let map_pois = &mut ctx.accounts.map_pois;
+        let game_state = &ctx.accounts.game_state;
+
+        // Validate POI (don't skip usage check - Tool Oil is one-time use)
+        let (poi, _) = get_and_validate_poi(map_pois, game_state, poi_index, false)?;
+
+        let poi_type = poi.poi_type;
+
+        // Validate it's a Tool Oil Rack (L4 = poi_type 4)
+        require!(poi_type == 4, PoiSystemError::InvalidInteraction);
+
+        // Derive seed from on-chain Clock to prevent client manipulation
+        let clock = Clock::get()?;
+        let session_bytes = map_pois.session.to_bytes();
+        let seed = (clock.unix_timestamp as u64)
+            ^ (poi_index as u64)
+            ^ (session_bytes[0] as u64) << 16
+            ^ (session_bytes[1] as u64) << 24;
+
+        // Generate oil offer
+        let oil_offer = offers::create_oil_offer(poi_index, seed);
+
+        // Store in MapPois
+        map_pois.current_oil_offer = Some(oil_offer);
+
+        emit!(OilOfferGenerated {
+            session: map_pois.session,
+            poi_index,
+            oils: oil_offer.oils,
+        });
+
+        Ok(())
+    }
+
     /// Interact with a Tool Oil Rack (L4).
     ///
-    /// Applies +1 to ATK, SPD, or DIG on the player's current tool.
-    /// Each oil type can only be applied once per tool (RepeatablePerTool).
+    /// Applies +1 to ATK, SPD, DIG, or ARM on the player's current tool.
+    /// This is a one-time use POI - user picks one oil and the POI is consumed.
+    ///
+    /// Requires `generate_oil_offer` to have been called first.
+    /// Validates the selected oil is one of the 3 generated offers.
     ///
     /// Arguments:
     /// - `poi_index`: Index of the POI in map_pois.pois
-    /// - `current_oil_flags`: Current tool oil flags (tracked by client/gameplay-state)
-    /// - `modification`: Oil type (1=ATK, 2=SPD, 4=DIG)
+    /// - `current_oil_flags`: Current tool oil flags (unused, kept for API compat)
+    /// - `modification`: Oil type (1=ATK, 2=SPD, 4=DIG, 8=ARM)
     pub fn interact_tool_oil(
         ctx: Context<InteractToolOil>,
         poi_index: u8,
-        current_oil_flags: u8,
+        _current_oil_flags: u8,
         modification: u8,
     ) -> Result<()> {
         let map_pois = &mut ctx.accounts.map_pois;
         let game_state = &ctx.accounts.game_state;
 
-        // RepeatablePerTool has special usage rules, so skip usage check
-        let (poi, _) = get_and_validate_poi(map_pois, game_state, poi_index, true)?;
+        // Validate POI (don't skip usage check - Tool Oil is one-time use)
+        let (poi, _) = get_and_validate_poi(map_pois, game_state, poi_index, false)?;
 
         let poi_type = poi.poi_type;
         let x = poi.x;
         let y = poi.y;
         let is_night = game_state.phase.is_night();
 
+        // Read cached oil offer and validate selection
+        let oil_offer = map_pois.current_oil_offer.ok_or(PoiSystemError::NoActiveInteraction)?;
+        require!(oil_offer.poi_index == poi_index, PoiSystemError::InvalidPoiIndex);
+        require!(
+            offers::validate_oil_selection(&oil_offer, modification),
+            PoiSystemError::InvalidOilSelection
+        );
+
+        // We don't check current_oil_flags here - player-inventory tracks that
         let result = interactions::execute_tool_oil_interaction(
             poi,
-            current_oil_flags,
+            0, // Not used for validation anymore
             modification,
             is_night,
         )?;
+
+        // Mark POI as used (one-time use)
+        map_pois.pois[poi_index as usize].used = true;
+
+        // Clear oil offer after selection
+        map_pois.current_oil_offer = None;
 
         emit!(ToolOilApplied {
             session: map_pois.session,
@@ -320,9 +549,6 @@ pub mod poi_system {
     pub fn enter_shop(
         ctx: Context<EnterShop>,
         poi_index: u8,
-        weakness1: u8,
-        weakness2: u8,
-        seed: u64,
     ) -> Result<()> {
         let map_pois = &mut ctx.accounts.map_pois;
         let game_state = &ctx.accounts.game_state;
@@ -340,19 +566,39 @@ pub mod poi_system {
 
         interactions::validate_shop_poi(poi, is_night)?;
 
-        // Generate offers
-        let w1 = offers::WeaknessTag::try_from(weakness1).unwrap_or(offers::WeaknessTag::Stone);
-        let w2 = offers::WeaknessTag::try_from(weakness2).unwrap_or(offers::WeaknessTag::Frost);
+        // Derive seed from on-chain Clock to prevent client manipulation
+        let clock = Clock::get()?;
+        let session_bytes = map_pois.session.to_bytes();
+        let seed = (clock.unix_timestamp as u64)
+            ^ (poi_index as u64)
+            ^ (act as u64) << 8
+            ^ (session_bytes[0] as u64) << 16
+            ^ (session_bytes[1] as u64) << 24;
+
+        // Fetch boss weaknesses on-chain
+        let week = to_boss_week(game_state.week)?;
+        let weaknesses = boss_system::get_boss_weaknesses(game_state.campaign_level, week)
+            .map_err(|_| PoiSystemError::InvalidBossWeek)?;
+        let w1 = offers::WeaknessTag::try_from(weaknesses[0] as u8)
+            .unwrap_or(offers::WeaknessTag::Stone);
+        let w2 = offers::WeaknessTag::try_from(weaknesses[1] as u8)
+            .unwrap_or(offers::WeaknessTag::Frost);
 
         let generated = offers::generate_smuggler_hatch_offers(act, w1, w2, seed);
+
+        // Filter offers by active item pool from session
+        let filtered = offers::filter_offers_by_pool(
+            &generated.offers,
+            &ctx.accounts.game_session.active_item_pool,
+        );
 
         // Initialize shop state
         map_pois.shop_state.active = true;
         map_pois.shop_state.poi_index = poi_index;
         map_pois.shop_state.reroll_count = 0;
 
-        // Copy offers to shop state
-        for (i, offer) in generated.offers.iter().enumerate() {
+        // Copy filtered offers to shop state
+        for (i, offer) in filtered.iter().enumerate() {
             if i < state::SHOP_OFFER_COUNT {
                 map_pois.shop_state.offers[i] = *offer;
             }
@@ -409,12 +655,7 @@ pub mod poi_system {
     ///
     /// Cost increases with each reroll: 4, 6, 8, 10, ...
     /// Gold is deducted atomically via CPI to gameplay-state.
-    pub fn shop_reroll(
-        ctx: Context<ShopReroll>,
-        weakness1: u8,
-        weakness2: u8,
-        seed: u64,
-    ) -> Result<()> {
+    pub fn shop_reroll(ctx: Context<ShopReroll>) -> Result<()> {
         let map_pois = &mut ctx.accounts.map_pois;
         let game_state = &ctx.accounts.game_state;
         let player_gold = game_state.gold;
@@ -441,15 +682,38 @@ pub mod poi_system {
         // Increment reroll count
         map_pois.shop_state.reroll_count = map_pois.shop_state.reroll_count.saturating_add(1);
 
+        // Derive seed from on-chain Clock + reroll_count to prevent manipulation
+        let clock = Clock::get()?;
+        let session_bytes = map_pois.session.to_bytes();
+        let seed = (clock.unix_timestamp as u64)
+            ^ (map_pois.shop_state.reroll_count as u64)
+            ^ (session_bytes[0] as u64) << 16
+            ^ (session_bytes[1] as u64) << 24;
+
+        // Fetch boss weaknesses on-chain
+        let week = to_boss_week(game_state.week)?;
+        let weaknesses = boss_system::get_boss_weaknesses(game_state.campaign_level, week)
+            .map_err(|_| PoiSystemError::InvalidBossWeek)?;
+        let w1 = offers::WeaknessTag::try_from(weaknesses[0] as u8)
+            .unwrap_or(offers::WeaknessTag::Stone);
+        let w2 = offers::WeaknessTag::try_from(weaknesses[1] as u8)
+            .unwrap_or(offers::WeaknessTag::Frost);
+
         // Generate new offers
         let act = map_pois.act;
-        let w1 = offers::WeaknessTag::try_from(weakness1).unwrap_or(offers::WeaknessTag::Stone);
-        let w2 = offers::WeaknessTag::try_from(weakness2).unwrap_or(offers::WeaknessTag::Frost);
 
         let generated = offers::generate_smuggler_hatch_offers(act, w1, w2, seed);
 
-        // Replace offers
-        for (i, offer) in generated.offers.iter().enumerate() {
+        // Filter offers by active item pool from session
+        let filtered = offers::filter_offers_by_pool(
+            &generated.offers,
+            &ctx.accounts.game_session.active_item_pool,
+        );
+
+        // Replace offers with filtered results
+        // Reset all slots first, then fill with filtered offers
+        map_pois.shop_state.offers = [state::ItemOffer::default(); state::SHOP_OFFER_COUNT];
+        for (i, offer) in filtered.iter().enumerate() {
             if i < state::SHOP_OFFER_COUNT {
                 map_pois.shop_state.offers[i] = *offer;
             }
@@ -802,6 +1066,14 @@ pub struct InitializeMapPois<'info> {
     /// CHECK: We only verify this account exists as validation of the session
     pub session: AccountInfo<'info>,
 
+    /// Generated map containing POIs to copy
+    /// CHECK: Validated by owner check (must be owned by map-generator program)
+    /// and PDA derivation (seeds = ["generated_map", session])
+    #[account(
+        owner = MAP_GENERATOR_PROGRAM_ID @ PoiSystemError::InvalidGeneratedMap
+    )]
+    pub generated_map: AccountInfo<'info>,
+
     #[account(mut)]
     pub payer: Signer<'info>,
 
@@ -855,8 +1127,9 @@ pub struct InteractRest<'info> {
     )]
     pub game_state: Account<'info, GameState>,
 
-    /// Player's inventory for deriving max_hp (PDA derived from session)
+    /// Player's inventory for deriving max_hp and boss fight resolution (mut for gear slot expansion)
     #[account(
+        mut,
         seeds = [b"inventory", game_state.session.as_ref()],
         bump = inventory.bump,
         seeds::program = player_inventory::ID,
@@ -871,8 +1144,11 @@ pub struct InteractRest<'info> {
     )]
     pub poi_authority: AccountInfo<'info>,
 
-    /// Gameplay state program for CPI
+    /// Gameplay state program for CPI (heal_player and skip_to_day)
     pub gameplay_state_program: Program<'info, gameplay_state::program::GameplayState>,
+
+    /// Player inventory program for CPI (expand gear slots on boss victory via skip_to_day)
+    pub player_inventory_program: Program<'info, player_inventory::program::PlayerInventory>,
 
     /// Player initiating the interaction
     pub player: Signer<'info>,
@@ -895,6 +1171,12 @@ pub struct InteractPickItem<'info> {
         seeds::program = gameplay_state::ID,
     )]
     pub game_state: Account<'info, GameState>,
+
+    /// Game session for active_item_pool filtering
+    #[account(
+        constraint = game_session.key() == map_pois.session @ PoiSystemError::InvalidSession,
+    )]
+    pub game_session: Account<'info, session_manager::state::GameSession>,
 
     /// Player initiating the interaction
     pub player: Signer<'info>,
@@ -939,6 +1221,12 @@ pub struct EnterShop<'info> {
         seeds::program = gameplay_state::ID,
     )]
     pub game_state: Account<'info, GameState>,
+
+    /// Game session for active_item_pool filtering
+    #[account(
+        constraint = game_session.key() == map_pois.session @ PoiSystemError::InvalidSession,
+    )]
+    pub game_session: Account<'info, session_manager::state::GameSession>,
 
     /// Player initiating the interaction
     pub player: Signer<'info>,
@@ -996,6 +1284,12 @@ pub struct ShopReroll<'info> {
         seeds::program = gameplay_state::ID,
     )]
     pub game_state: Account<'info, GameState>,
+
+    /// Game session for active_item_pool filtering
+    #[account(
+        constraint = game_session.key() == map_pois.session @ PoiSystemError::InvalidSession,
+    )]
+    pub game_session: Account<'info, session_manager::state::GameSession>,
 
     /// POI authority PDA for signing CPI calls
     /// CHECK: PDA derived from this program, used as signer in CPI
@@ -1349,8 +1643,18 @@ pub struct CacheOfferGenerated {
     pub session: Pubkey,
     pub poi_index: u8,
     pub poi_type: u8,
-    /// Items as (item_id as bytes, rarity)
-    pub items: [([u8; 8], u8); 3],
+    pub item0: [u8; 8],
+    pub item1: [u8; 8],
+    pub item2: [u8; 8],
+}
+
+/// Emitted when oil offers are generated for Tool Oil Rack (L4).
+#[event]
+pub struct OilOfferGenerated {
+    pub session: Pubkey,
+    pub poi_index: u8,
+    /// The 3 oil flags offered (from OIL_FLAG_ATK=1, SPD=2, DIG=4, ARM=8)
+    pub oils: [u8; 3],
 }
 
 /// The discriminator for initialize_map_pois instruction.

@@ -9,35 +9,23 @@ addon "svm" {
 
 action "deploy_map_generator" "svm::deploy_program" {
     description = "Deploy map_generator program"
-    program = svm::get_program_from_anchor_project("map_generator") 
+    program = svm::get_program_from_anchor_project("map_generator")
     authority = signer.authority
     payer = signer.payer
-    // Optional: if you want to deploy the program via a cheatcode when targeting a Surfnet, set `instant_surfnet_deployment = true`
-    // Deploying via a cheatcode will write the program data directly to the program account, rather than sending transactions.
-    // This will make deployments instantaneous, but is deviating from how the deployments will take place on devnet/mainnet.
-    // instant_surfnet_deployment = true
 }
 
 action "deploy_player_profile" "svm::deploy_program" {
     description = "Deploy player_profile program"
-    program = svm::get_program_from_anchor_project("player_profile") 
+    program = svm::get_program_from_anchor_project("player_profile")
     authority = signer.authority
     payer = signer.payer
-    // Optional: if you want to deploy the program via a cheatcode when targeting a Surfnet, set `instant_surfnet_deployment = true`
-    // Deploying via a cheatcode will write the program data directly to the program account, rather than sending transactions.
-    // This will make deployments instantaneous, but is deviating from how the deployments will take place on devnet/mainnet.
-    // instant_surfnet_deployment = true
 }
 
 action "deploy_session_manager" "svm::deploy_program" {
     description = "Deploy session_manager program"
-    program = svm::get_program_from_anchor_project("session_manager") 
+    program = svm::get_program_from_anchor_project("session_manager")
     authority = signer.authority
     payer = signer.payer
-    // Optional: if you want to deploy the program via a cheatcode when targeting a Surfnet, set `instant_surfnet_deployment = true`
-    // Deploying via a cheatcode will write the program data directly to the program account, rather than sending transactions.
-    // This will make deployments instantaneous, but is deviating from how the deployments will take place on devnet/mainnet.
-    // instant_surfnet_deployment = true
 }
 
 action "deploy_gameplay_state" "svm::deploy_program" {
@@ -47,9 +35,16 @@ action "deploy_gameplay_state" "svm::deploy_program" {
     payer = signer.payer
 }
 
-action "deploy_combat_system" "svm::deploy_program" {
-    description = "Deploy combat_system program"
-    program = svm::get_program_from_anchor_project("combat_system")
+action "deploy_player_inventory" "svm::deploy_program" {
+    description = "Deploy player_inventory program"
+    program = svm::get_program_from_anchor_project("player_inventory")
+    authority = signer.authority
+    payer = signer.payer
+}
+
+action "deploy_poi_system" "svm::deploy_program" {
+    description = "Deploy poi_system program"
+    program = svm::get_program_from_anchor_project("poi_system")
     authority = signer.authority
     payer = signer.payer
 }

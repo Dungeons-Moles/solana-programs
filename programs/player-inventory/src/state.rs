@@ -148,6 +148,8 @@ pub enum ToolOilModification {
     PlusSpd,
     /// +1 DIG
     PlusDig,
+    /// +1 ARM
+    PlusArm,
 }
 
 impl ToolOilModification {
@@ -157,6 +159,7 @@ impl ToolOilModification {
             ToolOilModification::PlusAtk => crate::constants::TOOL_OIL_ATK,
             ToolOilModification::PlusSpd => crate::constants::TOOL_OIL_SPD,
             ToolOilModification::PlusDig => crate::constants::TOOL_OIL_DIG,
+            ToolOilModification::PlusArm => crate::constants::TOOL_OIL_ARM,
         }
     }
 
@@ -166,6 +169,7 @@ impl ToolOilModification {
             ToolOilModification::PlusAtk => EffectType::GainAtk,
             ToolOilModification::PlusSpd => EffectType::GainSpd,
             ToolOilModification::PlusDig => EffectType::GainDig,
+            ToolOilModification::PlusArm => EffectType::GainArmor,
         }
     }
 }
@@ -177,7 +181,7 @@ pub struct ItemInstance {
     pub item_id: [u8; 8],
     /// Upgrade tier
     pub tier: Tier,
-    /// Tool Oil bitflags: 0x01=+ATK, 0x02=+SPD, 0x04=+DIG
+    /// Tool Oil bitflags: 0x01=+ATK, 0x02=+SPD, 0x04=+DIG, 0x08=+ARM
     pub tool_oil_flags: u8,
 }
 

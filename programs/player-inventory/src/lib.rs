@@ -30,7 +30,7 @@ use state::{
     ToolOilModification,
 };
 
-declare_id!("8vNWjVvz8ZZvPLCKhNJcJH6vxCqNKJgq3hLYAqYdQmQZ");
+declare_id!("5BtqiWegvVAgEnTRUofB9oUoQvPztYqSkMPwRpYQacP8");
 
 #[program]
 pub mod player_inventory {

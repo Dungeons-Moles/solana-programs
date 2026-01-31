@@ -205,10 +205,11 @@ describe("gameplay-state", () => {
         gameplayStateProgram: gameplayProgram.programId,
         poiSystemProgram: poiSystemProgram.programId,
         playerInventoryProgram: playerInventoryProgram.programId,
+        playerProfileProgram: playerProfileProgram.programId,
         systemProgram: SystemProgram.programId,
       } as any)
       .preInstructions([anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({ units: 1400000 }), anchor.web3.ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 })])
-      .signers([user])
+      .signers([user, burnerWallet])
       .rpc();
 
     try {
@@ -274,10 +275,11 @@ describe("gameplay-state", () => {
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
+          burnerWallet: burnerWallet.publicKey,
           inventory: inventoryPDA,
           playerInventoryProgram: playerInventoryProgram.programId,
         } as any)
-        .signers([user])
+        .signers([user, burnerWallet])
         .rpc();
     } catch (e) {
       // Ignore if already closed
@@ -285,11 +287,9 @@ describe("gameplay-state", () => {
   };
 
   // Helper to move player with position tracking
-  // signer: the keypair that signs (user - the main wallet)
-  // mainUser: the main user's pubkey (for inventory PDA derivation)
+  // burnerWallet: the keypair that signs gameplay transactions
   const movePlayer = async (
-    signer: Keypair,
-    mainUser: anchor.web3.PublicKey,
+    burnerWallet: Keypair,
     gameStatePDA: anchor.web3.PublicKey,
     targetX: number,
     targetY: number,
@@ -304,15 +304,14 @@ describe("gameplay-state", () => {
       .movePlayer(targetX, targetY)
       .accounts({
         gameState: gameStatePDA,
-        sessionManager: sessionProgram.programId,
         gameSession: gameState.session,
         mapEnemies: mapEnemiesPDA,
         generatedMap: generatedMapPDA,
         inventory: inventoryPDA,
         playerInventoryProgram: playerInventoryProgram.programId,
-        player: signer.publicKey,
+        player: burnerWallet.publicKey,
       } as any)
-      .signers([signer])
+      .signers([burnerWallet])
       .rpc();
     return { x: targetX, y: targetY };
   };
@@ -381,11 +380,9 @@ describe("gameplay-state", () => {
   };
 
   // Helper to move back and forth
-  // signer: the keypair that signs (user - the main wallet)
-  // mainUser: the main user's pubkey (for inventory PDA derivation)
+  // burnerWallet: the keypair that signs gameplay transactions
   const moveBackAndForth = async (
-    signer: Keypair,
-    mainUser: anchor.web3.PublicKey,
+    burnerWallet: Keypair,
     gameStatePDA: anchor.web3.PublicKey,
     startX: number,
     startY: number,
@@ -408,7 +405,7 @@ describe("gameplay-state", () => {
         currentX === startX && currentY === startY
           ? target
           : { x: startX, y: startY };
-      await movePlayer(signer, mainUser, gameStatePDA, next.x, next.y);
+      await movePlayer(burnerWallet, gameStatePDA, next.x, next.y);
       currentX = next.x;
       currentY = next.y;
     }
@@ -435,6 +432,9 @@ describe("gameplay-state", () => {
 
         expect(gameState.player.toString()).to.equal(
           user.publicKey.toString(),
+        );
+        expect(gameState.burnerWallet.toString()).to.equal(
+          burnerWallet.publicKey.toString(),
         );
         expect(gameState.positionX).to.equal(startX);
         expect(gameState.positionY).to.equal(startY);
@@ -483,7 +483,7 @@ describe("gameplay-state", () => {
           false,
         );
 
-        await movePlayer(user, user.publicKey, gameStatePDA, target.x, target.y);
+        await movePlayer(burnerWallet, gameStatePDA, target.x, target.y);
 
         const gameState =
           await gameplayProgram.account.gameState.fetch(gameStatePDA);
@@ -524,7 +524,7 @@ describe("gameplay-state", () => {
           true,
         );
 
-        await movePlayer(user, user.publicKey, gameStatePDA, target.x, target.y);
+        await movePlayer(burnerWallet, gameStatePDA, target.x, target.y);
 
         const gameState =
           await gameplayProgram.account.gameState.fetch(gameStatePDA);
@@ -561,7 +561,7 @@ describe("gameplay-state", () => {
         } = await setupUserWithGameState();
 
         try {
-          await movePlayer(user, user.publicKey, gameStatePDA, mapWidth, 0);
+          await movePlayer(burnerWallet, gameStatePDA, mapWidth, 0);
           expect.fail("Should have thrown an error");
         } catch (error: any) {
           expect(error.toString()).to.include("OutOfBounds");
@@ -591,37 +591,34 @@ describe("gameplay-state", () => {
           mapHeight,
         } = await setupUserWithGameState();
 
-        // Use up moves: 10 wall digs = 50 moves
-        // After 9 wall digs, we have 5 moves left (50 - 45 = 5)
-        // 9th dig uses last 5 moves, now we have 0 (advances to Night with 30)
-        // For simplicity, just do a few moves and test
-        // Do 9 floor moves (49 left), then try wall (needs 5, but we have 1 after 49 floor moves)
-        const position = await moveBackAndForth(
-          user,
-          user.publicKey,
+        // Phase spanning allows borrowing moves from next phase, so we must test in Night3
+        // where there is no next phase to borrow from.
+        // Use set_phase_for_testing to jump directly to Night3 with 2 moves remaining.
+        await gameplayProgram.methods
+          .setPhaseForTesting({ night3: {} }, 2)
+          .accounts({
+            gameState: gameStatePDA,
+            burnerWallet: burnerWallet.publicKey,
+          })
+          .signers([burnerWallet])
+          .rpc();
+
+        // Verify we're in Night3 with 2 moves remaining
+        let gameState =
+          await gameplayProgram.account.gameState.fetch(gameStatePDA);
+        expect(gameState.movesRemaining).to.equal(2);
+        expect(gameState.phase).to.deep.equal({ night3: {} });
+
+        const target = await getAdjacentTargetByTile(
           gameStatePDA,
           startX,
           startY,
           mapWidth,
           mapHeight,
-          48,
-        );
-
-        // Now we have 2 moves remaining
-        let gameState =
-          await gameplayProgram.account.gameState.fetch(gameStatePDA);
-        expect(gameState.movesRemaining).to.equal(2);
-
-        const target = await getAdjacentTargetByTile(
-          gameStatePDA,
-          position.x,
-          position.y,
-          mapWidth,
-          mapHeight,
           true,
         );
         try {
-          await movePlayer(user, user.publicKey, gameStatePDA, target.x, target.y); // wall needs 5
+          await movePlayer(burnerWallet, gameStatePDA, target.x, target.y); // wall needs 6 (DIG=0), but we only have 2
           expect.fail("Should have thrown an error");
         } catch (error: any) {
           expect(error.toString()).to.include("InsufficientMoves");
@@ -662,14 +659,14 @@ describe("gameplay-state", () => {
         };
 
         try {
-          await movePlayer(user, user.publicKey, gameStatePDA, target.x, target.y);
+          await movePlayer(burnerWallet, gameStatePDA, target.x, target.y);
           expect.fail("Should have thrown an error");
         } catch (error: any) {
           expect(error.toString()).to.include("NotAdjacent");
         }
 
         try {
-          await movePlayer(user, user.publicKey, gameStatePDA, diagonal.x, diagonal.y);
+          await movePlayer(burnerWallet, gameStatePDA, diagonal.x, diagonal.y);
           expect.fail("Should have thrown an error");
         } catch (error: any) {
           expect(error.toString()).to.include("NotAdjacent");
@@ -723,8 +720,7 @@ describe("gameplay-state", () => {
 
         // Exhaust Day1 moves
         await moveBackAndForth(
-          user,
-          user.publicKey,
+          burnerWallet,
           gameStatePDA,
           startX,
           startY,
@@ -764,8 +760,7 @@ describe("gameplay-state", () => {
 
         // Day1 -> Night1
         let pos = await moveBackAndForth(
-          user,
-          user.publicKey,
+          burnerWallet,
           gameStatePDA,
           startX,
           startY,
@@ -778,8 +773,7 @@ describe("gameplay-state", () => {
 
         // Night1 -> Day2
         await moveBackAndForth(
-          user,
-          user.publicKey,
+          burnerWallet,
           gameStatePDA,
           pos.x,
           pos.y,
@@ -909,6 +903,7 @@ describe("gameplay-state", () => {
     describe("GameState requires valid GameSession PDA", () => {
       it("rejects non-session account", async () => {
         const user = Keypair.generate();
+        const burner = Keypair.generate();
         const airdropSig = await provider.connection.requestAirdrop(
           user.publicKey,
           LAMPORTS_PER_SOL,
@@ -944,6 +939,7 @@ describe("gameplay-state", () => {
               generatedMap: generatedMapPDA,
               mapEnemies: mapEnemiesPDA,
               player: user.publicKey,
+              burnerWallet: burner.publicKey,
               systemProgram: SystemProgram.programId,
             } as any)
             .signers([user])
@@ -991,7 +987,6 @@ describe("gameplay-state", () => {
             .movePlayer(1, 0)
             .accounts({
               gameState: gameStatePDA,
-              sessionManager: sessionProgram.programId,
               gameSession: sessionPDA,
               mapEnemies: mapEnemiesPDA,
               generatedMap: generatedMapPDA,
@@ -1049,10 +1044,11 @@ describe("gameplay-state", () => {
           .accounts({
             gameSession: sessionPDA,
             player: user.publicKey,
+            burnerWallet: burnerWallet.publicKey,
             inventory: inventoryPDA,
             playerInventoryProgram: playerInventoryProgram.programId,
           } as any)
-          .signers([user])
+          .signers([user, burnerWallet])
           .rpc();
       });
     });

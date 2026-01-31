@@ -30,7 +30,6 @@ pub const SESSION_MANAGER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     23, 209, 2, 80, 255, 118, 192, 175, 242, 222, 183,
 ]);
 
-
 /// POI system program ID for authorized HP/Gold modifications
 /// Derived from "6E27r1Cyo2CNPvtRsonn3uHUAdznS3cMXEBX4HRbfBQY"
 pub const POI_SYSTEM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
@@ -364,7 +363,8 @@ pub mod gameplay_state {
             }
             // Check if we can afford by spanning to next phase
             let next_phase = game_state.phase.next().unwrap();
-            let total_available = game_state.moves_remaining as u16 + next_phase.moves_allowed() as u16;
+            let total_available =
+                game_state.moves_remaining as u16 + next_phase.moves_allowed() as u16;
             require!(
                 total_available >= move_cost as u16,
                 GameplayStateError::InsufficientMoves
@@ -523,12 +523,8 @@ pub mod gameplay_state {
         if !is_last_move_of_week {
             if let Some(enemy_idx) = target_enemy_idx {
                 combat_triggered = true;
-                let player_won = resolve_enemy_combat(
-                    game_state,
-                    inventory,
-                    map_enemies,
-                    enemy_idx,
-                )?;
+                let player_won =
+                    resolve_enemy_combat(game_state, inventory, map_enemies, enemy_idx)?;
                 if !player_won {
                     return Ok(());
                 }
@@ -572,12 +568,8 @@ pub mod gameplay_state {
                 if let Some(enemy_idx) =
                     find_enemy_index(map_enemies, game_state.position_x, game_state.position_y)
                 {
-                    let player_won = resolve_enemy_combat(
-                        game_state,
-                        inventory,
-                        map_enemies,
-                        enemy_idx,
-                    )?;
+                    let player_won =
+                        resolve_enemy_combat(game_state, inventory, map_enemies, enemy_idx)?;
                     if !player_won {
                         return Ok(());
                     }
@@ -630,12 +622,7 @@ pub mod gameplay_state {
         if let Some(enemy_idx) =
             find_enemy_index(map_enemies, game_state.position_x, game_state.position_y)
         {
-            let player_won = resolve_enemy_combat(
-                game_state,
-                inventory,
-                map_enemies,
-                enemy_idx,
-            )?;
+            let player_won = resolve_enemy_combat(game_state, inventory, map_enemies, enemy_idx)?;
             if !player_won {
                 return Ok(());
             }
@@ -993,7 +980,11 @@ fn select_enemy_step(
         if delta == 0 {
             return None;
         }
-        Some(if delta > 0 { pos.saturating_add(1) } else { pos.saturating_sub(1) })
+        Some(if delta > 0 {
+            pos.saturating_add(1)
+        } else {
+            pos.saturating_sub(1)
+        })
     };
 
     let x_step = step_toward(enemy_x, dx).map(|x| (x, enemy_y));
@@ -1188,7 +1179,7 @@ pub struct SyncHpFromInventory<'info> {
     )]
     pub inventory: Account<'info, PlayerInventory>,
 
-    /// Player who owns this game state (burner wallet)
+    /// Player who owns this game state (main wallet)
     pub player: Signer<'info>,
 }
 
@@ -1491,7 +1482,10 @@ mod hp_logic_tests {
 
         // Post-combat capping
         let new_persistent_hp = final_combat_hp.min(stats.max_hp);
-        assert_eq!(new_persistent_hp, 12, "HP should persist as 12 (below max 15)");
+        assert_eq!(
+            new_persistent_hp, 12,
+            "HP should persist as 12 (below max 15)"
+        );
     }
 
     #[test]
@@ -1642,9 +1636,8 @@ mod hp_logic_tests {
 
         // Non-Coin Slug enemies should not be affected
         let effects = preprocess_enemy_effects(0, 100); // Tunnel Rat
-        assert!(!effects.iter().any(|e| {
-            matches!(e.effect_type, EffectType::GainArmor) && e.value == 3
-        }));
+        assert!(!effects
+            .iter()
+            .any(|e| { matches!(e.effect_type, EffectType::GainArmor) && e.value == 3 }));
     }
 }
-

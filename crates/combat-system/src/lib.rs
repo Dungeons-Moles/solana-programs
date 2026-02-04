@@ -142,6 +142,16 @@ pub fn resolve_combat(
             &mut log,
         )?;
 
+        apply_status_effects(
+            &mut player_effects,
+            &mut enemy_effects,
+            &mut combat_state,
+            TriggerType::TurnEnd,
+            &mut player_triggered,
+            &mut enemy_triggered,
+            &mut log,
+        );
+
         if let Some((player_won, resolution_type)) = resolve_if_ended(&combat_state, turn) {
             return Ok(CombatOutcome {
                 player_won,
@@ -1162,6 +1172,163 @@ mod tests {
     // ========================================================================
     // EveryOtherTurnFirstHit Trigger Tests (G-GR-05 through G-GR-08 Shards)
     // ========================================================================
+
+    // ========================================================================
+    // TurnEnd Trigger Tests (G-ST-08 Stone Sigil)
+    // ========================================================================
+
+    /// Test that TurnEnd triggers fire at the end of each turn.
+    /// This verifies Stone Sigil (G-ST-08) functionality: "End of turn: if you have Armor, gain Armor".
+    #[test]
+    fn test_turn_end_triggers_gain_armor_with_condition() {
+        // Player starts with armor, so TurnEnd conditional effect should fire
+        let player = CombatantInput {
+            hp: 50,
+            max_hp: 50,
+            atk: 3,
+            arm: 5, // Has armor, so OwnerHasArmor condition is met
+            spd: 2,
+            dig: 0,
+            strikes: 1,
+        };
+        let enemy = CombatantInput {
+            hp: 50,
+            max_hp: 50,
+            atk: 2,
+            arm: 5,
+            spd: 1,
+            dig: 0,
+            strikes: 1,
+        };
+
+        // Stone Sigil: End of turn, if you have Armor, gain +2 Armor
+        let player_effects = vec![ItemEffect {
+            trigger: TriggerType::TurnEnd,
+            once_per_turn: false,
+            effect_type: EffectType::GainArmor,
+            value: 2,
+            condition: Condition::OwnerHasArmor,
+        }];
+        let enemy_effects = vec![];
+
+        let outcome = resolve_combat(player, enemy, player_effects, enemy_effects).unwrap();
+
+        // TurnEnd should fire on turn 1, granting armor
+        let armor_gain_turn_1 = outcome.log.iter().any(|entry| {
+            matches!(entry.action, LogAction::ArmorChange)
+                && entry.is_player
+                && entry.turn == 1
+                && entry.value == 2
+        });
+
+        assert!(
+            armor_gain_turn_1,
+            "Stone Sigil should grant +2 armor at end of turn 1 (player has armor). Log: {:?}",
+            outcome.log
+        );
+    }
+
+    /// Test that TurnEnd conditional effects do NOT fire when condition is not met.
+    #[test]
+    fn test_turn_end_does_not_fire_when_condition_fails() {
+        // Player starts with NO armor, so OwnerHasArmor condition is not met
+        let player = CombatantInput {
+            hp: 50,
+            max_hp: 50,
+            atk: 3,
+            arm: 0, // No armor
+            spd: 2,
+            dig: 0,
+            strikes: 1,
+        };
+        let enemy = CombatantInput {
+            hp: 50,
+            max_hp: 50,
+            atk: 2,
+            arm: 0,
+            spd: 1,
+            dig: 0,
+            strikes: 1,
+        };
+
+        // Stone Sigil: End of turn, if you have Armor, gain +2 Armor
+        let player_effects = vec![ItemEffect {
+            trigger: TriggerType::TurnEnd,
+            once_per_turn: false,
+            effect_type: EffectType::GainArmor,
+            value: 2,
+            condition: Condition::OwnerHasArmor,
+        }];
+        let enemy_effects = vec![];
+
+        let outcome = resolve_combat(player, enemy, player_effects, enemy_effects).unwrap();
+
+        // TurnEnd should NOT grant armor since player has no armor
+        let any_armor_gain = outcome.log.iter().any(|entry| {
+            matches!(entry.action, LogAction::ArmorChange) && entry.is_player && entry.value == 2
+        });
+
+        assert!(
+            !any_armor_gain,
+            "Stone Sigil should NOT grant armor when player has no armor. Log: {:?}",
+            outcome.log
+        );
+    }
+
+    /// Test that TurnEnd fires every turn (not just once).
+    #[test]
+    fn test_turn_end_fires_every_turn() {
+        // Long combat to verify TurnEnd fires on multiple turns
+        let player = CombatantInput {
+            hp: 100,
+            max_hp: 100,
+            atk: 3,
+            arm: 10, // Enough armor to survive and keep OwnerHasArmor true
+            spd: 2,
+            dig: 0,
+            strikes: 1,
+        };
+        let enemy = CombatantInput {
+            hp: 100,
+            max_hp: 100,
+            atk: 2,
+            arm: 10,
+            spd: 1,
+            dig: 0,
+            strikes: 1,
+        };
+
+        let player_effects = vec![ItemEffect {
+            trigger: TriggerType::TurnEnd,
+            once_per_turn: false,
+            effect_type: EffectType::GainArmor,
+            value: 1,
+            condition: Condition::OwnerHasArmor,
+        }];
+        let enemy_effects = vec![];
+
+        let outcome = resolve_combat(player, enemy, player_effects, enemy_effects).unwrap();
+
+        // Count TurnEnd armor gains across all turns
+        let armor_gain_count = outcome
+            .log
+            .iter()
+            .filter(|entry| {
+                matches!(entry.action, LogAction::ArmorChange)
+                    && entry.is_player
+                    && entry.value == 1
+            })
+            .count();
+
+        // Should fire on at least 2 different turns
+        assert!(
+            armor_gain_count >= 2,
+            "TurnEnd should fire on multiple turns. Gains: {}, Turns: {}. Log: {:?}",
+            armor_gain_count,
+            outcome.turns_taken,
+            outcome.log
+        );
+    }
 
     /// Test that EveryOtherTurnFirstHit triggers on turn 2 (first even turn) on first hit.
     /// This verifies Emerald Shard (G-GR-05) functionality.

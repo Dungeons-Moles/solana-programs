@@ -111,6 +111,10 @@ pub fn execute_strikes(
 
         // Trigger OnHit effects if any damage was dealt (armor or HP)
         if arm_damage > 0 || hp_damage > 0 {
+            // Track status before OnHit effects to detect rust/shrapnel applications
+            let attacker_shrapnel_before = attacker_status.shrapnel;
+            let defender_rust_before = defender_status.rust;
+
             process_triggers_for_phase(
                 on_hit_effects,
                 TriggerType::OnHit,
@@ -125,6 +129,47 @@ pub fn execute_strikes(
                 gold_change,
                 log,
             );
+
+            // Check if rust was applied to defender (for OnApplyRust)
+            let rust_applied_to_defender = defender_status.rust > defender_rust_before;
+            // Check if shrapnel was gained by attacker (for OnGainShrapnel)
+            let shrapnel_gained_by_attacker = attacker_status.shrapnel > attacker_shrapnel_before;
+
+            // Fire OnApplyRust if rust was applied to defender
+            if rust_applied_to_defender {
+                process_triggers_for_phase(
+                    on_hit_effects,
+                    TriggerType::OnApplyRust,
+                    turn,
+                    attacker_stats,
+                    attacker_status,
+                    defender_stats,
+                    defender_status,
+                    triggered_flags,
+                    is_player_attacking,
+                    false,
+                    gold_change,
+                    log,
+                );
+            }
+
+            // Fire OnGainShrapnel if shrapnel was gained by attacker
+            if shrapnel_gained_by_attacker {
+                process_triggers_for_phase(
+                    on_hit_effects,
+                    TriggerType::OnGainShrapnel,
+                    turn,
+                    attacker_stats,
+                    attacker_status,
+                    defender_stats,
+                    defender_status,
+                    triggered_flags,
+                    is_player_attacking,
+                    false,
+                    gold_change,
+                    log,
+                );
+            }
         }
 
         // Shrapnel: defender retaliates with damage when struck

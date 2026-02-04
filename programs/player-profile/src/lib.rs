@@ -152,19 +152,31 @@ pub mod player_profile {
     /// This allows the burner wallet to trigger run result recording without user interaction.
     ///
     /// Authorization: The session account proves player ownership. We verify:
-    /// 1. Session's player field matches the profile's owner
-    /// 2. Burner wallet is a signer (owns the session for gameplay)
+    /// 1. Session account is owned by the session-manager program
+    /// 2. Session's player field matches the profile's owner
+    /// 3. Burner wallet signer matches the session's stored burner_wallet
     pub fn record_run_result_cpi(
         ctx: Context<RecordRunResultCpi>,
         level_completed: u8,
         victory: bool,
     ) -> Result<()> {
         let profile = &mut ctx.accounts.player_profile;
-        let session_data = ctx.accounts.session.try_borrow_data()?;
+        let session_info = &ctx.accounts.session;
+
+        // Verify session account is owned by the session-manager program
+        require!(
+            *session_info.owner == Pubkey::new_from_array(SESSION_MANAGER_PROGRAM_ID),
+            PlayerProfileError::InvalidSessionOwner
+        );
+
+        let session_data = session_info.try_borrow_data()?;
         let clock = Clock::get()?;
 
-        // Verify session account has enough data (at least discriminator + player pubkey)
-        require!(session_data.len() >= 40, PlayerProfileError::InvalidSession);
+        // Verify session account has enough data to read through burner_wallet
+        require!(
+            session_data.len() >= SESSION_MIN_DATA_LEN,
+            PlayerProfileError::InvalidSession
+        );
 
         // Read player pubkey from session account (offset 8 for discriminator)
         let session_player = Pubkey::try_from(&session_data[8..40])
@@ -176,7 +188,16 @@ pub mod player_profile {
             PlayerProfileError::Unauthorized
         );
 
-        // Note: burner_wallet is already verified as signer by Anchor
+        // Read burner_wallet from session account and verify it matches the signer
+        let session_burner = Pubkey::try_from(
+            &session_data[SESSION_BURNER_WALLET_OFFSET..SESSION_BURNER_WALLET_OFFSET + 32],
+        )
+        .map_err(|_| PlayerProfileError::InvalidSession)?;
+
+        require!(
+            session_burner == ctx.accounts.burner_wallet.key(),
+            PlayerProfileError::InvalidBurnerWallet
+        );
 
         // Increment total runs
         profile.total_runs = profile
@@ -315,14 +336,15 @@ pub struct RecordRunResultCpi<'info> {
     #[account(mut)]
     pub player_profile: Account<'info, PlayerProfile>,
 
-    /// The session account - used to verify player ownership.
-    /// We manually verify session.player == player_profile.owner.
-    /// Layout: 8 (discriminator) + 32 (player) + ...
-    /// CHECK: Manually verified in instruction - session.player must match profile.owner
+    /// The session account - used to verify player and burner wallet ownership.
+    /// Manually verified in instruction:
+    /// 1. Account owner == session-manager program ID
+    /// 2. session.player == player_profile.owner
+    /// 3. session.burner_wallet == burner_wallet signer
+    /// CHECK: All three checks performed in record_run_result_cpi handler
     pub session: AccountInfo<'info>,
 
-    /// Burner wallet - must match session's burner_wallet field.
-    /// This proves the caller has authority over this session.
+    /// Burner wallet signer - verified against session's stored burner_wallet field.
     pub burner_wallet: Signer<'info>,
 }
 

@@ -294,6 +294,14 @@ pub fn apply_effect(
     }
 }
 
+/// Returns true if this effect applies status to opponent and has no condition.
+/// These effects should be processed first so conditional effects can see the applied status.
+fn is_unconditional_status_application(effect: &ItemEffect) -> bool {
+    effect.condition == Condition::None
+        && is_status_effect(effect.effect_type)
+        && targets_opponent(effect.effect_type)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn process_triggers_for_phase(
     effects: &mut [ItemEffect],
@@ -309,10 +317,72 @@ pub fn process_triggers_for_phase(
     gold_change: &mut i16,
     log: &mut Vec<CombatLogEntry>,
 ) {
+    // Two-pass processing to ensure status effects are applied before conditional effects
+    // that check status are evaluated. This makes item synergies (e.g., Frost Lantern +
+    // Frostguard Buckler) work regardless of inventory slot order.
+    //
+    // Pass 1: Unconditional status-applying effects (apply status to opponent)
+    // Pass 2: All other effects (including conditional ones that may check status)
+
+    process_effects_pass(
+        effects,
+        phase,
+        turn,
+        owner_stats,
+        owner_status,
+        opponent_stats,
+        opponent_status,
+        triggered_flags,
+        is_owner_player,
+        owner_acts_first,
+        gold_change,
+        log,
+        true, // first pass: only unconditional status effects
+    );
+
+    process_effects_pass(
+        effects,
+        phase,
+        turn,
+        owner_stats,
+        owner_status,
+        opponent_stats,
+        opponent_status,
+        triggered_flags,
+        is_owner_player,
+        owner_acts_first,
+        gold_change,
+        log,
+        false, // second pass: everything else
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn process_effects_pass(
+    effects: &mut [ItemEffect],
+    phase: TriggerType,
+    turn: u8,
+    owner_stats: &mut CombatantStats,
+    owner_status: &mut StatusEffects,
+    opponent_stats: &mut CombatantStats,
+    opponent_status: &mut StatusEffects,
+    triggered_flags: &mut [bool],
+    is_owner_player: bool,
+    owner_acts_first: bool,
+    gold_change: &mut i16,
+    log: &mut Vec<CombatLogEntry>,
+    first_pass: bool,
+) {
     let is_first_turn = turn == 1;
 
     for (index, effect) in effects.iter_mut().enumerate() {
         if effect.trigger != phase {
+            continue;
+        }
+
+        // Determine if this effect should be processed in this pass
+        let is_unconditional_status = is_unconditional_status_application(effect);
+        if first_pass != is_unconditional_status {
             continue;
         }
 
@@ -1067,6 +1137,159 @@ mod tests {
         assert_eq!(
             opponent_status.reflection, 0,
             "Reflection should be exhausted"
+        );
+    }
+
+    #[test]
+    fn test_conditional_effect_sees_status_from_earlier_effect_in_same_phase() {
+        // Tests the Frost Lantern + Frostguard Buckler synergy:
+        // With two-pass processing, unconditional status effects (Frost Lantern's Chill)
+        // are applied first, then conditional effects (Frostguard Buckler's ARM bonus)
+        // are evaluated - so the synergy works regardless of item order.
+        let mut owner_stats = CombatantStats {
+            hp: 100,
+            max_hp: 100,
+            atk: 10,
+            arm: 0,
+            spd: 5,
+            dig: 0,
+        };
+        let mut owner_status = StatusEffects::default();
+        let mut opponent_stats = CombatantStats {
+            hp: 100,
+            max_hp: 100,
+            atk: 10,
+            arm: 0,
+            spd: 5,
+            dig: 0,
+        };
+        let mut opponent_status = StatusEffects::default();
+
+        // Frost Lantern first, Frostguard Buckler second
+        let mut effects = vec![
+            // Frost Lantern: BattleStart, apply 2 Chill to enemy
+            ItemEffect {
+                trigger: TriggerType::BattleStart,
+                once_per_turn: false,
+                effect_type: EffectType::ApplyChill,
+                value: 2,
+                condition: Condition::None,
+            },
+            // Frostguard Buckler: BattleStart, gain 3 ARM if enemy has Chill
+            ItemEffect {
+                trigger: TriggerType::BattleStart,
+                once_per_turn: false,
+                effect_type: EffectType::GainArmor,
+                value: 3,
+                condition: Condition::EnemyHasStatus(StatusType::Chill),
+            },
+        ];
+        let mut flags = vec![false; effects.len()];
+        let mut gold_change = 0i16;
+        let mut log = Vec::new();
+
+        process_triggers_for_phase(
+            &mut effects,
+            TriggerType::BattleStart,
+            1,
+            &mut owner_stats,
+            &mut owner_status,
+            &mut opponent_stats,
+            &mut opponent_status,
+            &mut flags,
+            true, // is_owner_player
+            true, // owner_acts_first
+            &mut gold_change,
+            &mut log,
+        );
+
+        // Frost Lantern should have applied Chill
+        assert_eq!(
+            opponent_status.chill, 2,
+            "Enemy should have 2 Chill from Frost Lantern"
+        );
+
+        // Frostguard Buckler's conditional effect should fire because two-pass processing
+        // ensures status effects are applied before conditional effects are evaluated
+        assert_eq!(
+            owner_stats.arm, 3,
+            "Frostguard Buckler should gain 3 ARM because enemy has Chill (two-pass processing)"
+        );
+    }
+
+    #[test]
+    fn test_conditional_effect_works_regardless_of_item_order() {
+        // With two-pass processing, item order no longer matters for status->conditional synergies.
+        // Even if the conditional effect comes first in the array, it will be evaluated
+        // in the second pass after status effects are applied.
+        let mut owner_stats = CombatantStats {
+            hp: 100,
+            max_hp: 100,
+            atk: 10,
+            arm: 0,
+            spd: 5,
+            dig: 0,
+        };
+        let mut owner_status = StatusEffects::default();
+        let mut opponent_stats = CombatantStats {
+            hp: 100,
+            max_hp: 100,
+            atk: 10,
+            arm: 0,
+            spd: 5,
+            dig: 0,
+        };
+        let mut opponent_status = StatusEffects::default();
+
+        // Reverse order: Frostguard Buckler first, Frost Lantern second
+        let mut effects = vec![
+            // Frostguard Buckler first: gain 3 ARM if enemy has Chill
+            ItemEffect {
+                trigger: TriggerType::BattleStart,
+                once_per_turn: false,
+                effect_type: EffectType::GainArmor,
+                value: 3,
+                condition: Condition::EnemyHasStatus(StatusType::Chill),
+            },
+            // Frost Lantern second: apply 2 Chill to enemy
+            ItemEffect {
+                trigger: TriggerType::BattleStart,
+                once_per_turn: false,
+                effect_type: EffectType::ApplyChill,
+                value: 2,
+                condition: Condition::None,
+            },
+        ];
+        let mut flags = vec![false; effects.len()];
+        let mut gold_change = 0i16;
+        let mut log = Vec::new();
+
+        process_triggers_for_phase(
+            &mut effects,
+            TriggerType::BattleStart,
+            1,
+            &mut owner_stats,
+            &mut owner_status,
+            &mut opponent_stats,
+            &mut opponent_status,
+            &mut flags,
+            true, // is_owner_player
+            true, // owner_acts_first
+            &mut gold_change,
+            &mut log,
+        );
+
+        // Frost Lantern should have applied Chill (even though it's second in the array)
+        assert_eq!(
+            opponent_status.chill, 2,
+            "Enemy should have 2 Chill from Frost Lantern"
+        );
+
+        // Frostguard Buckler's conditional effect SHOULD fire now, because two-pass
+        // processing applies status effects first, then evaluates conditional effects
+        assert_eq!(
+            owner_stats.arm, 3,
+            "Frostguard Buckler should gain ARM - two-pass processing makes order irrelevant"
         );
     }
 }

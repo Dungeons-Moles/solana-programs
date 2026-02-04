@@ -15,10 +15,14 @@ describe("player-inventory", () => {
   anchor.setProvider(provider);
 
   const program = anchor.workspace.PlayerInventory as Program<PlayerInventory>;
-  const sessionProgram = anchor.workspace.SessionManager as Program<SessionManager>;
-  const playerProfileProgram = anchor.workspace.PlayerProfile as Program<PlayerProfile>;
-  const mapGeneratorProgram = anchor.workspace.MapGenerator as Program<MapGenerator>;
-  const gameplayProgram = anchor.workspace.GameplayState as Program<GameplayState>;
+  const sessionProgram = anchor.workspace
+    .SessionManager as Program<SessionManager>;
+  const playerProfileProgram = anchor.workspace
+    .PlayerProfile as Program<PlayerProfile>;
+  const mapGeneratorProgram = anchor.workspace
+    .MapGenerator as Program<MapGenerator>;
+  const gameplayProgram = anchor.workspace
+    .GameplayState as Program<GameplayState>;
   const poiSystemProgram = anchor.workspace.PoiSystem as Program<PoiSystem>;
 
   // Helper to derive inventory PDA (now uses session key)
@@ -29,13 +33,12 @@ describe("player-inventory", () => {
     );
   };
 
-  const getSessionPDA = (player: anchor.web3.PublicKey, campaignLevel: number) => {
+  const getSessionPDA = (
+    player: anchor.web3.PublicKey,
+    campaignLevel: number,
+  ) => {
     return anchor.web3.PublicKey.findProgramAddressSync(
-      [
-        Buffer.from("session"),
-        player.toBuffer(),
-        Buffer.from([campaignLevel]),
-      ],
+      [Buffer.from("session"), player.toBuffer(), Buffer.from([campaignLevel])],
       sessionProgram.programId,
     );
   };
@@ -86,6 +89,13 @@ describe("player-inventory", () => {
     return anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("map_pois"), sessionPda.toBuffer()],
       poiSystemProgram.programId,
+    );
+  };
+
+  const getInventoryAuthorityPDA = () => {
+    return anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("inventory_authority")],
+      program.programId,
     );
   };
 
@@ -185,7 +195,12 @@ describe("player-inventory", () => {
   };
 
   // Helper to start a session and get PDAs
-  const startSessionAndGetPDAs = async (user: Keypair, burnerWallet: Keypair, playerProfilePDA: anchor.web3.PublicKey, campaignLevel: number = 1) => {
+  const startSessionAndGetPDAs = async (
+    user: Keypair,
+    burnerWallet: Keypair,
+    playerProfilePDA: anchor.web3.PublicKey,
+    campaignLevel: number = 1,
+  ) => {
     await ensureCounterExists();
     await ensureMapConfigExists();
 
@@ -217,8 +232,12 @@ describe("player-inventory", () => {
         systemProgram: SystemProgram.programId,
       } as any)
       .preInstructions([
-        anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({ units: 1400000 }),
-        anchor.web3.ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
+        anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+          units: 1400000,
+        }),
+        anchor.web3.ComputeBudgetProgram.requestHeapFrame({
+          bytes: 256 * 1024,
+        }),
       ])
       .signers([user, burnerWallet])
       .rpc();
@@ -226,16 +245,34 @@ describe("player-inventory", () => {
     return { sessionPDA, inventoryPDA, gameStatePDA, mapPoisPDA, burnerWallet };
   };
 
-  // Helper to end a session and clean up
-  const endSession = async (user: Keypair, burnerWallet: Keypair, sessionPDA: anchor.web3.PublicKey, inventoryPDA: anchor.web3.PublicKey, campaignLevel: number = 1) => {
+  // Helper to abandon a session and clean up (for test cleanup)
+  // Uses abandonSession which requires both player and burner wallet signatures
+  const endSession = async (
+    user: Keypair,
+    burnerWallet: Keypair,
+    sessionPDA: anchor.web3.PublicKey,
+    inventoryPDA: anchor.web3.PublicKey,
+    campaignLevel: number = 1,
+  ) => {
+    const [gameStatePDA] = getGameStatePDA(sessionPDA);
+    const [mapEnemiesPDA] = getMapEnemiesPDA(sessionPDA);
+    const [generatedMapPDA] = getGeneratedMapPDA(sessionPDA);
+    const [mapPoisPDA] = getMapPoisPDA(sessionPDA);
     await sessionProgram.methods
-      .endSession(campaignLevel, true)
+      .abandonSession(campaignLevel)
       .accounts({
         gameSession: sessionPDA,
+        gameState: gameStatePDA,
+        mapEnemies: mapEnemiesPDA,
+        generatedMap: generatedMapPDA,
+        mapPois: mapPoisPDA,
         player: user.publicKey,
         burnerWallet: burnerWallet.publicKey,
         inventory: inventoryPDA,
         playerInventoryProgram: program.programId,
+        gameplayStateProgram: gameplayProgram.programId,
+        mapGeneratorProgram: mapGeneratorProgram.programId,
+        poiSystemProgram: poiSystemProgram.programId,
       } as any)
       .signers([user, burnerWallet])
       .rpc();
@@ -243,11 +280,17 @@ describe("player-inventory", () => {
 
   describe("Inventory Initialization", () => {
     it("initializes a new player inventory", async () => {
-      const { user, burnerWallet, playerProfilePDA } = await createUserWithProfile("InvInit1");
-      const { sessionPDA, inventoryPDA, burnerWallet: bw } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+      const { user, burnerWallet, playerProfilePDA } =
+        await createUserWithProfile("InvInit1");
+      const {
+        sessionPDA,
+        inventoryPDA,
+        burnerWallet: bw,
+      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
 
       // Fetch and verify inventory
-      const inventory = await program.account.playerInventory.fetch(inventoryPDA);
+      const inventory =
+        await program.account.playerInventory.fetch(inventoryPDA);
 
       // Inventory is now owned by burner wallet
       expect(inventory.player.toString()).to.equal(bw.publicKey.toString());
@@ -262,8 +305,13 @@ describe("player-inventory", () => {
 
   describe("Equip Tool", () => {
     it("equips a tool in the tool slot", async () => {
-      const { user, burnerWallet, playerProfilePDA } = await createUserWithProfile("EquipTool1");
-      const { sessionPDA, inventoryPDA, burnerWallet: bw } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+      const { user, burnerWallet, playerProfilePDA } =
+        await createUserWithProfile("EquipTool1");
+      const {
+        sessionPDA,
+        inventoryPDA,
+        burnerWallet: bw,
+      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
 
       // Equip Twin Picks (T-SC-01)
       const itemId = makeItemId("T-SC-01");
@@ -277,7 +325,8 @@ describe("player-inventory", () => {
         .rpc();
 
       // Verify tool is equipped
-      const inventory = await program.account.playerInventory.fetch(inventoryPDA);
+      const inventory =
+        await program.account.playerInventory.fetch(inventoryPDA);
       expect(inventory.tool).to.not.be.null;
       expect(Array.from(inventory.tool!.itemId)).to.deep.equal(itemId);
 
@@ -286,8 +335,13 @@ describe("player-inventory", () => {
     });
 
     it("replaces existing tool when equipping new one", async () => {
-      const { user, burnerWallet, playerProfilePDA } = await createUserWithProfile("EquipTool2");
-      const { sessionPDA, inventoryPDA, burnerWallet: bw } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+      const { user, burnerWallet, playerProfilePDA } =
+        await createUserWithProfile("EquipTool2");
+      const {
+        sessionPDA,
+        inventoryPDA,
+        burnerWallet: bw,
+      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
 
       // Equip first tool
       const itemId1 = makeItemId("T-SC-01");
@@ -312,7 +366,8 @@ describe("player-inventory", () => {
         .rpc();
 
       // Verify new tool is equipped
-      const inventory = await program.account.playerInventory.fetch(inventoryPDA);
+      const inventory =
+        await program.account.playerInventory.fetch(inventoryPDA);
       expect(Array.from(inventory.tool!.itemId)).to.deep.equal(itemId2);
 
       // Clean up
@@ -320,8 +375,13 @@ describe("player-inventory", () => {
     });
 
     it("fails to equip gear in tool slot", async () => {
-      const { user, burnerWallet, playerProfilePDA } = await createUserWithProfile("EquipTool3");
-      const { sessionPDA, inventoryPDA, burnerWallet: bw } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+      const { user, burnerWallet, playerProfilePDA } =
+        await createUserWithProfile("EquipTool3");
+      const {
+        sessionPDA,
+        inventoryPDA,
+        burnerWallet: bw,
+      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
 
       // Try to equip gear as tool (should fail)
       const itemId = makeItemId("G-ST-01");
@@ -346,8 +406,13 @@ describe("player-inventory", () => {
 
   describe("Equip Gear", () => {
     it("equips gear in available slot", async () => {
-      const { user, burnerWallet, playerProfilePDA } = await createUserWithProfile("EquipGear1");
-      const { sessionPDA, inventoryPDA, burnerWallet: bw } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+      const { user, burnerWallet, playerProfilePDA } =
+        await createUserWithProfile("EquipGear1");
+      const {
+        sessionPDA,
+        inventoryPDA,
+        burnerWallet: bw,
+      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
 
       // Equip Miner Helmet (G-ST-01)
       const itemId = makeItemId("G-ST-01");
@@ -361,7 +426,8 @@ describe("player-inventory", () => {
         .rpc();
 
       // Verify gear is equipped
-      const inventory = await program.account.playerInventory.fetch(inventoryPDA);
+      const inventory =
+        await program.account.playerInventory.fetch(inventoryPDA);
       expect(inventory.gear[0]).to.not.be.null;
       expect(Array.from(inventory.gear[0]!.itemId)).to.deep.equal(itemId);
 
@@ -370,8 +436,13 @@ describe("player-inventory", () => {
     });
 
     it("fails when all gear slots are full", async () => {
-      const { user, burnerWallet, playerProfilePDA } = await createUserWithProfile("EquipGear2");
-      const { sessionPDA, inventoryPDA, burnerWallet: bw } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+      const { user, burnerWallet, playerProfilePDA } =
+        await createUserWithProfile("EquipGear2");
+      const {
+        sessionPDA,
+        inventoryPDA,
+        burnerWallet: bw,
+      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
 
       // Equip 4 gear items (fills initial slots)
       const gearItems = ["G-ST-01", "G-ST-02", "G-SC-01", "G-SC-02"];
@@ -410,8 +481,13 @@ describe("player-inventory", () => {
 
   describe("Item Fusion", () => {
     it("fuses two identical Tier I items to Tier II", async () => {
-      const { user, burnerWallet, playerProfilePDA } = await createUserWithProfile("Fusion1");
-      const { sessionPDA, inventoryPDA, burnerWallet: bw } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+      const { user, burnerWallet, playerProfilePDA } =
+        await createUserWithProfile("Fusion1");
+      const {
+        sessionPDA,
+        inventoryPDA,
+        burnerWallet: bw,
+      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
 
       // Equip two identical gear items
       const itemId = makeItemId("G-ST-01");
@@ -444,7 +520,8 @@ describe("player-inventory", () => {
         .rpc();
 
       // Verify fusion result
-      const inventory = await program.account.playerInventory.fetch(inventoryPDA);
+      const inventory =
+        await program.account.playerInventory.fetch(inventoryPDA);
       expect(inventory.gear[0]).to.not.be.null;
       expect(inventory.gear[0]!.tier).to.deep.equal({ ii: {} });
       expect(inventory.gear[1]).to.be.null; // Second slot should be empty
@@ -454,8 +531,13 @@ describe("player-inventory", () => {
     });
 
     it("fails to fuse different items", async () => {
-      const { user, burnerWallet, playerProfilePDA } = await createUserWithProfile("Fusion2");
-      const { sessionPDA, inventoryPDA, burnerWallet: bw } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+      const { user, burnerWallet, playerProfilePDA } =
+        await createUserWithProfile("Fusion2");
+      const {
+        sessionPDA,
+        inventoryPDA,
+        burnerWallet: bw,
+      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
 
       // Equip two different items
       await program.methods
@@ -498,8 +580,13 @@ describe("player-inventory", () => {
 
   describe("Gear Slot Expansion", () => {
     it("expands gear slots from 4 to 6", async () => {
-      const { user, burnerWallet, playerProfilePDA } = await createUserWithProfile("Expand1");
-      const { sessionPDA, inventoryPDA, burnerWallet: bw } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+      const { user, burnerWallet, playerProfilePDA } =
+        await createUserWithProfile("Expand1");
+      const {
+        sessionPDA,
+        inventoryPDA,
+        burnerWallet: bw,
+      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
 
       // Expand slots
       await program.methods
@@ -512,7 +599,8 @@ describe("player-inventory", () => {
         .rpc();
 
       // Verify expansion
-      const inventory = await program.account.playerInventory.fetch(inventoryPDA);
+      const inventory =
+        await program.account.playerInventory.fetch(inventoryPDA);
       expect(inventory.gearSlotCapacity).to.equal(6);
 
       // Clean up
@@ -520,8 +608,13 @@ describe("player-inventory", () => {
     });
 
     it("expands gear slots from 6 to 8", async () => {
-      const { user, burnerWallet, playerProfilePDA } = await createUserWithProfile("Expand2");
-      const { sessionPDA, inventoryPDA, burnerWallet: bw } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+      const { user, burnerWallet, playerProfilePDA } =
+        await createUserWithProfile("Expand2");
+      const {
+        sessionPDA,
+        inventoryPDA,
+        burnerWallet: bw,
+      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
 
       // Expand twice
       await program.methods
@@ -543,7 +636,8 @@ describe("player-inventory", () => {
         .rpc();
 
       // Verify expansion
-      const inventory = await program.account.playerInventory.fetch(inventoryPDA);
+      const inventory =
+        await program.account.playerInventory.fetch(inventoryPDA);
       expect(inventory.gearSlotCapacity).to.equal(8);
 
       // Clean up
@@ -551,8 +645,13 @@ describe("player-inventory", () => {
     });
 
     it("fails to expand beyond max slots", async () => {
-      const { user, burnerWallet, playerProfilePDA } = await createUserWithProfile("Expand3");
-      const { sessionPDA, inventoryPDA, burnerWallet: bw } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+      const { user, burnerWallet, playerProfilePDA } =
+        await createUserWithProfile("Expand3");
+      const {
+        sessionPDA,
+        inventoryPDA,
+        burnerWallet: bw,
+      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
 
       // Expand to max
       await program.methods
@@ -595,8 +694,13 @@ describe("player-inventory", () => {
 
   describe("Tool Oil Application", () => {
     it("applies Tool Oil to equipped tool", async () => {
-      const { user, burnerWallet, playerProfilePDA } = await createUserWithProfile("Oil1");
-      const { sessionPDA, inventoryPDA, burnerWallet: bw } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+      const { user, burnerWallet, playerProfilePDA } =
+        await createUserWithProfile("Oil1");
+      const {
+        sessionPDA,
+        inventoryPDA,
+        burnerWallet: bw,
+      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
 
       // Equip tool first
       await program.methods
@@ -619,7 +723,8 @@ describe("player-inventory", () => {
         .rpc();
 
       // Verify oil is applied
-      const inventory = await program.account.playerInventory.fetch(inventoryPDA);
+      const inventory =
+        await program.account.playerInventory.fetch(inventoryPDA);
       expect(inventory.tool!.toolOilFlags & 0x01).to.equal(1); // +ATK flag
 
       // Clean up
@@ -627,8 +732,13 @@ describe("player-inventory", () => {
     });
 
     it("fails to apply same oil twice", async () => {
-      const { user, burnerWallet, playerProfilePDA } = await createUserWithProfile("Oil2");
-      const { sessionPDA, inventoryPDA, burnerWallet: bw } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+      const { user, burnerWallet, playerProfilePDA } =
+        await createUserWithProfile("Oil2");
+      const {
+        sessionPDA,
+        inventoryPDA,
+        burnerWallet: bw,
+      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
 
       await program.methods
         .equipTool(makeItemId("T-SC-01"), { i: {} })
@@ -670,8 +780,15 @@ describe("player-inventory", () => {
 
   describe("Unequip Gear", () => {
     it("unequips gear from slot", async () => {
-      const { user, burnerWallet, playerProfilePDA } = await createUserWithProfile("Unequip1");
-      const { sessionPDA, inventoryPDA, burnerWallet: bw } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+      const { user, burnerWallet, playerProfilePDA } =
+        await createUserWithProfile("Unequip1");
+      const {
+        sessionPDA,
+        inventoryPDA,
+        burnerWallet: bw,
+      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+      const [gameStatePDA] = getGameStatePDA(sessionPDA);
+      const [inventoryAuthorityPDA] = getInventoryAuthorityPDA();
 
       await program.methods
         .equipGear(makeItemId("G-ST-01"), { i: {} })
@@ -687,13 +804,17 @@ describe("player-inventory", () => {
         .unequipGear(0)
         .accounts({
           inventory: inventoryPDA,
+          gameState: gameStatePDA,
+          inventoryAuthority: inventoryAuthorityPDA,
+          gameplayStateProgram: gameplayProgram.programId,
           player: bw.publicKey,
         } as any)
         .signers([bw])
         .rpc();
 
       // Verify slot is empty
-      const inventory = await program.account.playerInventory.fetch(inventoryPDA);
+      const inventory =
+        await program.account.playerInventory.fetch(inventoryPDA);
       expect(inventory.gear[0]).to.be.null;
 
       // Clean up
@@ -701,8 +822,15 @@ describe("player-inventory", () => {
     });
 
     it("fails to unequip from empty slot", async () => {
-      const { user, burnerWallet, playerProfilePDA } = await createUserWithProfile("Unequip2");
-      const { sessionPDA, inventoryPDA, burnerWallet: bw } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+      const { user, burnerWallet, playerProfilePDA } =
+        await createUserWithProfile("Unequip2");
+      const {
+        sessionPDA,
+        inventoryPDA,
+        burnerWallet: bw,
+      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+      const [gameStatePDA] = getGameStatePDA(sessionPDA);
+      const [inventoryAuthorityPDA] = getInventoryAuthorityPDA();
 
       // Try to unequip from empty slot
       try {
@@ -710,6 +838,9 @@ describe("player-inventory", () => {
           .unequipGear(0)
           .accounts({
             inventory: inventoryPDA,
+            gameState: gameStatePDA,
+            inventoryAuthority: inventoryAuthorityPDA,
+            gameplayStateProgram: gameplayProgram.programId,
             player: bw.publicKey,
           } as any)
           .signers([bw])

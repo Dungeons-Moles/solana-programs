@@ -46,4 +46,16 @@ pub enum PlayerProfileError {
     /// Treasury account does not match expected address
     #[msg("Invalid treasury account")]
     InvalidTreasury,
+
+    /// Invalid session account for CPI authorization
+    #[msg("Invalid session account")]
+    InvalidSession,
+
+    /// Session account is not owned by the session-manager program
+    #[msg("Session account has invalid owner")]
+    InvalidSessionOwner,
+
+    /// Burner wallet does not match the session's stored burner wallet
+    #[msg("Burner wallet does not match session")]
+    InvalidBurnerWallet,
 }

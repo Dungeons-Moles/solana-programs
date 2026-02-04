@@ -238,7 +238,10 @@ pub fn validate_shop_poi(
     Ok(def)
 }
 
-/// Get the price for an offer based on its item ID
+/// Get the price for an offer based on its item ID.
+///
+/// Looks up the authoritative rarity from the player-inventory item registry
+/// to determine the correct price.
 pub fn get_offer_price(item_id: &[u8; 8]) -> u16 {
     // Determine item type from ID prefix (T- = Tool, G- = Gear)
     let item_type = if item_id[0] == b'T' {
@@ -247,26 +250,14 @@ pub fn get_offer_price(item_id: &[u8; 8]) -> u16 {
         OfferItemType::Gear
     };
 
-    // Determine rarity from item number
-    // Tools: 01 = Common, 02 = Rare
-    // Gear: 01-02 = Common, 03-05 = Rare, 06-07 = Heroic, 08 = Mythic
-    let item_num = (item_id[5] - b'0') * 10 + (item_id[6] - b'0');
-
-    let rarity = if item_id[0] == b'T' {
-        // Tool
-        if item_num == 1 {
-            ItemRarity::Common
-        } else {
-            ItemRarity::Rare
-        }
-    } else {
-        // Gear
-        match item_num {
-            1..=2 => ItemRarity::Common,
-            3..=5 => ItemRarity::Rare,
-            6..=7 => ItemRarity::Heroic,
-            _ => ItemRarity::Mythic,
-        }
+    // Look up rarity from the authoritative item definition
+    let rarity_u8 = crate::offers::rarity_from_item_id(item_id);
+    let rarity = match rarity_u8 {
+        0 => ItemRarity::Common,
+        1 => ItemRarity::Rare,
+        2 => ItemRarity::Heroic,
+        3 => ItemRarity::Mythic,
+        _ => ItemRarity::Common,
     };
 
     calculate_price(item_type, rarity)
@@ -1031,7 +1022,10 @@ mod tests {
 
         assert!(result.is_ok());
         let result = result.unwrap();
-        assert_eq!(result.heal_amount, 100, "Should heal full amount when HP is negative");
+        assert_eq!(
+            result.heal_amount, 100,
+            "Should heal full amount when HP is negative"
+        );
     }
 
     // =========================================================================
@@ -1360,13 +1354,13 @@ mod tests {
         assert_eq!(get_offer_price(b"T-ST-01\0"), 10); // Common
         assert_eq!(get_offer_price(b"T-FR-02\0"), 16); // Rare
 
-        // Gear
+        // Gear - prices based on authoritative rarity from item definitions
         assert_eq!(get_offer_price(b"G-ST-01\0"), 8); // Common
         assert_eq!(get_offer_price(b"G-ST-02\0"), 8); // Common
-        assert_eq!(get_offer_price(b"G-ST-03\0"), 14); // Rare
+        assert_eq!(get_offer_price(b"G-ST-03\0"), 8); // Common (GDD override)
         assert_eq!(get_offer_price(b"G-ST-05\0"), 14); // Rare
-        assert_eq!(get_offer_price(b"G-ST-06\0"), 22); // Heroic
-        assert_eq!(get_offer_price(b"G-ST-08\0"), 34); // Mythic
+        assert_eq!(get_offer_price(b"G-ST-06\0"), 14); // Rare (GDD override)
+        assert_eq!(get_offer_price(b"G-ST-08\0"), 22); // Heroic (GDD override)
     }
 
     // =========================================================================

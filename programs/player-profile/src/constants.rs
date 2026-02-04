@@ -31,6 +31,23 @@ pub const RUNS_PER_PURCHASE: u32 = 20;
 /// Size of item bitmask in bytes (80 bits = 10 bytes)
 pub const ITEM_BITMASK_SIZE: usize = 10;
 
+/// Session Manager program ID (FcMT7MzBLVQGaMATEMws3fjsL2Q77QSHmoEPdowTMxJa)
+/// Used to validate session account ownership in CPI authorization.
+pub const SESSION_MANAGER_PROGRAM_ID: [u8; 32] = [
+    0xd9, 0x12, 0x11, 0x80, 0x4f, 0x8c, 0x98, 0x49, 0x67, 0x5f, 0x86, 0xb3, 0x1f, 0x6d, 0x22, 0x52,
+    0xfa, 0xa7, 0x5b, 0x43, 0xba, 0x17, 0xd1, 0x02, 0x50, 0xff, 0x76, 0xc0, 0xaf, 0xf2, 0xde, 0xb7,
+];
+
+/// Byte offset of `burner_wallet` field in GameSession account data.
+/// Layout: 8 (discriminator) + 32 (player) + 8 (session_id) + 1 (campaign_level) +
+/// 8 (started_at) + 8 (last_activity) + 1 (is_delegated) + 1 (bump) +
+/// 10 (active_item_pool) = 77
+pub const SESSION_BURNER_WALLET_OFFSET: usize = 77;
+
+/// Minimum session account data length required to read through burner_wallet.
+/// SESSION_BURNER_WALLET_OFFSET + 32 (Pubkey size) = 109
+pub const SESSION_MIN_DATA_LEN: usize = SESSION_BURNER_WALLET_OFFSET + 32;
+
 /// Treasury wallet for run purchases (5LvEA4tH5H5DtWCxa3FcauokxAycvafX9ruvcT2mEXt8)
 /// NOTE: This MUST be updated to the actual treasury pubkey before mainnet deployment
 pub const TREASURY_PUBKEY: [u8; 32] = [

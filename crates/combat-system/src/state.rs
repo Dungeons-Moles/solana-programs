@@ -34,6 +34,44 @@ pub const STATUS_RUST: u8 = 2;
 pub const STATUS_BLEED: u8 = 3;
 pub const STATUS_REFLECTION: u8 = 4;
 
+/// Status type enum for conditions
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace)]
+#[repr(u8)]
+pub enum StatusType {
+    Chill = 0,
+    Shrapnel = 1,
+    Rust = 2,
+    Bleed = 3,
+    Reflection = 4,
+}
+
+/// Conditions that must be met for an effect to fire
+#[derive(
+    AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace, Default,
+)]
+#[repr(u8)]
+pub enum Condition {
+    /// No additional condition required
+    #[default]
+    None = 0,
+    /// Enemy must have the specified status effect
+    EnemyHasStatus(StatusType) = 1,
+    /// Enemy must have armor > 0
+    EnemyHasArmor = 2,
+    /// Owner's DIG must be greater than enemy's DIG
+    DigGreaterThanEnemyDig = 3,
+    /// Owner's SPD must be greater than enemy's SPD
+    SpdGreaterThanEnemySpd = 4,
+    /// Owner must be Wounded (HP < 50% max)
+    OwnerWounded = 5,
+    /// Owner must be Exposed (ARM <= 0)
+    OwnerExposed = 6,
+    /// Enemy must be Wounded (HP < 50% max)
+    EnemyWounded = 7,
+    /// Owner must have armor > 0
+    OwnerHasArmor = 8,
+}
+
 /// A single entry in the combat log.
 /// Compact format to minimize data cost (~5 bytes per entry).
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug)]
@@ -135,7 +173,31 @@ pub enum TriggerType {
     OnHit,
     Exposed,
     Wounded,
-    Countdown { turns: u8 },
+    Countdown {
+        turns: u8,
+    },
+    /// Triggers after combat ends when player wins (processed outside combat system)
+    Victory,
+    /// Triggers when this combatant takes damage
+    OnStruck,
+    /// Triggers on a specific turn number
+    TurnN {
+        turn: u8,
+    },
+    /// Triggers on the first hit of every other turn (turn 2, 4, 6...)
+    EveryOtherTurnFirstHit,
+    /// Triggers at the end of each turn
+    TurnEnd,
+    /// Triggers when enemy takes bleed damage (processed during status phase)
+    OnEnemyBleedDamage,
+    /// Triggers when rust is applied to enemy
+    OnApplyRust,
+    /// Triggers when owner gains shrapnel
+    OnGainShrapnel,
+    /// Triggers at start of each day (processed outside combat system)
+    DayStart,
+    /// Triggers once when owner first becomes wounded (HP drops below 50%)
+    FirstTimeWounded,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace)]
@@ -158,6 +220,38 @@ pub enum EffectType {
     StealGold,
     GoldToArmor,
     ApplyReflection,
+    /// Permanent max HP bonus (e.g., Work Vest's +HP).
+    /// Only processed outside combat for max_hp calculation.
+    /// Does NOT heal during combat - use Heal for that.
+    MaxHp,
+    /// Reduce enemy's SPD stat
+    ReduceEnemySpd,
+    /// Deal non-weapon damage to self (for bomb self-damage)
+    DealSelfNonWeaponDamage,
+    /// Gain armor equal to floor(gold/10), capped at value
+    GoldToArmorScaled,
+    /// Consume 1 gold to gain armor (value = armor gained per gold)
+    ConsumeGoldForArmor,
+    /// Prevent death once per battle, heal for value
+    PreventDeath,
+    /// Set armor piercing for this battle (strikes ignore value armor)
+    SetArmorPiercing,
+    /// Convert starting armor to max HP (capped at value)
+    ArmorToMaxHp,
+    /// Reduce countdown of all bomb items by value
+    ReduceAllCountdowns,
+    /// Amplify all non-weapon damage by value
+    AmplifyNonWeaponDamage,
+    /// Store damage each turn (released on Exposed trigger)
+    StoreDamage,
+    /// Immune to self-inflicted blast damage
+    BlastImmunity,
+    /// Double the next bomb trigger effect
+    DoubleBombTrigger,
+    /// Double OnHit effects (once per turn)
+    DoubleOnHitEffects,
+    /// Trigger all equipped shard effects
+    TriggerAllShards,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, InitSpace)]
@@ -166,6 +260,8 @@ pub struct ItemEffect {
     pub once_per_turn: bool,
     pub effect_type: EffectType,
     pub value: i16,
+    /// Optional condition that must be met for the effect to fire
+    pub condition: Condition,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace)]
@@ -185,6 +281,7 @@ pub(crate) struct CombatState {
     pub player_atk: i16,
     pub player_arm: i16,
     pub player_spd: i16,
+    pub player_dig: i16,
     pub player_strikes: u8,
     pub player_status: StatusEffects,
     pub enemy_hp: i16,
@@ -192,11 +289,18 @@ pub(crate) struct CombatState {
     pub enemy_atk: i16,
     pub enemy_arm: i16,
     pub enemy_spd: i16,
+    pub enemy_dig: i16,
     pub enemy_strikes: u8,
     pub enemy_status: StatusEffects,
     pub sudden_death_bonus: i16,
     /// Net gold change during combat (positive = player gains, negative = player loses)
     pub gold_change: i16,
+    /// Whether the player has already become wounded (HP < 50%) this battle.
+    /// Used for FirstTimeWounded trigger to fire only once.
+    pub player_has_become_wounded: bool,
+    /// Whether the enemy has already become wounded (HP < 50%) this battle.
+    /// Used for FirstTimeWounded trigger to fire only once.
+    pub enemy_has_become_wounded: bool,
 }
 
 impl CombatState {
@@ -207,6 +311,7 @@ impl CombatState {
             atk: self.player_atk,
             arm: self.player_arm,
             spd: self.player_spd,
+            dig: self.player_dig,
         }
     }
 
@@ -217,6 +322,7 @@ impl CombatState {
             atk: self.enemy_atk,
             arm: self.enemy_arm,
             spd: self.enemy_spd,
+            dig: self.enemy_dig,
         }
     }
 
@@ -225,6 +331,7 @@ impl CombatState {
         self.player_atk = stats.atk;
         self.player_arm = stats.arm;
         self.player_spd = stats.spd;
+        self.player_dig = stats.dig;
     }
 
     pub fn set_enemy_stats(&mut self, stats: &crate::triggers::CombatantStats) {
@@ -232,5 +339,6 @@ impl CombatState {
         self.enemy_atk = stats.atk;
         self.enemy_arm = stats.arm;
         self.enemy_spd = stats.spd;
+        self.enemy_dig = stats.dig;
     }
 }

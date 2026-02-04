@@ -42,4 +42,8 @@ pub enum MapGeneratorError {
     /// Tile position is out of bounds
     #[msg("Tile position out of bounds")]
     TileOutOfBounds,
+
+    /// Invalid session account for close authorization
+    #[msg("Invalid session account")]
+    InvalidSession,
 }

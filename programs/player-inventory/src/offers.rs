@@ -195,7 +195,7 @@ fn calculate_price(item: &ItemDefinition) -> u16 {
         (ItemType::Gear, Rarity::Common) => 8,
         (ItemType::Gear, Rarity::Rare) => 14,
         (ItemType::Gear, Rarity::Heroic) => 22,
-        (ItemType::Gear, Rarity::Mythic) => 32,
+        (ItemType::Gear, Rarity::Mythic) => 34,
     }
 }
 
@@ -380,12 +380,16 @@ mod tests {
         let helmet = get_item(b"G-ST-01\0").unwrap();
         assert_eq!(calculate_price(helmet), 8);
 
-        // Rare gear (G-ST-03)
+        // Common gear (G-ST-03) - per GDD Spiked Bracers is Common
         let bracers = get_item(b"G-ST-03\0").unwrap();
-        assert_eq!(calculate_price(bracers), 14);
+        assert_eq!(calculate_price(bracers), 8);
 
-        // Mythic gear (G-ST-08)
-        let adamant = get_item(b"G-ST-08\0").unwrap();
-        assert_eq!(calculate_price(adamant), 32);
+        // Rare gear (G-RU-02) - Rust Spike is Rare per GDD
+        let rust_spike = get_item(b"G-RU-02\0").unwrap();
+        assert_eq!(calculate_price(rust_spike), 14);
+
+        // Mythic gear (G-SC-08) - Phantom Pickaxe is Mythic
+        let phantom = get_item(b"G-SC-08\0").unwrap();
+        assert_eq!(calculate_price(phantom), 34); // Mythic gear = 34
     }
 }

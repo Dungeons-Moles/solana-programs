@@ -71,7 +71,7 @@ Player has:
 
 - **HP**: hit points (Persistent state, capped by Max HP).
 - **ATK**: weapon damage baseline (Derived from Items).
-- **ARM**: armor that reduces incoming weapon damage (Derived from Items).
+- **ARM**: armor is "HP before HP" - damage depletes ARM first, excess carries to HP (Derived from Items, resets after combat).
 - **SPD**: determines who acts first each turn (Derived from Items).
 - **DIG**: affects dig cost + some combat comparators (Derived from Items).
 - **GOLD**: earned from field enemies; spent at shops/POIs (Persistent state).
@@ -101,8 +101,10 @@ Inventory:
 
 ### Damage
 
-- Weapon damage: `max(0, attackerATK - targetARM)` to HP.
-- Non-weapon damage ignores Armor unless specified otherwise.
+- Weapon damage: ATK damage is applied to ARM first; any excess damage carries over to HP.
+  - Example: 5 ATK vs 3 ARM, 10 HP → ARM depleted (3→0), HP reduced by excess (10→8).
+- ARM resets after combat ends (not persistent between fights).
+- Non-weapon damage ignores Armor and hits HP directly unless specified otherwise.
 
 ### Visualization (Combat Log)
 

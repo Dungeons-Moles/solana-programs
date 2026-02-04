@@ -124,6 +124,8 @@ pub struct OfferItem {
     pub item_id: [u8; 8],
     /// Item rarity (0=Common, 1=Rare, 2=Heroic, 3=Mythic)
     pub rarity: u8,
+    /// Item tier (0=Tier I, 1=Tier II, 2=Tier III). Always 0 for fresh POI drops.
+    pub tier: u8,
 }
 
 /// Cache offer for pick-item POIs (L2, L3, L12, L13).

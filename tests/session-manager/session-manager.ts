@@ -212,7 +212,14 @@ describe("session-manager", () => {
         playerInventoryProgram: playerInventoryProgram.programId,
         systemProgram: SystemProgram.programId,
       } as any)
-      .preInstructions([anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({ units: 1400000 }), anchor.web3.ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 })])
+      .preInstructions([
+        anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+          units: 1400000,
+        }),
+        anchor.web3.ComputeBudgetProgram.requestHeapFrame({
+          bytes: 256 * 1024,
+        }),
+      ])
       .signers([user, burnerWallet])
       .rpc();
 
@@ -276,16 +283,27 @@ describe("session-manager", () => {
       expect(session.startedAt.toNumber()).to.be.greaterThan(0);
       expect(session.lastActivity.toNumber()).to.be.greaterThan(0);
 
-      // Clean up: end the session (also closes inventory via CPI)
+      // Clean up: end the session (also closes all sub-accounts via CPI)
       const [inventoryPDA] = getInventoryPDA(sessionPDA);
+      const [gameStatePDA] = getGameStatePDA(sessionPDA);
+      const [mapEnemiesPDA] = getMapEnemiesPDA(sessionPDA);
+      const [generatedMapPDA] = getGeneratedMapPDA(sessionPDA);
+      const [mapPoisPDA] = getMapPoisPDA(sessionPDA);
       await program.methods
-        .endSession(campaignLevel, true)
+        .abandonSession(campaignLevel)
         .accounts({
           gameSession: sessionPDA,
+          gameState: gameStatePDA,
+          mapEnemies: mapEnemiesPDA,
+          generatedMap: generatedMapPDA,
+          mapPois: mapPoisPDA,
           player: user.publicKey,
           burnerWallet: burnerWallet.publicKey,
           inventory: inventoryPDA,
           playerInventoryProgram: playerInventoryProgram.programId,
+          gameplayStateProgram: gameplayProgram.programId,
+          mapGeneratorProgram: mapGeneratorProgram.programId,
+          poiSystemProgram: poiSystemProgram.programId,
         } as any)
         .signers([user, burnerWallet])
         .rpc();
@@ -330,23 +348,23 @@ describe("session-manager", () => {
         burnerWallet.publicKey.toString(),
       );
 
-      await gameplayProgram.methods
-        .closeGameState()
-        .accounts({
-          gameState: gameStatePDA,
-          player: user.publicKey,
-        } as any)
-        .signers([user])
-        .rpc();
-
+      // abandonSession now closes all sub-accounts (game_state, map_enemies, generated_map, map_pois, inventory)
+      const [generatedMapPDA] = getGeneratedMapPDA(sessionPDA);
       await program.methods
-        .endSession(campaignLevel, true)
+        .abandonSession(campaignLevel)
         .accounts({
           gameSession: sessionPDA,
+          gameState: gameStatePDA,
+          mapEnemies: mapEnemiesPDA,
+          generatedMap: generatedMapPDA,
+          mapPois: mapPoisPDA,
           player: user.publicKey,
           burnerWallet: burnerWallet.publicKey,
           inventory: inventoryPDA,
           playerInventoryProgram: playerInventoryProgram.programId,
+          gameplayStateProgram: gameplayProgram.programId,
+          mapGeneratorProgram: mapGeneratorProgram.programId,
+          poiSystemProgram: poiSystemProgram.programId,
         } as any)
         .signers([user, burnerWallet])
         .rpc();
@@ -386,14 +404,25 @@ describe("session-manager", () => {
 
       // Clean up
       const [inventoryPDA] = getInventoryPDA(sessionPDA);
+      const [gameStatePDA] = getGameStatePDA(sessionPDA);
+      const [mapEnemiesPDA] = getMapEnemiesPDA(sessionPDA);
+      const [generatedMapPDA] = getGeneratedMapPDA(sessionPDA);
+      const [mapPoisPDA] = getMapPoisPDA(sessionPDA);
       await program.methods
-        .endSession(campaignLevel, true)
+        .abandonSession(campaignLevel)
         .accounts({
           gameSession: sessionPDA,
+          gameState: gameStatePDA,
+          mapEnemies: mapEnemiesPDA,
+          generatedMap: generatedMapPDA,
+          mapPois: mapPoisPDA,
           player: user.publicKey,
           burnerWallet: burnerWallet.publicKey,
           inventory: inventoryPDA,
           playerInventoryProgram: playerInventoryProgram.programId,
+          gameplayStateProgram: gameplayProgram.programId,
+          mapGeneratorProgram: mapGeneratorProgram.programId,
+          poiSystemProgram: poiSystemProgram.programId,
         } as any)
         .signers([user, burnerWallet])
         .rpc();
@@ -432,14 +461,25 @@ describe("session-manager", () => {
 
       // Clean up
       const [inventoryPDA] = getInventoryPDA(sessionPDA);
+      const [gameStatePDA] = getGameStatePDA(sessionPDA);
+      const [mapEnemiesPDA] = getMapEnemiesPDA(sessionPDA);
+      const [generatedMapPDA] = getGeneratedMapPDA(sessionPDA);
+      const [mapPoisPDA] = getMapPoisPDA(sessionPDA);
       await program.methods
-        .endSession(campaignLevel, true)
+        .abandonSession(campaignLevel)
         .accounts({
           gameSession: sessionPDA,
+          gameState: gameStatePDA,
+          mapEnemies: mapEnemiesPDA,
+          generatedMap: generatedMapPDA,
+          mapPois: mapPoisPDA,
           player: user.publicKey,
           burnerWallet: burnerWallet.publicKey,
           inventory: inventoryPDA,
           playerInventoryProgram: playerInventoryProgram.programId,
+          gameplayStateProgram: gameplayProgram.programId,
+          mapGeneratorProgram: mapGeneratorProgram.programId,
+          poiSystemProgram: poiSystemProgram.programId,
         } as any)
         .signers([user, burnerWallet])
         .rpc();
@@ -472,16 +512,27 @@ describe("session-manager", () => {
         user.publicKey,
       );
       const [inventoryPDA] = getInventoryPDA(sessionPDA);
+      const [gameStatePDA] = getGameStatePDA(sessionPDA);
+      const [mapEnemiesPDA] = getMapEnemiesPDA(sessionPDA);
+      const [generatedMapPDA] = getGeneratedMapPDA(sessionPDA);
+      const [mapPoisPDA] = getMapPoisPDA(sessionPDA);
 
-      // End session (also closes inventory via CPI, returning rent)
+      // End session (closes all sub-accounts via CPI, returning rent)
       await program.methods
-        .endSession(campaignLevel, true)
+        .abandonSession(campaignLevel)
         .accounts({
           gameSession: sessionPDA,
+          gameState: gameStatePDA,
+          mapEnemies: mapEnemiesPDA,
+          generatedMap: generatedMapPDA,
+          mapPois: mapPoisPDA,
           player: user.publicKey,
           burnerWallet: burnerWallet.publicKey,
           inventory: inventoryPDA,
           playerInventoryProgram: playerInventoryProgram.programId,
+          gameplayStateProgram: gameplayProgram.programId,
+          mapGeneratorProgram: mapGeneratorProgram.programId,
+          poiSystemProgram: poiSystemProgram.programId,
         } as any)
         .signers([user, burnerWallet])
         .rpc();

@@ -212,8 +212,9 @@ describe("player-profile", () => {
 
       const profile = await program.account.playerProfile.fetch(profilePDA);
       expect(profile.totalRuns).to.equal(1);
-      // availableRuns starts at 20, so after 1 run it's 19
-      expect((profile as any).availableRuns).to.equal(19);
+      // availableRuns is NOT decremented by record_run_result anymore
+      // It's decremented by consume_run at session start instead
+      expect((profile as any).availableRuns).to.equal(20);
     });
 
     it("increments total_runs on completion", async () => {
@@ -253,8 +254,9 @@ describe("player-profile", () => {
 
       const profile = await program.account.playerProfile.fetch(profilePDA);
       expect(profile.totalRuns).to.equal(5);
-      // availableRuns starts at 20, so after 5 runs it's 15
-      expect((profile as any).availableRuns).to.equal(15);
+      // availableRuns is NOT decremented by record_run_result anymore
+      // It's decremented by consume_run at session start instead
+      expect((profile as any).availableRuns).to.equal(20);
     });
 
     it("advances level on victory", async () => {
@@ -297,8 +299,8 @@ describe("player-profile", () => {
       // Verify level advanced to 2
       profile = await program.account.playerProfile.fetch(profilePDA);
       expect((profile as any).highestLevelUnlocked).to.equal(2);
-      // availableRuns starts at 20, so after 1 run it's 19
-      expect((profile as any).availableRuns).to.equal(19);
+      // availableRuns is NOT decremented by record_run_result anymore
+      expect((profile as any).availableRuns).to.equal(20);
 
       // Record another victory at level 2
       await program.methods
@@ -312,8 +314,8 @@ describe("player-profile", () => {
 
       profile = await program.account.playerProfile.fetch(profilePDA);
       expect((profile as any).highestLevelUnlocked).to.equal(3);
-      // After 2 runs it's 18
-      expect((profile as any).availableRuns).to.equal(18);
+      // availableRuns is NOT decremented by record_run_result anymore
+      expect((profile as any).availableRuns).to.equal(20);
     });
 
     it("does not advance level on defeat", async () => {
@@ -368,8 +370,9 @@ describe("player-profile", () => {
       profile = await program.account.playerProfile.fetch(profilePDA);
       expect((profile as any).highestLevelUnlocked).to.equal(6);
       expect(profile.totalRuns).to.equal(6);
-      // availableRuns starts at 20, after 6 runs it's 14
-      expect((profile as any).availableRuns).to.equal(14);
+      // availableRuns is NOT decremented by record_run_result anymore
+      // It's decremented by consume_run at session start instead
+      expect((profile as any).availableRuns).to.equal(20);
     });
   });
 });

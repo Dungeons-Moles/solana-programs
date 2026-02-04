@@ -107,6 +107,10 @@ pub struct GameState {
 
     /// Player death flag - once set, all gameplay instructions are blocked
     pub is_dead: bool,
+
+    /// Level completion flag - set when week 3 boss is defeated
+    /// Used by session_manager to validate end_session calls
+    pub completed: bool,
 }
 
 impl GameState {

@@ -183,7 +183,14 @@ describe("gameplay-state", () => {
         owner: user.publicKey,
         systemProgram: SystemProgram.programId,
       } as any)
-      .preInstructions([anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({ units: 1400000 }), anchor.web3.ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 })])
+      .preInstructions([
+        anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+          units: 1400000,
+        }),
+        anchor.web3.ComputeBudgetProgram.requestHeapFrame({
+          bytes: 256 * 1024,
+        }),
+      ])
       .signers([user])
       .rpc();
 
@@ -208,7 +215,14 @@ describe("gameplay-state", () => {
         playerProfileProgram: playerProfileProgram.programId,
         systemProgram: SystemProgram.programId,
       } as any)
-      .preInstructions([anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({ units: 1400000 }), anchor.web3.ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 })])
+      .preInstructions([
+        anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+          units: 1400000,
+        }),
+        anchor.web3.ComputeBudgetProgram.requestHeapFrame({
+          bytes: 256 * 1024,
+        }),
+      ])
       .signers([user, burnerWallet])
       .rpc();
 
@@ -222,7 +236,11 @@ describe("gameplay-state", () => {
           generatedMap: generatedMapPDA,
           systemProgram: SystemProgram.programId,
         } as any)
-        .preInstructions([anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({ units: 1400000 })])
+        .preInstructions([
+          anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+            units: 1400000,
+          }),
+        ])
         .signers([user])
         .rpc();
     } catch (error: any) {
@@ -248,7 +266,7 @@ describe("gameplay-state", () => {
     };
   };
 
-  // Cleanup helper
+  // Cleanup helper - abandonSession now closes all sub-accounts via CPI
   const cleanup = async (
     user: Keypair,
     burnerWallet: Keypair,
@@ -257,27 +275,25 @@ describe("gameplay-state", () => {
     campaignLevel: number = 1,
   ) => {
     const [inventoryPDA] = getInventoryPDA(sessionPDA);
-    try {
-      await gameplayProgram.methods
-        .closeGameState()
-        .accounts({
-          gameState: gameStatePDA,
-          player: user.publicKey,
-        } as any)
-        .signers([user])
-        .rpc();
-    } catch (e) {
-      // Ignore if already closed
-    }
+    const [mapEnemiesPDA] = getMapEnemiesPDA(sessionPDA);
+    const [generatedMapPDA] = getGeneratedMapPDA(sessionPDA);
+    const [mapPoisPDA] = getMapPoisPDA(sessionPDA);
     try {
       await sessionProgram.methods
-        .endSession(campaignLevel, true)
+        .abandonSession(campaignLevel)
         .accounts({
           gameSession: sessionPDA,
+          gameState: gameStatePDA,
+          mapEnemies: mapEnemiesPDA,
+          generatedMap: generatedMapPDA,
+          mapPois: mapPoisPDA,
           player: user.publicKey,
           burnerWallet: burnerWallet.publicKey,
           inventory: inventoryPDA,
           playerInventoryProgram: playerInventoryProgram.programId,
+          gameplayStateProgram: gameplayProgram.programId,
+          mapGeneratorProgram: mapGeneratorProgram.programId,
+          poiSystemProgram: poiSystemProgram.programId,
         } as any)
         .signers([user, burnerWallet])
         .rpc();
@@ -430,9 +446,7 @@ describe("gameplay-state", () => {
         const gameState =
           await gameplayProgram.account.gameState.fetch(gameStatePDA);
 
-        expect(gameState.player.toString()).to.equal(
-          user.publicKey.toString(),
-        );
+        expect(gameState.player.toString()).to.equal(user.publicKey.toString());
         expect(gameState.burnerWallet.toString()).to.equal(
           burnerWallet.publicKey.toString(),
         );
@@ -926,7 +940,11 @@ describe("gameplay-state", () => {
             mapGeneratorProgram: mapGeneratorProgram.programId,
             systemProgram: SystemProgram.programId,
           } as any)
-          .preInstructions([anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({ units: 1400000 })])
+          .preInstructions([
+            anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+              units: 1400000,
+            }),
+          ])
           .signers([user])
           .rpc();
 
@@ -1038,18 +1056,9 @@ describe("gameplay-state", () => {
           await provider.connection.getAccountInfo(gameStatePDA);
         expect(gameStateAccount).to.be.null;
 
-        const [inventoryPDA] = getInventoryPDA(sessionPDA);
-        await sessionProgram.methods
-          .endSession(campaignLevel, true)
-          .accounts({
-            gameSession: sessionPDA,
-            player: user.publicKey,
-            burnerWallet: burnerWallet.publicKey,
-            inventory: inventoryPDA,
-            playerInventoryProgram: playerInventoryProgram.programId,
-          } as any)
-          .signers([user, burnerWallet])
-          .rpc();
+        // Note: abandonSession now closes game_state via CPI, so we can't call it
+        // after manually closing game_state. The session and other sub-accounts
+        // will remain (acceptable in test environment since each test uses unique keypairs).
       });
     });
     describe("Automatic session end on defeat", () => {

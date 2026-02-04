@@ -65,6 +65,8 @@ pub mod player_profile {
 
     /// Records the result of a completed dungeon run.
     /// On first-time victory, unlocks the next level and a random item.
+    /// Note: available_runs is NOT decremented here - it's already done by consume_run
+    /// at session start via CPI from session-manager.
     pub fn record_run_result(
         ctx: Context<RecordRunResult>,
         level_completed: u8,
@@ -73,11 +75,7 @@ pub mod player_profile {
         let profile = &mut ctx.accounts.player_profile;
         let clock = Clock::get()?;
 
-        // Decrement available runs
-        profile.available_runs = profile
-            .available_runs
-            .checked_sub(1)
-            .ok_or(PlayerProfileError::NoAvailableRuns)?;
+        // Note: available_runs already decremented by consume_run at session start
 
         // Increment total runs
         profile.total_runs = profile
@@ -144,6 +142,105 @@ pub mod player_profile {
         emit!(RunConsumed {
             owner: profile.owner,
             available_runs: profile.available_runs,
+        });
+
+        Ok(())
+    }
+
+    /// Records the result of a completed dungeon run via CPI from session-manager.
+    /// Uses session account for authorization instead of requiring player signature.
+    /// This allows the burner wallet to trigger run result recording without user interaction.
+    ///
+    /// Authorization: The session account proves player ownership. We verify:
+    /// 1. Session account is owned by the session-manager program
+    /// 2. Session's player field matches the profile's owner
+    /// 3. Burner wallet signer matches the session's stored burner_wallet
+    pub fn record_run_result_cpi(
+        ctx: Context<RecordRunResultCpi>,
+        level_completed: u8,
+        victory: bool,
+    ) -> Result<()> {
+        let profile = &mut ctx.accounts.player_profile;
+        let session_info = &ctx.accounts.session;
+
+        // Verify session account is owned by the session-manager program
+        require!(
+            *session_info.owner == Pubkey::new_from_array(SESSION_MANAGER_PROGRAM_ID),
+            PlayerProfileError::InvalidSessionOwner
+        );
+
+        let session_data = session_info.try_borrow_data()?;
+        let clock = Clock::get()?;
+
+        // Verify session account has enough data to read through burner_wallet
+        require!(
+            session_data.len() >= SESSION_MIN_DATA_LEN,
+            PlayerProfileError::InvalidSession
+        );
+
+        // Read player pubkey from session account (offset 8 for discriminator)
+        let session_player = Pubkey::try_from(&session_data[8..40])
+            .map_err(|_| PlayerProfileError::InvalidSession)?;
+
+        // Verify session's player matches profile's owner
+        require!(
+            session_player == profile.owner,
+            PlayerProfileError::Unauthorized
+        );
+
+        // Read burner_wallet from session account and verify it matches the signer
+        let session_burner = Pubkey::try_from(
+            &session_data[SESSION_BURNER_WALLET_OFFSET..SESSION_BURNER_WALLET_OFFSET + 32],
+        )
+        .map_err(|_| PlayerProfileError::InvalidSession)?;
+
+        require!(
+            session_burner == ctx.accounts.burner_wallet.key(),
+            PlayerProfileError::InvalidBurnerWallet
+        );
+
+        // Increment total runs
+        profile.total_runs = profile
+            .total_runs
+            .checked_add(1)
+            .ok_or(PlayerProfileError::ArithmeticOverflow)?;
+
+        // On first-time victory (completing highest unlocked level), advance and unlock item
+        if victory && level_completed == profile.highest_level_unlocked {
+            // Increment highest level unlocked (cap at MAX_CAMPAIGN_LEVEL)
+            if profile.highest_level_unlocked < MAX_CAMPAIGN_LEVEL {
+                profile.highest_level_unlocked = profile
+                    .highest_level_unlocked
+                    .checked_add(1)
+                    .ok_or(PlayerProfileError::ArithmeticOverflow)?;
+            }
+
+            // Unlock a random item from the locked pool (indices 40-79)
+            if let Some(item_index) = bitmask::select_random_locked_item(
+                profile.unlocked_items,
+                &profile.owner,
+                level_completed,
+                clock.slot,
+            ) {
+                bitmask::set_bit(&mut profile.unlocked_items, item_index);
+                bitmask::set_bit(&mut profile.active_item_pool, item_index);
+
+                emit!(ItemUnlocked {
+                    owner: profile.owner,
+                    item_index,
+                    level_completed,
+                    timestamp: clock.unix_timestamp,
+                });
+            }
+        }
+
+        emit!(RunCompleted {
+            owner: profile.owner,
+            total_runs: profile.total_runs,
+            available_runs: profile.available_runs,
+            level_reached: level_completed,
+            victory,
+            timestamp: clock.unix_timestamp,
         });
 
         Ok(())
@@ -230,6 +327,25 @@ pub struct RecordRunResult<'info> {
     pub player_profile: Account<'info, PlayerProfile>,
 
     pub owner: Signer<'info>,
+}
+
+/// Context for recording run results via CPI from session-manager.
+/// Uses session account for authorization instead of requiring player signature.
+#[derive(Accounts)]
+pub struct RecordRunResultCpi<'info> {
+    #[account(mut)]
+    pub player_profile: Account<'info, PlayerProfile>,
+
+    /// The session account - used to verify player and burner wallet ownership.
+    /// Manually verified in instruction:
+    /// 1. Account owner == session-manager program ID
+    /// 2. session.player == player_profile.owner
+    /// 3. session.burner_wallet == burner_wallet signer
+    /// CHECK: All three checks performed in record_run_result_cpi handler
+    pub session: AccountInfo<'info>,
+
+    /// Burner wallet signer - verified against session's stored burner_wallet field.
+    pub burner_wallet: Signer<'info>,
 }
 
 #[derive(Accounts)]

@@ -266,7 +266,7 @@ describe("gameplay-state", () => {
     };
   };
 
-  // Cleanup helper
+  // Cleanup helper - abandonSession now closes all sub-accounts via CPI
   const cleanup = async (
     user: Keypair,
     burnerWallet: Keypair,
@@ -275,27 +275,25 @@ describe("gameplay-state", () => {
     campaignLevel: number = 1,
   ) => {
     const [inventoryPDA] = getInventoryPDA(sessionPDA);
-    try {
-      await gameplayProgram.methods
-        .closeGameState()
-        .accounts({
-          gameState: gameStatePDA,
-          player: user.publicKey,
-        } as any)
-        .signers([user])
-        .rpc();
-    } catch (e) {
-      // Ignore if already closed
-    }
+    const [mapEnemiesPDA] = getMapEnemiesPDA(sessionPDA);
+    const [generatedMapPDA] = getGeneratedMapPDA(sessionPDA);
+    const [mapPoisPDA] = getMapPoisPDA(sessionPDA);
     try {
       await sessionProgram.methods
         .abandonSession(campaignLevel)
         .accounts({
           gameSession: sessionPDA,
+          gameState: gameStatePDA,
+          mapEnemies: mapEnemiesPDA,
+          generatedMap: generatedMapPDA,
+          mapPois: mapPoisPDA,
           player: user.publicKey,
           burnerWallet: burnerWallet.publicKey,
           inventory: inventoryPDA,
           playerInventoryProgram: playerInventoryProgram.programId,
+          gameplayStateProgram: gameplayProgram.programId,
+          mapGeneratorProgram: mapGeneratorProgram.programId,
+          poiSystemProgram: poiSystemProgram.programId,
         } as any)
         .signers([user, burnerWallet])
         .rpc();
@@ -1058,18 +1056,9 @@ describe("gameplay-state", () => {
           await provider.connection.getAccountInfo(gameStatePDA);
         expect(gameStateAccount).to.be.null;
 
-        const [inventoryPDA] = getInventoryPDA(sessionPDA);
-        await sessionProgram.methods
-          .abandonSession(campaignLevel)
-          .accounts({
-            gameSession: sessionPDA,
-            player: user.publicKey,
-            burnerWallet: burnerWallet.publicKey,
-            inventory: inventoryPDA,
-            playerInventoryProgram: playerInventoryProgram.programId,
-          } as any)
-          .signers([user, burnerWallet])
-          .rpc();
+        // Note: abandonSession now closes game_state via CPI, so we can't call it
+        // after manually closing game_state. The session and other sub-accounts
+        // will remain (acceptable in test environment since each test uses unique keypairs).
       });
     });
     describe("Automatic session end on defeat", () => {

@@ -254,14 +254,25 @@ describe("player-inventory", () => {
     inventoryPDA: anchor.web3.PublicKey,
     campaignLevel: number = 1,
   ) => {
+    const [gameStatePDA] = getGameStatePDA(sessionPDA);
+    const [mapEnemiesPDA] = getMapEnemiesPDA(sessionPDA);
+    const [generatedMapPDA] = getGeneratedMapPDA(sessionPDA);
+    const [mapPoisPDA] = getMapPoisPDA(sessionPDA);
     await sessionProgram.methods
       .abandonSession(campaignLevel)
       .accounts({
         gameSession: sessionPDA,
+        gameState: gameStatePDA,
+        mapEnemies: mapEnemiesPDA,
+        generatedMap: generatedMapPDA,
+        mapPois: mapPoisPDA,
         player: user.publicKey,
         burnerWallet: burnerWallet.publicKey,
         inventory: inventoryPDA,
         playerInventoryProgram: program.programId,
+        gameplayStateProgram: gameplayProgram.programId,
+        mapGeneratorProgram: mapGeneratorProgram.programId,
+        poiSystemProgram: poiSystemProgram.programId,
       } as any)
       .signers([user, burnerWallet])
       .rpc();

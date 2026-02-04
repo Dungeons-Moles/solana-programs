@@ -800,7 +800,7 @@ fn process_victory_effects(game_state: &mut GameState, inventory: &PlayerInvento
             }
             EffectType::Heal => {
                 let heal_amount = effect.value.max(0);
-                game_state.hp = (game_state.hp + heal_amount).min(max_hp);
+                game_state.hp = game_state.hp.saturating_add(heal_amount).min(max_hp);
             }
             _ => {
                 // Other effect types not supported for Victory trigger yet

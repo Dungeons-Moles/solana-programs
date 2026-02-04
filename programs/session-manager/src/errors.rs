@@ -46,4 +46,8 @@ pub enum SessionManagerError {
     /// Player already has a session on this level
     #[msg("Session already exists for this level")]
     SessionExistsForLevel,
+
+    /// Session can only be ended after death or level completion
+    #[msg("Session can only be ended after death or level completion")]
+    SessionNotEndable,
 }

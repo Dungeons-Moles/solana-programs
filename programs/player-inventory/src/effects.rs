@@ -35,6 +35,9 @@ pub fn generate_tool_effects(tool: &ItemInstance) -> Vec<ItemEffect> {
     if tool.has_oil(ToolOilModification::PlusDig) {
         effects.push(stat_bonus(EffectType::GainDig, 1));
     }
+    if tool.has_oil(ToolOilModification::PlusArm) {
+        effects.push(stat_bonus(EffectType::GainArmor, 1));
+    }
 
     effects
 }
@@ -105,7 +108,7 @@ mod tests {
 
     #[test]
     fn test_tool_effects_with_tier_scaling() {
-        // T-FR-01 (Rime Pike): +2/3/4 ATK, OnHit 1/2/3 Chill
+        // T-FR-01 (Rime Pike): +2/3/4 ATK, OnHit 1 Chill (flat, per GDD)
         let tool = ItemInstance::new(*b"T-FR-01\0", Tier::II);
         let effects = generate_tool_effects(&tool);
 
@@ -119,12 +122,12 @@ mod tests {
         assert!(atk_effect.is_some());
         assert_eq!(atk_effect.unwrap().value, 3);
 
-        // Check Chill uses Tier II value (2)
+        // Check Chill is flat 1 (per GDD: "On Hit (once/turn): apply 1 Chill")
         let chill_effect = effects
             .iter()
             .find(|e| e.effect_type == EffectType::ApplyChill);
         assert!(chill_effect.is_some());
-        assert_eq!(chill_effect.unwrap().value, 2);
+        assert_eq!(chill_effect.unwrap().value, 1);
     }
 
     #[test]
@@ -132,6 +135,7 @@ mod tests {
         let mut tool = ItemInstance::new(*b"T-FR-01\0", Tier::I);
         tool.apply_oil(ToolOilModification::PlusAtk);
         tool.apply_oil(ToolOilModification::PlusSpd);
+        tool.apply_oil(ToolOilModification::PlusArm);
 
         let effects = generate_tool_effects(&tool);
 
@@ -147,6 +151,13 @@ mod tests {
             .filter(|e| e.effect_type == EffectType::GainSpd)
             .collect();
         assert_eq!(spd_effects.len(), 1); // Oil +1 SPD
+
+        let arm_effects: Vec<_> = effects
+            .iter()
+            .filter(|e| e.effect_type == EffectType::GainArmor)
+            .collect();
+        assert_eq!(arm_effects.len(), 1); // Oil +1 ARM
+        assert_eq!(arm_effects[0].value, 1);
     }
 
     #[test]

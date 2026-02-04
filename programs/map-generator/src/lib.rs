@@ -108,6 +108,43 @@ pub mod map_generator {
 
         Ok(())
     }
+
+    /// Closes the GeneratedMap account, returning rent to player.
+    /// Used by session-manager CPI during end_session to clean up.
+    ///
+    /// Authorization: Reads session account to verify burner_wallet matches signer,
+    /// then returns rent to session.player.
+    pub fn close_generated_map(ctx: Context<CloseGeneratedMap>) -> Result<()> {
+        // Verify burner_wallet by reading from session account
+        // Session layout:
+        //   8 (discriminator) + 32 (player) + 8 (session_id) + 1 (campaign_level) +
+        //   8 (started_at) + 8 (last_activity) + 1 (is_delegated) + 1 (bump) +
+        //   10 (active_item_pool) + 32 (burner_wallet) + 32 (state_hash)
+        // Player at offset 8..40, burner_wallet at offset 77..109
+        let session_data = ctx.accounts.session.try_borrow_data()?;
+        require!(session_data.len() >= 109, MapGeneratorError::InvalidSession);
+
+        let stored_burner = Pubkey::from(<[u8; 32]>::try_from(&session_data[77..109]).unwrap());
+        require!(
+            stored_burner == ctx.accounts.burner_wallet.key(),
+            MapGeneratorError::Unauthorized
+        );
+
+        // Verify player matches session.player
+        let stored_player = Pubkey::from(<[u8; 32]>::try_from(&session_data[8..40]).unwrap());
+        require!(
+            stored_player == ctx.accounts.player.key(),
+            MapGeneratorError::Unauthorized
+        );
+
+        drop(session_data);
+
+        emit!(GeneratedMapClosed {
+            session: ctx.accounts.generated_map.session,
+        });
+
+        Ok(())
+    }
 }
 
 // ============================================================================
@@ -202,4 +239,38 @@ pub struct SetTileFloor<'info> {
         seeds::program = GAMEPLAY_STATE_PROGRAM_ID,
     )]
     pub gameplay_authority: Signer<'info>,
+}
+
+/// Context for closing GeneratedMap account via burner wallet.
+#[derive(Accounts)]
+pub struct CloseGeneratedMap<'info> {
+    #[account(
+        mut,
+        seeds = [GeneratedMap::SEED_PREFIX, session.key().as_ref()],
+        bump = generated_map.bump,
+        has_one = session,
+        close = player,
+    )]
+    pub generated_map: Account<'info, GeneratedMap>,
+
+    /// Game session PDA to verify burner_wallet authorization
+    /// CHECK: Session account is validated manually in instruction
+    pub session: UncheckedAccount<'info>,
+
+    /// Player wallet receives the rent refund (not a signer)
+    /// CHECK: Validated against session.player in instruction
+    #[account(mut)]
+    pub player: AccountInfo<'info>,
+
+    /// Burner wallet must sign to authorize closure
+    pub burner_wallet: Signer<'info>,
+}
+
+// ============================================================================
+// Events
+// ============================================================================
+
+#[event]
+pub struct GeneratedMapClosed {
+    pub session: Pubkey,
 }

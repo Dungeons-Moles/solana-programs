@@ -1,4 +1,5 @@
 use crate::{EffectType, ItemEffect, TriggerType};
+use combat_system::state::Condition as CombatCondition;
 
 /// Conditions for conditional triggers
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,6 +60,7 @@ impl BossTrait {
             once_per_turn: self.once_per_turn,
             effect_type: self.effect_type,
             value: self.value,
+            condition: CombatCondition::None, // TODO: Map SpecialMechanic::Conditional to CombatCondition
         }
     }
 }

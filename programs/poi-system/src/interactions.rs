@@ -1031,7 +1031,10 @@ mod tests {
 
         assert!(result.is_ok());
         let result = result.unwrap();
-        assert_eq!(result.heal_amount, 100, "Should heal full amount when HP is negative");
+        assert_eq!(
+            result.heal_amount, 100,
+            "Should heal full amount when HP is negative"
+        );
     }
 
     // =========================================================================

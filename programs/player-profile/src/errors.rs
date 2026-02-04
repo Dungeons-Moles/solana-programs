@@ -46,4 +46,8 @@ pub enum PlayerProfileError {
     /// Treasury account does not match expected address
     #[msg("Invalid treasury account")]
     InvalidTreasury,
+
+    /// Invalid session account for CPI authorization
+    #[msg("Invalid session account")]
+    InvalidSession,
 }

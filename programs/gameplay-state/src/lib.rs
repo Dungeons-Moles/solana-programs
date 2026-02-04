@@ -6,9 +6,12 @@ pub mod movement;
 pub mod state;
 pub mod stats;
 
-use combat_system::state::CombatantInput;
+use combat_system::state::{CombatantInput, Condition};
 use combat_system::{resolve_combat, CombatLogEntry, EffectType, ItemEffect};
-use constants::{BASE_HP, DAY_MOVES, GAME_STATE_SEED, INITIAL_GEAR_SLOTS, MAX_GEAR_SLOTS};
+use constants::{
+    BASE_ARM, BASE_ATK, BASE_HP, BASE_SPD, DAY_MOVES, GAME_STATE_SEED, INITIAL_GEAR_SLOTS,
+    MAX_GEAR_SLOTS,
+};
 use errors::GameplayStateError;
 
 /// Seed for gameplay_authority PDA used for CPI calls to other programs
@@ -35,6 +38,13 @@ pub const SESSION_MANAGER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
 pub const POI_SYSTEM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     77, 160, 63, 209, 182, 56, 149, 181, 2, 195, 173, 95, 65, 136, 88, 122, 235, 166, 235, 216,
     241, 107, 2, 35, 185, 14, 177, 21, 150, 103, 215, 77,
+]);
+
+/// Player inventory program ID for authorized HP modifications via CPI
+/// Derived from "5BtqiWegvVAgEnTRUofB9oUoQvPztYqSkMPwRpYQacP8"
+pub const PLAYER_INVENTORY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
+    62, 57, 43, 224, 11, 129, 112, 214, 10, 252, 5, 51, 143, 242, 213, 246, 99, 145, 248, 173, 61,
+    133, 58, 191, 234, 132, 254, 214, 152, 21, 230, 167,
 ]);
 
 #[program]
@@ -80,6 +90,7 @@ pub mod gameplay_state {
         game_state.bump = ctx.bumps.game_state;
         game_state.campaign_level = campaign_level;
         game_state.is_dead = false;
+        game_state.completed = false;
 
         let map_enemies = &mut ctx.accounts.map_enemies;
         let generated_map = &ctx.accounts.generated_map;
@@ -122,6 +133,32 @@ pub mod gameplay_state {
             final_week: game_state.week,
         });
 
+        Ok(())
+    }
+
+    /// Closes the GameState account via burner wallet authorization.
+    /// Used by session-manager CPI during end_session to clean up game state.
+    /// Rent is returned to the player wallet.
+    pub fn close_game_state_via_burner(ctx: Context<CloseGameStateViaBurner>) -> Result<()> {
+        let game_state = &ctx.accounts.game_state;
+
+        emit!(GameStateClosed {
+            player: game_state.player,
+            total_moves: game_state.total_moves,
+            final_phase: game_state.phase,
+            final_week: game_state.week,
+        });
+
+        Ok(())
+    }
+
+    /// Closes the MapEnemies account via burner wallet authorization.
+    /// Used by session-manager CPI during end_session to clean up.
+    /// Rent is returned to the player wallet.
+    pub fn close_map_enemies(ctx: Context<CloseMapEnemies>) -> Result<()> {
+        emit!(MapEnemiesClosed {
+            session: ctx.accounts.map_enemies.session,
+        });
         Ok(())
     }
 
@@ -176,7 +213,6 @@ pub mod gameplay_state {
         let game_state = &mut ctx.accounts.game_state;
         let inventory = &ctx.accounts.inventory;
         let inventory_info = &ctx.accounts.inventory.to_account_info();
-        let player = &ctx.accounts.player;
         let player_inventory_program = &ctx.accounts.player_inventory_program;
 
         require!(!game_state.is_dead, GameplayStateError::PlayerDead);
@@ -203,8 +239,9 @@ pub mod gameplay_state {
                 game_state,
                 inventory,
                 inventory_info,
-                player,
+                &ctx.accounts.gameplay_authority,
                 player_inventory_program,
+                ctx.bumps.gameplay_authority,
             )?;
 
             if !player_won {
@@ -232,44 +269,81 @@ pub mod gameplay_state {
         Ok(())
     }
 
-    /// Syncs HP to reflect current inventory bonuses.
+    /// Adds an HP bonus when equipping +HP gear, authorized by player-inventory.
     ///
-    /// This instruction should be called after equipping gear that provides +HP.
-    /// It calculates the new max_hp from the inventory and adjusts current HP:
-    /// - If player was at full base health (hp == BASE_HP), set hp to new max_hp
-    /// - If player was damaged, add the HP bonus (max_hp - BASE_HP) to current hp
-    /// - HP is always capped at the new max_hp
+    /// This instruction can only be called via CPI from player-inventory using
+    /// the inventory_authority PDA as signer. Used when equipping gear that has
+    /// a MaxHp effect.
     ///
-    /// This ensures that equipping +HP gear immediately grants that HP.
-    pub fn sync_hp_from_inventory(ctx: Context<SyncHpFromInventory>) -> Result<()> {
+    /// Behavior:
+    /// - Adds the hp_bonus to both current HP and max HP
+    /// - Current HP increases by hp_bonus (grants immediate HP)
+    /// - Max HP is tracked implicitly via inventory effects
+    ///
+    /// Example: Pick +4 HP item at 10/10 -> 14/14
+    pub fn add_hp_bonus_authorized(
+        ctx: Context<AddHpBonusAuthorized>,
+        hp_bonus: i16,
+    ) -> Result<()> {
         let game_state = &mut ctx.accounts.game_state;
-        let inventory = &ctx.accounts.inventory;
-        let player_stats = calculate_stats(inventory);
+
+        require!(hp_bonus > 0, GameplayStateError::InvalidHpBonus);
 
         let old_hp = game_state.hp;
-        let old_max = BASE_HP; // Base max HP without gear bonuses
-        let new_max = player_stats.max_hp;
-        let hp_bonus = new_max.saturating_sub(old_max);
+        let new_hp = old_hp
+            .checked_add(hp_bonus)
+            .ok_or(GameplayStateError::ArithmeticOverflow)?;
 
-        // Calculate new HP:
-        // - If at full base health, set to new max
-        // - If damaged, add the bonus (but cap at new max)
-        let new_hp = if old_hp >= old_max {
-            // Player was at or above base max (full health or already had bonuses)
-            new_max
-        } else {
-            // Player was damaged, add the bonus
-            old_hp.saturating_add(hp_bonus).min(new_max)
-        };
+        require!(new_hp <= i16::MAX, GameplayStateError::StatOverflow);
 
         game_state.hp = new_hp;
 
-        emit!(HpSynced {
+        emit!(HpBonusAdded {
             player: game_state.player,
             old_hp,
             new_hp: game_state.hp,
             hp_bonus,
-            max_hp: new_max,
+        });
+
+        Ok(())
+    }
+
+    /// Removes an HP bonus when unequipping +HP gear, authorized by player-inventory.
+    ///
+    /// This instruction can only be called via CPI from player-inventory using
+    /// the inventory_authority PDA as signer. Used when unequipping gear that has
+    /// a MaxHp effect.
+    ///
+    /// Behavior:
+    /// - Reduces max HP by hp_bonus
+    /// - If current HP exceeds new max HP, caps it at new max HP
+    /// - If current HP is already below new max HP, leaves it unchanged
+    ///
+    /// Example: Unequip +4 HP item at 14/14 -> 10/10
+    /// Example: Unequip +4 HP item at 7/14 -> 7/10
+    /// Example: Unequip +4 HP item at 12/14 -> 10/10 (capped)
+    pub fn remove_hp_bonus_authorized(
+        ctx: Context<RemoveHpBonusAuthorized>,
+        hp_bonus: i16,
+        new_max_hp: i16,
+    ) -> Result<()> {
+        let game_state = &mut ctx.accounts.game_state;
+
+        require!(hp_bonus > 0, GameplayStateError::InvalidHpBonus);
+        require!(new_max_hp >= BASE_HP, GameplayStateError::InvalidHpBonus);
+
+        let old_hp = game_state.hp;
+        // Cap current HP at the new max HP
+        let new_hp = old_hp.min(new_max_hp);
+
+        game_state.hp = new_hp;
+
+        emit!(HpBonusRemoved {
+            player: game_state.player,
+            old_hp,
+            new_hp: game_state.hp,
+            hp_bonus,
+            new_max_hp,
         });
 
         Ok(())
@@ -558,8 +632,9 @@ pub mod gameplay_state {
                     game_state,
                     inventory,
                     inventory_info,
-                    player,
+                    &ctx.accounts.gameplay_authority,
                     player_inventory_program,
+                    ctx.bumps.gameplay_authority,
                 )?;
                 if !player_won {
                     return Ok(());
@@ -612,8 +687,9 @@ pub mod gameplay_state {
             game_state,
             inventory,
             inventory_info,
-            player,
+            &ctx.accounts.gameplay_authority,
             player_inventory_program,
+            ctx.bumps.gameplay_authority,
         )?;
         if !player_won {
             return Ok(());
@@ -681,21 +757,55 @@ fn build_player_combatant(
     stats: &PlayerStats,
     _player_effects: &[ItemEffect],
 ) -> CombatantInput {
-    // NOTE: BattleStart Heal effects are already included in stats.max_hp
-    // via calculate_stats(). They represent permanent max HP bonuses from items
-    // (e.g., Health Ring), not temporary combat-only boosts.
-    //
     // current_hp is clamped to stats.max_hp to prevent exceeding derived max.
     let combat_hp = current_hp.clamp(1, stats.max_hp);
 
+    // Combat stats (ATK/ARM/SPD) start at BASE values (0).
+    // BattleStart effects from items will be applied during combat's BattleStart phase.
+    // This prevents double-counting that would occur if we pre-calculated these stats.
+    //
+    // Pre-calculated stats:
+    // - max_hp: Includes permanent HP bonuses (e.g., Work Vest's +HP)
+    // - dig: Used for movement cost AND combat comparators (e.g., "if DIG > enemy DIG")
+    // - strikes: Base 1 + GainStrikes bonuses (e.g., Twin Picks, Pneumatic Drill)
     CombatantInput {
         hp: combat_hp,
         max_hp: stats.max_hp as u16,
-        atk: stats.atk,
-        arm: stats.arm,
-        spd: stats.spd,
+        atk: BASE_ATK,
+        arm: BASE_ARM,
+        spd: BASE_SPD,
         dig: stats.dig,
-        strikes: 1,
+        strikes: stats.strikes,
+    }
+}
+
+/// Process Victory trigger effects after player wins combat.
+///
+/// Victory effects are processed outside the combat system because they fire
+/// after combat ends, not during it. Currently supports:
+/// - GainGold: Add gold to player's total
+/// - Heal: Restore HP (capped at max_hp)
+fn process_victory_effects(game_state: &mut GameState, inventory: &PlayerInventory, max_hp: i16) {
+    let effects = generate_combat_effects(inventory);
+
+    for effect in effects.iter() {
+        if effect.trigger != combat_system::TriggerType::Victory {
+            continue;
+        }
+
+        match effect.effect_type {
+            EffectType::GainGold => {
+                let gold_gain = effect.value.max(0) as u16;
+                game_state.gold = game_state.gold.saturating_add(gold_gain);
+            }
+            EffectType::Heal => {
+                let heal_amount = effect.value.max(0);
+                game_state.hp = (game_state.hp + heal_amount).min(max_hp);
+            }
+            _ => {
+                // Other effect types not supported for Victory trigger yet
+            }
+        }
     }
 }
 
@@ -750,7 +860,7 @@ fn resolve_enemy_combat(
     emit!(CombatStarted {
         player: game_state.player,
         player_hp: game_state.hp,
-        player_atk: player_stats.atk,
+        player_atk: BASE_ATK, // ATK bonuses applied during combat's BattleStart phase
         enemy_archetype: enemy.archetype_id,
         enemy_hp: enemy_input.hp,
         enemy_atk: enemy_input.atk,
@@ -794,6 +904,10 @@ fn resolve_enemy_combat(
     if result.player_won {
         remove_enemy(map_enemies, enemy_index);
         game_state.gold = game_state.gold.checked_add(gold_reward).unwrap_or(u16::MAX);
+
+        // Process Victory trigger effects (e.g., Lucky Coin, Blood Chalice)
+        process_victory_effects(game_state, inventory, player_stats.max_hp);
+
         Ok(true)
     } else {
         game_state.is_dead = true;
@@ -815,8 +929,9 @@ fn resolve_boss_fight<'info>(
     game_state: &mut GameState,
     inventory: &PlayerInventory,
     inventory_info: &AccountInfo<'info>,
-    player: &AccountInfo<'info>,
+    gameplay_authority: &AccountInfo<'info>,
     player_inventory_program: &AccountInfo<'info>,
+    gameplay_authority_bump: u8,
 ) -> Result<bool> {
     let stage = game_state.campaign_level;
     let boss_input = get_boss_for_combat(stage, game_state.week)?;
@@ -866,6 +981,9 @@ fn resolve_boss_fight<'info>(
         game_state.boss_fight_ready = false;
 
         if game_state.week >= 3 {
+            // Mark session as completed - allows end_session to be called
+            game_state.completed = true;
+
             emit!(LevelCompleted {
                 player: game_state.player,
                 level: stage,
@@ -886,7 +1004,12 @@ fn resolve_boss_fight<'info>(
                 .ok_or(GameplayStateError::ArithmeticOverflow)?
                 .min(MAX_GEAR_SLOTS);
 
-            expand_gear_slots_cpi(inventory_info, player, player_inventory_program)?;
+            expand_gear_slots_cpi(
+                inventory_info,
+                gameplay_authority,
+                player_inventory_program,
+                gameplay_authority_bump,
+            )?;
 
             emit!(PhaseAdvanced {
                 player: game_state.player,
@@ -895,6 +1018,9 @@ fn resolve_boss_fight<'info>(
                 moves_remaining: game_state.moves_remaining,
             });
         }
+
+        // Process Victory trigger effects (e.g., Lucky Coin, Blood Chalice)
+        process_victory_effects(game_state, inventory, player_stats.max_hp);
 
         Ok(true)
     } else {
@@ -915,15 +1041,19 @@ fn resolve_boss_fight<'info>(
 
 fn expand_gear_slots_cpi<'info>(
     inventory: &AccountInfo<'info>,
-    player: &AccountInfo<'info>,
+    gameplay_authority: &AccountInfo<'info>,
     player_inventory_program: &AccountInfo<'info>,
+    gameplay_authority_bump: u8,
 ) -> Result<()> {
-    player_inventory::cpi::expand_gear_slots(CpiContext::new(
+    let signer_seeds: &[&[&[u8]]] = &[&[GAMEPLAY_AUTHORITY_SEED, &[gameplay_authority_bump]]];
+
+    player_inventory::cpi::expand_gear_slots_authorized(CpiContext::new_with_signer(
         player_inventory_program.clone(),
-        player_inventory::cpi::accounts::ExpandGearSlots {
+        player_inventory::cpi::accounts::ExpandGearSlotsAuthorized {
             inventory: inventory.clone(),
-            player: player.clone(),
+            gameplay_authority: gameplay_authority.clone(),
         },
+        signer_seeds,
     ))?;
 
     Ok(())
@@ -1103,6 +1233,49 @@ pub struct CloseGameState<'info> {
     pub player: Signer<'info>,
 }
 
+/// Context for closing GameState via burner wallet (for session-manager CPI).
+#[derive(Accounts)]
+pub struct CloseGameStateViaBurner<'info> {
+    #[account(
+        mut,
+        has_one = burner_wallet @ GameplayStateError::Unauthorized,
+        close = player,
+    )]
+    pub game_state: Account<'info, GameState>,
+
+    /// Player wallet receives the rent refund (not a signer)
+    /// CHECK: Validated by game_state.player via close constraint
+    #[account(mut)]
+    pub player: AccountInfo<'info>,
+
+    /// Burner wallet must sign to authorize closure
+    pub burner_wallet: Signer<'info>,
+}
+
+/// Context for closing MapEnemies account via burner wallet.
+#[derive(Accounts)]
+pub struct CloseMapEnemies<'info> {
+    #[account(
+        mut,
+        close = player,
+    )]
+    pub map_enemies: Account<'info, MapEnemies>,
+
+    /// GameState to verify burner_wallet authorization
+    #[account(
+        has_one = burner_wallet @ GameplayStateError::Unauthorized,
+    )]
+    pub game_state: Account<'info, GameState>,
+
+    /// Player wallet receives the rent refund (not a signer)
+    /// CHECK: Validated via game_state.player
+    #[account(mut, address = game_state.player @ GameplayStateError::Unauthorized)]
+    pub player: AccountInfo<'info>,
+
+    /// Burner wallet must sign to authorize closure
+    pub burner_wallet: Signer<'info>,
+}
+
 /// Context for healing the player, authorized by poi-system CPI.
 /// Requires poi_authority PDA from poi-system as signer.
 /// Includes inventory for deriving max_hp.
@@ -1153,34 +1326,48 @@ pub struct SkipToDay<'info> {
     )]
     pub poi_authority: Signer<'info>,
 
-    /// Player for CPI to player_inventory_program (expand gear slots on boss victory)
-    /// CHECK: Used for CPI context, validated by player_inventory_program
-    pub player: AccountInfo<'info>,
+    /// Gameplay authority PDA for signing CPI calls to player-inventory
+    /// CHECK: This is a PDA derived from gameplay_state program, validated by seeds
+    #[account(
+        seeds = [GAMEPLAY_AUTHORITY_SEED],
+        bump,
+    )]
+    pub gameplay_authority: AccountInfo<'info>,
 
     /// Player inventory program for CPI (expand gear slots on boss victory)
     pub player_inventory_program: Program<'info, player_inventory::program::PlayerInventory>,
 }
 
-/// Context for syncing HP from inventory after equipping +HP gear.
-/// Can be called directly by the player (no CPI authorization needed).
+/// Context for adding HP bonus when equipping +HP gear, authorized by player-inventory CPI.
+/// Requires inventory_authority PDA from player-inventory as signer.
 #[derive(Accounts)]
-pub struct SyncHpFromInventory<'info> {
-    #[account(
-        mut,
-        has_one = player @ GameplayStateError::Unauthorized,
-    )]
+pub struct AddHpBonusAuthorized<'info> {
+    #[account(mut)]
     pub game_state: Account<'info, GameState>,
 
-    /// Player inventory for deriving max_hp (PDA derived from session)
+    /// Inventory authority PDA from player-inventory that must sign
     #[account(
-        seeds = [b"inventory", game_state.session.as_ref()],
-        bump = inventory.bump,
-        seeds::program = player_inventory::ID,
+        seeds = [b"inventory_authority"],
+        bump,
+        seeds::program = PLAYER_INVENTORY_PROGRAM_ID,
     )]
-    pub inventory: Account<'info, PlayerInventory>,
+    pub inventory_authority: Signer<'info>,
+}
 
-    /// Player who owns this game state (main wallet)
-    pub player: Signer<'info>,
+/// Context for removing HP bonus when unequipping +HP gear, authorized by player-inventory CPI.
+/// Requires inventory_authority PDA from player-inventory as signer.
+#[derive(Accounts)]
+pub struct RemoveHpBonusAuthorized<'info> {
+    #[account(mut)]
+    pub game_state: Account<'info, GameState>,
+
+    /// Inventory authority PDA from player-inventory that must sign
+    #[account(
+        seeds = [b"inventory_authority"],
+        bump,
+        seeds::program = PLAYER_INVENTORY_PROGRAM_ID,
+    )]
+    pub inventory_authority: Signer<'info>,
 }
 
 /// Context for authorized gold modification via poi-system CPI.
@@ -1285,6 +1472,14 @@ pub struct TriggerBossFight<'info> {
     )]
     pub inventory: Account<'info, PlayerInventory>,
 
+    /// Gameplay authority PDA for signing CPI calls to player-inventory
+    /// CHECK: This is a PDA derived from gameplay_state program, validated by seeds
+    #[account(
+        seeds = [GAMEPLAY_AUTHORITY_SEED],
+        bump,
+    )]
+    pub gameplay_authority: AccountInfo<'info>,
+
     /// Player inventory program for CPI (expand gear slots on boss victory)
     pub player_inventory_program: Program<'info, player_inventory::program::PlayerInventory>,
 
@@ -1336,6 +1531,11 @@ pub struct GameStateClosed {
     pub final_week: u8,
 }
 
+#[event]
+pub struct MapEnemiesClosed {
+    pub session: Pubkey,
+}
+
 /// Emitted when player is healed via authorized CPI from poi-system
 #[event]
 pub struct PlayerHealed {
@@ -1346,14 +1546,23 @@ pub struct PlayerHealed {
     pub max_hp: i16,
 }
 
-/// Emitted when HP is synced from inventory after equipping +HP gear
+/// Emitted when HP bonus is added via authorized CPI from player-inventory (equipping +HP gear)
 #[event]
-pub struct HpSynced {
+pub struct HpBonusAdded {
     pub player: Pubkey,
     pub old_hp: i16,
     pub new_hp: i16,
     pub hp_bonus: i16,
-    pub max_hp: i16,
+}
+
+/// Emitted when HP bonus is removed via authorized CPI from player-inventory (unequipping +HP gear)
+#[event]
+pub struct HpBonusRemoved {
+    pub player: Pubkey,
+    pub old_hp: i16,
+    pub new_hp: i16,
+    pub hp_bonus: i16,
+    pub new_max_hp: i16,
 }
 
 /// Emitted when gold is modified via authorized CPI from poi-system
@@ -1449,24 +1658,20 @@ mod hp_logic_tests {
     fn make_base_stats() -> PlayerStats {
         PlayerStats {
             max_hp: 10,
-            atk: 0,
-            arm: 0,
-            spd: 0,
             dig: 1,
+            strikes: 1,
         }
     }
 
     #[test]
     fn test_hp_capping_logic() {
         // Test that combat HP is capped at max_hp from derived stats.
-        // BattleStart Heal bonuses are included in stats.max_hp via calculate_stats(),
-        // not as separate temporary bonuses in build_player_combatant().
+        // MaxHp bonuses are included in stats.max_hp via calculate_stats().
+        // ATK/ARM/SPD are applied during combat's BattleStart phase, not pre-calculated.
         let stats = PlayerStats {
-            max_hp: 15, // Already includes +5 from BattleStart Heal item
-            atk: 0,
-            arm: 0,
-            spd: 0,
+            max_hp: 15, // Already includes +5 from MaxHp effect (e.g., Work Vest)
             dig: 1,
+            strikes: 1,
         };
 
         // Player at full HP
@@ -1476,6 +1681,10 @@ mod hp_logic_tests {
         let input = build_player_combatant(current_hp, &stats, &effects);
         assert_eq!(input.hp, 15, "Combat HP should match current HP");
         assert_eq!(input.max_hp, 15, "Combat max_hp should match derived stats");
+        // ATK/ARM/SPD start at base (0) and get bonuses from BattleStart effects
+        assert_eq!(input.atk, BASE_ATK, "ATK should be base value");
+        assert_eq!(input.arm, BASE_ARM, "ARM should be base value");
+        assert_eq!(input.spd, BASE_SPD, "SPD should be base value");
 
         // Simulate combat: lose 3 HP
         let final_combat_hp: i16 = 12;
@@ -1493,10 +1702,8 @@ mod hp_logic_tests {
         // Test that damage persists correctly after combat.
         let stats = PlayerStats {
             max_hp: 15, // Includes item bonuses from calculate_stats()
-            atk: 0,
-            arm: 0,
-            spd: 0,
             dig: 1,
+            strikes: 1,
         };
 
         let current_hp: i16 = 15;
@@ -1540,13 +1747,13 @@ mod hp_logic_tests {
     #[test]
     fn test_derived_stats_in_combat() {
         // Test that derived stats (from inventory) are used correctly in combat
+        // Note: Only max_hp, dig, and strikes are pre-calculated in PlayerStats.
+        // ATK/ARM/SPD start at base values and get bonuses from BattleStart effects.
         let current_hp: i16 = 8;
         let stats = PlayerStats {
-            max_hp: 15, // Increased from items
-            atk: 5,     // From weapon
-            arm: 3,     // From gear
-            spd: 2,     // From gear
-            dig: 3,     // From items
+            max_hp: 15, // Increased from MaxHp effects (e.g., Work Vest)
+            dig: 3,     // From DIG items
+            strikes: 2, // From GainStrikes items (e.g., Twin Picks)
         };
 
         let effects = vec![];
@@ -1554,52 +1761,54 @@ mod hp_logic_tests {
         let input = build_player_combatant(current_hp, &stats, &effects);
         assert_eq!(input.hp, 8);
         assert_eq!(input.max_hp, 15);
-        assert_eq!(input.atk, 5);
-        assert_eq!(input.arm, 3);
-        assert_eq!(input.spd, 2);
+        // ATK/ARM/SPD start at base (0) - bonuses applied during BattleStart phase
+        assert_eq!(input.atk, BASE_ATK);
+        assert_eq!(input.arm, BASE_ARM);
+        assert_eq!(input.spd, BASE_SPD);
         assert_eq!(input.dig, 3);
+        // Strikes are pre-calculated from GainStrikes effects
+        assert_eq!(input.strikes, 2);
     }
 
     #[test]
-    fn test_battlestart_heal_not_double_counted() {
-        // Regression test: BattleStart Heal bonuses are included in stats.max_hp
-        // via calculate_stats(). They should NOT be added again in build_player_combatant().
+    fn test_battlestart_atk_not_double_counted() {
+        // Regression test: BattleStart ATK/ARM/SPD bonuses should NOT be pre-calculated.
+        // They are applied during combat's BattleStart phase.
         //
-        // If this test fails, it means BattleStart Heal is being double-counted:
-        // - Once in calculate_stats() -> stats.max_hp
-        // - Again in build_player_combatant() -> combat_max_hp
+        // If this test fails, it means ATK/ARM/SPD is being double-counted:
+        // - Once in calculate_stats() -> stats (WRONG - we removed this)
+        // - And again in combat's BattleStart phase
         //
-        // The fix ensures build_player_combatant() uses stats.max_hp directly.
+        // The fix ensures build_player_combatant() uses base values for ATK/ARM/SPD.
 
         use combat_system::{EffectType, TriggerType};
 
-        // Simulate: stats.max_hp = 15 (base 10 + 5 from BattleStart Heal item)
+        // PlayerStats has max_hp, dig, and strikes
         let stats = PlayerStats {
             max_hp: 15,
-            atk: 0,
-            arm: 0,
-            spd: 0,
             dig: 1,
+            strikes: 1,
         };
 
-        // The same Heal effect that calculate_stats() already processed
+        // BattleStart ATK effect from an item (e.g., Rime Pike)
         let effects = vec![ItemEffect {
-            effect_type: EffectType::Heal,
+            effect_type: EffectType::GainAtk,
             trigger: TriggerType::BattleStart,
             value: 5,
             once_per_turn: false,
+            condition: Condition::None,
         }];
 
         let current_hp: i16 = 15;
         let input = build_player_combatant(current_hp, &stats, &effects);
 
-        // CORRECT: combat_max_hp = 15 (from stats, Heal NOT added again)
-        // BUG: combat_max_hp = 20 (15 + 5, Heal double-counted)
+        // CORRECT: combat_atk = 0 (base), effect applied during BattleStart phase
+        // BUG: combat_atk = 5 (pre-calculated, would be doubled in combat)
         assert_eq!(
-            input.max_hp, 15,
-            "BattleStart Heal should NOT be double-counted"
+            input.atk, BASE_ATK,
+            "ATK should be base value, not pre-calculated from BattleStart effects"
         );
-        assert_eq!(input.hp, 15, "Combat HP should not exceed derived max_hp");
+        assert_eq!(input.max_hp, 15, "max_hp should match derived stats");
     }
 
     #[test]
@@ -1641,3 +1850,6 @@ mod hp_logic_tests {
             .any(|e| { matches!(e.effect_type, EffectType::GainArmor) && e.value == 3 }));
     }
 }
+
+#[cfg(test)]
+mod combat_scenarios_tests;

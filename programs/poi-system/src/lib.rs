@@ -28,8 +28,8 @@ pub const SESSION_MANAGER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
 /// Must match the declare_id! in map-generator/src/lib.rs
 /// BYdGuEGf8NqtLnHpSRuZFrPGEgvdxMfGfTt71QVBxYHa
 pub const MAP_GENERATOR_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
-    156, 174, 227, 192, 77, 77, 237, 57, 57, 229, 227, 42, 100, 51, 52, 5,
-    241, 68, 44, 141, 222, 59, 35, 223, 249, 8, 30, 121, 140, 38, 69, 149,
+    156, 174, 227, 192, 77, 77, 237, 57, 57, 229, 227, 42, 100, 51, 52, 5, 241, 68, 44, 141, 222,
+    59, 35, 223, 249, 8, 30, 121, 140, 38, 69, 149,
 ]);
 
 /// Validates POI index, retrieves POI and definition, and validates interaction.
@@ -77,6 +77,72 @@ fn to_boss_week(week: u8) -> Result<boss_system::Week> {
     }
 }
 
+/// CPI call to player-inventory::equip_gear_authorized
+fn equip_gear_authorized_cpi<'info>(
+    inventory: &AccountInfo<'info>,
+    game_state: &AccountInfo<'info>,
+    inventory_authority: &AccountInfo<'info>,
+    poi_authority: &AccountInfo<'info>,
+    player_inventory_program: &AccountInfo<'info>,
+    gameplay_state_program: &AccountInfo<'info>,
+    poi_authority_bump: u8,
+    item_id: [u8; 8],
+    tier: player_inventory::state::Tier,
+) -> Result<()> {
+    let signer_seeds: &[&[&[u8]]] = &[&[POI_AUTHORITY_SEED, &[poi_authority_bump]]];
+
+    player_inventory::cpi::equip_gear_authorized(
+        CpiContext::new_with_signer(
+            player_inventory_program.clone(),
+            player_inventory::cpi::accounts::EquipGearAuthorized {
+                inventory: inventory.clone(),
+                game_state: game_state.clone(),
+                inventory_authority: inventory_authority.clone(),
+                poi_authority: poi_authority.clone(),
+                gameplay_state_program: gameplay_state_program.clone(),
+            },
+            signer_seeds,
+        ),
+        item_id,
+        tier,
+    )?;
+
+    Ok(())
+}
+
+/// CPI call to player-inventory::equip_tool_authorized
+fn equip_tool_authorized_cpi<'info>(
+    inventory: &AccountInfo<'info>,
+    game_state: &AccountInfo<'info>,
+    inventory_authority: &AccountInfo<'info>,
+    poi_authority: &AccountInfo<'info>,
+    player_inventory_program: &AccountInfo<'info>,
+    gameplay_state_program: &AccountInfo<'info>,
+    poi_authority_bump: u8,
+    item_id: [u8; 8],
+    tier: player_inventory::state::Tier,
+) -> Result<()> {
+    let signer_seeds: &[&[&[u8]]] = &[&[POI_AUTHORITY_SEED, &[poi_authority_bump]]];
+
+    player_inventory::cpi::equip_tool_authorized(
+        CpiContext::new_with_signer(
+            player_inventory_program.clone(),
+            player_inventory::cpi::accounts::EquipToolAuthorized {
+                inventory: inventory.clone(),
+                game_state: game_state.clone(),
+                inventory_authority: inventory_authority.clone(),
+                poi_authority: poi_authority.clone(),
+                gameplay_state_program: gameplay_state_program.clone(),
+            },
+            signer_seeds,
+        ),
+        item_id,
+        tier,
+    )?;
+
+    Ok(())
+}
+
 #[program]
 pub mod poi_system {
     use super::*;
@@ -104,7 +170,8 @@ pub mod poi_system {
 
         // Validate minimum size: 8 (discriminator) + 32 (session) + basic fields
         require!(
-            generated_map_data.len() >= 8 + 32 + 1 + 1 + 8 + 1 + 1 + 1 + 1 + 2 + 313 + 1 + (48 * 4) + 1,
+            generated_map_data.len()
+                >= 8 + 32 + 1 + 1 + 8 + 1 + 1 + 1 + 1 + 2 + 313 + 1 + (48 * 4) + 1,
             PoiSystemError::InvalidGeneratedMap
         );
 
@@ -170,8 +237,38 @@ pub mod poi_system {
         // (first 32 bytes after the 8-byte Anchor discriminator).
         let session_data = ctx.accounts.game_session.try_borrow_data()?;
         require!(session_data.len() >= 40, PoiSystemError::Unauthorized);
-        let stored_player = Pubkey::from(
-            <[u8; 32]>::try_from(&session_data[8..40]).unwrap(),
+        let stored_player = Pubkey::from(<[u8; 32]>::try_from(&session_data[8..40]).unwrap());
+        require!(
+            stored_player == ctx.accounts.player.key(),
+            PoiSystemError::Unauthorized
+        );
+        drop(session_data);
+
+        emit!(PoisClosed {
+            session: ctx.accounts.map_pois.session,
+        });
+        Ok(())
+    }
+
+    /// Close MapPois account via burner wallet authorization.
+    /// Used by session-manager CPI during end_session to clean up.
+    /// Rent is returned to the player wallet.
+    pub fn close_map_pois_via_burner(ctx: Context<CloseMapPoisViaBurner>) -> Result<()> {
+        // Verify the burner_wallet by reading GameSession.burner_wallet
+        // Session layout:
+        //   8 (discriminator) + 32 (player) + 8 (session_id) + 1 (campaign_level) +
+        //   8 (started_at) + 8 (last_activity) + 1 (is_delegated) + 1 (bump) +
+        //   10 (active_item_pool) + 32 (burner_wallet) + 32 (state_hash)
+        // Player at offset 8..40, burner_wallet at offset 77..109
+        let session_data = ctx.accounts.game_session.try_borrow_data()?;
+        require!(session_data.len() >= 109, PoiSystemError::InvalidSession);
+
+        let stored_player = Pubkey::from(<[u8; 32]>::try_from(&session_data[8..40]).unwrap());
+        let stored_burner = Pubkey::from(<[u8; 32]>::try_from(&session_data[77..109]).unwrap());
+
+        require!(
+            stored_burner == ctx.accounts.burner_wallet.key(),
+            PoiSystemError::Unauthorized
         );
         require!(
             stored_player == ctx.accounts.player.key(),
@@ -251,19 +348,17 @@ pub mod poi_system {
         }
 
         // CPI to gameplay-state to skip to day (or trigger boss fight if Night3)
-        gameplay_state::cpi::skip_to_day(
-            CpiContext::new_with_signer(
-                ctx.accounts.gameplay_state_program.to_account_info(),
-                gameplay_state::cpi::accounts::SkipToDay {
-                    game_state: ctx.accounts.game_state.to_account_info(),
-                    inventory: ctx.accounts.inventory.to_account_info(),
-                    poi_authority: ctx.accounts.poi_authority.to_account_info(),
-                    player: ctx.accounts.player.to_account_info(),
-                    player_inventory_program: ctx.accounts.player_inventory_program.to_account_info(),
-                },
-                &[&seeds[..]],
-            ),
-        )?;
+        gameplay_state::cpi::skip_to_day(CpiContext::new_with_signer(
+            ctx.accounts.gameplay_state_program.to_account_info(),
+            gameplay_state::cpi::accounts::SkipToDay {
+                game_state: ctx.accounts.game_state.to_account_info(),
+                inventory: ctx.accounts.inventory.to_account_info(),
+                poi_authority: ctx.accounts.poi_authority.to_account_info(),
+                gameplay_authority: ctx.accounts.gameplay_authority.to_account_info(),
+                player_inventory_program: ctx.accounts.player_inventory_program.to_account_info(),
+            },
+            &[&seeds[..]],
+        ))?;
 
         let poi = &map_pois.pois[poi_index as usize];
         emit!(RestCompleted {
@@ -285,10 +380,7 @@ pub mod poi_system {
     /// The user then calls `interact_pick_item` with their chosen index.
     ///
     /// Must be called before `interact_pick_item` for pick-item POIs.
-    pub fn generate_cache_offer(
-        ctx: Context<InteractPickItem>,
-        poi_index: u8,
-    ) -> Result<()> {
+    pub fn generate_cache_offer(ctx: Context<InteractPickItem>, poi_index: u8) -> Result<()> {
         let map_pois = &mut ctx.accounts.map_pois;
         let game_state = &ctx.accounts.game_state;
 
@@ -360,6 +452,10 @@ pub mod poi_system {
     ///
     /// Requires `generate_cache_offer` to have been called first.
     /// Reads the stored offers from `current_offer` and applies the user's choice.
+    ///
+    /// After validating the pick, this instruction calls player-inventory to
+    /// equip the item via CPI (equip_gear_authorized or equip_tool_authorized).
+    /// This ensures items can only be equipped through authorized POI interactions.
     pub fn interact_pick_item(
         ctx: Context<InteractPickItem>,
         poi_index: u8,
@@ -376,8 +472,13 @@ pub mod poi_system {
         let is_night = game_state.phase.is_night();
 
         // Read cached offers instead of regenerating
-        let cached = map_pois.current_offer.ok_or(PoiSystemError::NoActiveInteraction)?;
-        require!(cached.poi_index == poi_index, PoiSystemError::InvalidPoiIndex);
+        let cached = map_pois
+            .current_offer
+            .ok_or(PoiSystemError::NoActiveInteraction)?;
+        require!(
+            cached.poi_index == poi_index,
+            PoiSystemError::InvalidPoiIndex
+        );
 
         // Convert cached OfferItems to ItemOffers for pick interaction
         let offers: Vec<state::ItemOffer> = cached
@@ -393,12 +494,44 @@ pub mod poi_system {
 
         // Execute pick interaction
         let poi = &map_pois.pois[poi_index as usize];
-        let result = interactions::execute_pick_item_interaction(
-            poi,
-            &offers,
-            choice_index,
-            is_night,
-        )?;
+        let result =
+            interactions::execute_pick_item_interaction(poi, &offers, choice_index, is_night)?;
+
+        // Equip the item via CPI to player-inventory
+        // Determine if gear or tool by checking item_id prefix ("G-" = gear, "T-" = tool)
+        let is_tool = result.item.item_id[0] == b'T';
+        let tier = match result.item.tier {
+            0 => player_inventory::state::Tier::I,
+            1 => player_inventory::state::Tier::II,
+            2 => player_inventory::state::Tier::III,
+            _ => player_inventory::state::Tier::I, // Default to Tier I for invalid values
+        };
+
+        if is_tool {
+            equip_tool_authorized_cpi(
+                &ctx.accounts.inventory.to_account_info(),
+                &ctx.accounts.game_state_writable,
+                &ctx.accounts.inventory_authority,
+                &ctx.accounts.poi_authority,
+                &ctx.accounts.player_inventory_program.to_account_info(),
+                &ctx.accounts.gameplay_state_program.to_account_info(),
+                ctx.bumps.poi_authority,
+                result.item.item_id,
+                tier,
+            )?;
+        } else {
+            equip_gear_authorized_cpi(
+                &ctx.accounts.inventory.to_account_info(),
+                &ctx.accounts.game_state_writable,
+                &ctx.accounts.inventory_authority,
+                &ctx.accounts.poi_authority,
+                &ctx.accounts.player_inventory_program.to_account_info(),
+                &ctx.accounts.gameplay_state_program.to_account_info(),
+                ctx.bumps.poi_authority,
+                result.item.item_id,
+                tier,
+            )?;
+        }
 
         // Mark POI as used
         if result.mark_used {
@@ -433,10 +566,7 @@ pub mod poi_system {
     /// The user then calls `interact_tool_oil` with their chosen oil.
     ///
     /// Must be called before `interact_tool_oil` for Tool Oil Rack POIs.
-    pub fn generate_oil_offer(
-        ctx: Context<InteractToolOil>,
-        poi_index: u8,
-    ) -> Result<()> {
+    pub fn generate_oil_offer(ctx: Context<InteractToolOil>, poi_index: u8) -> Result<()> {
         let map_pois = &mut ctx.accounts.map_pois;
         let game_state = &ctx.accounts.game_state;
 
@@ -501,8 +631,13 @@ pub mod poi_system {
         let is_night = game_state.phase.is_night();
 
         // Read cached oil offer and validate selection
-        let oil_offer = map_pois.current_oil_offer.ok_or(PoiSystemError::NoActiveInteraction)?;
-        require!(oil_offer.poi_index == poi_index, PoiSystemError::InvalidPoiIndex);
+        let oil_offer = map_pois
+            .current_oil_offer
+            .ok_or(PoiSystemError::NoActiveInteraction)?;
+        require!(
+            oil_offer.poi_index == poi_index,
+            PoiSystemError::InvalidPoiIndex
+        );
         require!(
             offers::validate_oil_selection(&oil_offer, modification),
             PoiSystemError::InvalidOilSelection
@@ -546,10 +681,7 @@ pub mod poi_system {
     ///
     /// Generates 6 offers (1 Tool + 5 Gear) and starts a shopping session.
     /// Only one shop session can be active at a time.
-    pub fn enter_shop(
-        ctx: Context<EnterShop>,
-        poi_index: u8,
-    ) -> Result<()> {
+    pub fn enter_shop(ctx: Context<EnterShop>, poi_index: u8) -> Result<()> {
         let map_pois = &mut ctx.accounts.map_pois;
         let game_state = &ctx.accounts.game_state;
 
@@ -615,7 +747,8 @@ pub mod poi_system {
     /// Purchase an item from the active shop.
     ///
     /// Validates player has enough gold, marks the offer as purchased,
-    /// and atomically deducts gold via CPI to gameplay-state.
+    /// deducts gold via CPI to gameplay-state, and equips the item via CPI
+    /// to player-inventory.
     pub fn shop_purchase(ctx: Context<ShopPurchase>, offer_index: u8) -> Result<()> {
         let map_pois = &mut ctx.accounts.map_pois;
         let game_state = &ctx.accounts.game_state;
@@ -641,6 +774,42 @@ pub mod poi_system {
             ),
             -(price as i16),
         )?;
+
+        // Equip the item via CPI to player-inventory
+        // Determine if gear or tool by checking item_id prefix ("G-" = gear, "T-" = tool)
+        let is_tool = offer.item_id[0] == b'T';
+        let tier = match offer.tier {
+            0 => player_inventory::state::Tier::I,
+            1 => player_inventory::state::Tier::II,
+            2 => player_inventory::state::Tier::III,
+            _ => player_inventory::state::Tier::I,
+        };
+
+        if is_tool {
+            equip_tool_authorized_cpi(
+                &ctx.accounts.inventory.to_account_info(),
+                &ctx.accounts.game_state.to_account_info(),
+                &ctx.accounts.inventory_authority,
+                &ctx.accounts.poi_authority,
+                &ctx.accounts.player_inventory_program.to_account_info(),
+                &ctx.accounts.gameplay_state_program.to_account_info(),
+                ctx.bumps.poi_authority,
+                offer.item_id,
+                tier,
+            )?;
+        } else {
+            equip_gear_authorized_cpi(
+                &ctx.accounts.inventory.to_account_info(),
+                &ctx.accounts.game_state.to_account_info(),
+                &ctx.accounts.inventory_authority,
+                &ctx.accounts.poi_authority,
+                &ctx.accounts.player_inventory_program.to_account_info(),
+                &ctx.accounts.gameplay_state_program.to_account_info(),
+                ctx.bumps.poi_authority,
+                offer.item_id,
+                tier,
+            )?;
+        }
 
         emit!(ItemPurchased {
             session: map_pois.session,
@@ -1104,6 +1273,35 @@ pub struct CloseMapPois<'info> {
     pub player: Signer<'info>,
 }
 
+/// Context for closing MapPois via burner wallet (for session-manager CPI)
+#[derive(Accounts)]
+pub struct CloseMapPoisViaBurner<'info> {
+    #[account(
+        mut,
+        close = player,
+        seeds = [MAP_POIS_SEED, map_pois.session.as_ref()],
+        bump = map_pois.bump
+    )]
+    pub map_pois: Account<'info, MapPois>,
+
+    /// The session that owns this MapPois.
+    /// CHECK: Validated by constraint (address match) and owner check (session-manager program).
+    /// Burner wallet and player fields are extracted in instruction body.
+    #[account(
+        constraint = game_session.key() == map_pois.session @ PoiSystemError::Unauthorized,
+        owner = SESSION_MANAGER_PROGRAM_ID @ PoiSystemError::InvalidSessionOwner,
+    )]
+    pub game_session: AccountInfo<'info>,
+
+    /// Player wallet receives the rent refund (not a signer).
+    /// CHECK: Validated against session.player in instruction body.
+    #[account(mut)]
+    pub player: AccountInfo<'info>,
+
+    /// Burner wallet must sign to authorize closure.
+    pub burner_wallet: Signer<'info>,
+}
+
 /// Context for querying POI definition (view instruction)
 #[derive(Accounts)]
 pub struct GetPoiDefinition {}
@@ -1144,6 +1342,15 @@ pub struct InteractRest<'info> {
     )]
     pub poi_authority: AccountInfo<'info>,
 
+    /// Gameplay authority PDA from gameplay-state for gear slot expansion CPI
+    /// CHECK: PDA derived from gameplay-state program
+    #[account(
+        seeds = [b"gameplay_authority"],
+        bump,
+        seeds::program = gameplay_state::ID,
+    )]
+    pub gameplay_authority: AccountInfo<'info>,
+
     /// Gameplay state program for CPI (heal_player and skip_to_day)
     pub gameplay_state_program: Program<'info, gameplay_state::program::GameplayState>,
 
@@ -1155,6 +1362,7 @@ pub struct InteractRest<'info> {
 }
 
 /// Context for interacting with a pick-item POI (L2, L3, L12, L13)
+/// Now includes accounts for CPI to player-inventory to equip the picked item.
 #[derive(Accounts)]
 pub struct InteractPickItem<'info> {
     #[account(
@@ -1164,13 +1372,50 @@ pub struct InteractPickItem<'info> {
     )]
     pub map_pois: Account<'info, MapPois>,
 
-    /// Player's GameState for position/time validation
+    /// Player's GameState for position/time validation (read-only)
     #[account(
         seeds = [b"game_state", map_pois.session.as_ref()],
         bump = game_state.bump,
         seeds::program = gameplay_state::ID,
     )]
     pub game_state: Account<'info, GameState>,
+
+    /// Player's GameState for HP modification via CPI (writable)
+    /// CHECK: Same account as game_state but mutable for CPI
+    #[account(mut)]
+    pub game_state_writable: AccountInfo<'info>,
+
+    /// Player's inventory for equipping items
+    #[account(
+        mut,
+        seeds = [b"inventory", map_pois.session.as_ref()],
+        bump = inventory.bump,
+        seeds::program = player_inventory::ID,
+    )]
+    pub inventory: Account<'info, player_inventory::state::PlayerInventory>,
+
+    /// Inventory authority PDA from player-inventory for HP modification CPI
+    /// CHECK: PDA derived from player-inventory program
+    #[account(
+        seeds = [b"inventory_authority"],
+        bump,
+        seeds::program = player_inventory::ID,
+    )]
+    pub inventory_authority: AccountInfo<'info>,
+
+    /// POI authority PDA for signing CPI calls to player-inventory
+    /// CHECK: PDA derived from this program, used as signer in CPI
+    #[account(
+        seeds = [POI_AUTHORITY_SEED],
+        bump,
+    )]
+    pub poi_authority: AccountInfo<'info>,
+
+    /// Player inventory program for CPI (equip_gear_authorized, equip_tool_authorized)
+    pub player_inventory_program: Program<'info, player_inventory::program::PlayerInventory>,
+
+    /// Gameplay state program for HP modification CPI chain
+    pub gameplay_state_program: Program<'info, gameplay_state::program::GameplayState>,
 
     /// Game session for active_item_pool filtering
     #[account(
@@ -1233,6 +1478,7 @@ pub struct EnterShop<'info> {
 }
 
 /// Context for purchasing from the shop
+/// Includes accounts for both gold deduction and item equipping via CPI.
 #[derive(Accounts)]
 pub struct ShopPurchase<'info> {
     #[account(
@@ -1251,6 +1497,24 @@ pub struct ShopPurchase<'info> {
     )]
     pub game_state: Account<'info, GameState>,
 
+    /// Player's inventory for equipping purchased items
+    #[account(
+        mut,
+        seeds = [b"inventory", map_pois.session.as_ref()],
+        bump = inventory.bump,
+        seeds::program = player_inventory::ID,
+    )]
+    pub inventory: Account<'info, player_inventory::state::PlayerInventory>,
+
+    /// Inventory authority PDA from player-inventory for HP modification CPI
+    /// CHECK: PDA derived from player-inventory program
+    #[account(
+        seeds = [b"inventory_authority"],
+        bump,
+        seeds::program = player_inventory::ID,
+    )]
+    pub inventory_authority: AccountInfo<'info>,
+
     /// POI authority PDA for signing CPI calls
     /// CHECK: PDA derived from this program, used as signer in CPI
     #[account(
@@ -1258,6 +1522,9 @@ pub struct ShopPurchase<'info> {
         bump,
     )]
     pub poi_authority: AccountInfo<'info>,
+
+    /// Player inventory program for CPI (equip_gear_authorized, equip_tool_authorized)
+    pub player_inventory_program: Program<'info, player_inventory::program::PlayerInventory>,
 
     /// Gameplay state program for CPI
     pub gameplay_state_program: Program<'info, gameplay_state::program::GameplayState>,
@@ -1675,7 +1942,7 @@ mod discriminator_tests {
     /// Computes the hash at test time so a rename is caught immediately.
     #[test]
     fn test_initialize_map_pois_discriminator() {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let hash = Sha256::digest(b"global:initialize_map_pois");
         let expected: [u8; 8] = hash[..8].try_into().unwrap();
         assert_eq!(

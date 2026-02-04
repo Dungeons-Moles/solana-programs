@@ -257,16 +257,16 @@ mod tests {
         //                  32-35 (Frost), 40-43 (Rust), 48-51 (Blood), 56-59 (Tempo)
         // Tools (8 items): 64,66,68,70,72,74,76,78 (all -01 tools)
         let expected_set: [u8; 40] = [
-            0, 1, 2, 3,       // Stone gear 01-04
-            8, 9, 10, 11,     // Scout gear 01-04
-            16, 17, 18, 20,   // Greed gear 01-03, 05 (skips 04)
-            24, 25, 26, 27,   // Blast gear 01-04
-            32, 33, 34, 35,   // Frost gear 01-04
-            40, 41, 42, 43,   // Rust gear 01-04
-            48, 49, 50, 51,   // Blood gear 01-04
-            56, 57, 58, 59,   // Tempo gear 01-04
-            64, 66, 68, 70,   // Tools -01: ST, SC, GR, BL
-            72, 74, 76, 78,   // Tools -01: FR, RU, BO, TE
+            0, 1, 2, 3, // Stone gear 01-04
+            8, 9, 10, 11, // Scout gear 01-04
+            16, 17, 18, 20, // Greed gear 01-03, 05 (skips 04)
+            24, 25, 26, 27, // Blast gear 01-04
+            32, 33, 34, 35, // Frost gear 01-04
+            40, 41, 42, 43, // Rust gear 01-04
+            48, 49, 50, 51, // Blood gear 01-04
+            56, 57, 58, 59, // Tempo gear 01-04
+            64, 66, 68, 70, // Tools -01: ST, SC, GR, BL
+            72, 74, 76, 78, // Tools -01: FR, RU, BO, TE
         ];
 
         for &i in &expected_set {
@@ -300,11 +300,7 @@ mod tests {
         assert!(result.is_some());
 
         let index = result.unwrap();
-        assert!(
-            index < 80,
-            "Index {} should be in range 0-79",
-            index
-        );
+        assert!(index < 80, "Index {} should be in range 0-79", index);
         assert!(
             !is_bit_set(unlocked, index),
             "Selected item at index {} should be locked",

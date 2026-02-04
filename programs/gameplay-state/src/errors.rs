@@ -59,4 +59,7 @@ pub enum GameplayStateError {
 
     #[msg("Skip to day can only be used during night phases")]
     NotNightPhase,
+
+    #[msg("Invalid HP bonus value")]
+    InvalidHpBonus,
 }

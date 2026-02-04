@@ -529,7 +529,7 @@ pub fn generate_supply_cache_offers(
                 used_ids[i] = item_id;
                 offers.push(ItemOffer {
                     item_id,
-                    tier: 1,  // Tier::I
+                    tier: 0,  // Tier::I (enum discriminant)
                     price: 0, // Free POI
                     purchased: false,
                 });
@@ -572,7 +572,7 @@ pub fn generate_tool_crate_offers(
                 used_ids[i] = item_id;
                 offers.push(ItemOffer {
                     item_id,
-                    tier: 1,
+                    tier: 0, // Tier::I
                     price: 0,
                     purchased: false,
                 });
@@ -615,7 +615,7 @@ pub fn generate_geode_vault_offers(
                 used_ids[i] = item_id;
                 offers.push(ItemOffer {
                     item_id,
-                    tier: 1,
+                    tier: 0, // Tier::I
                     price: 0,
                     purchased: false,
                 });
@@ -660,7 +660,7 @@ pub fn generate_counter_cache_offers(
                 used_ids[i] = item_id;
                 offers.push(ItemOffer {
                     item_id,
-                    tier: 1,
+                    tier: 0, // Tier::I
                     price: 0,
                     purchased: false,
                 });
@@ -699,7 +699,7 @@ pub fn generate_smuggler_hatch_offers(
 
         offers.push(ItemOffer {
             item_id,
-            tier: 1,
+            tier: 0, // Tier::I
             price,
             purchased: false,
         });
@@ -721,7 +721,7 @@ pub fn generate_smuggler_hatch_offers(
                 used_ids[i] = item_id;
                 offers.push(ItemOffer {
                     item_id,
-                    tier: 1,
+                    tier: 0, // Tier::I
                     price,
                     purchased: false,
                 });
@@ -1569,7 +1569,10 @@ mod tests {
         // Find the excluded oil
         let offer = create_oil_offer(0, 12345);
         let all_oils = [OIL_FLAG_ATK, OIL_FLAG_SPD, OIL_FLAG_DIG, OIL_FLAG_ARM];
-        let excluded_oil = all_oils.iter().find(|&&o| !offer.oils.contains(&o)).unwrap();
+        let excluded_oil = all_oils
+            .iter()
+            .find(|&&o| !offer.oils.contains(&o))
+            .unwrap();
 
         assert!(
             !validate_oil_selection(&offer, *excluded_oil),

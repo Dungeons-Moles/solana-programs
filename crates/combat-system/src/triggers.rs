@@ -1,6 +1,6 @@
 use crate::state::{
-    CombatLogEntry, EffectType, ItemEffect, StatusEffects, TriggerType, STATUS_BLEED, STATUS_CHILL,
-    STATUS_REFLECTION, STATUS_RUST, STATUS_SHRAPNEL,
+    CombatLogEntry, Condition, EffectType, ItemEffect, StatusEffects, StatusType, TriggerType,
+    STATUS_BLEED, STATUS_CHILL, STATUS_REFLECTION, STATUS_RUST, STATUS_SHRAPNEL,
 };
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -10,6 +10,7 @@ pub struct CombatantStats {
     pub atk: i16,
     pub arm: i16,
     pub spd: i16,
+    pub dig: i16,
 }
 
 /// Check if a trigger should fire.
@@ -35,6 +36,52 @@ pub fn should_trigger(
         TriggerType::Exposed | TriggerType::Wounded => true,
         // Countdown fires every N turns (turn 2, 4, 6... for turns=2)
         TriggerType::Countdown { turns } => turns > 0 && turn > 0 && turn % turns == 0,
+        // Victory is processed outside combat system (in gameplay-state after combat ends)
+        TriggerType::Victory => false,
+        // OnStruck is handled specially in the combat engine when damage is dealt
+        TriggerType::OnStruck => true,
+        // TurnN fires only on the specified turn
+        TriggerType::TurnN { turn: target_turn } => turn == target_turn,
+        // EveryOtherTurnFirstHit fires on even turns, but once_per_turn flag handles the "first hit" part
+        TriggerType::EveryOtherTurnFirstHit => turn % 2 == 0,
+        // TurnEnd fires at the end of each turn
+        TriggerType::TurnEnd => true,
+        // OnEnemyBleedDamage is handled specially when bleed damage is processed
+        TriggerType::OnEnemyBleedDamage => true,
+        // OnApplyRust is handled specially when rust is applied
+        TriggerType::OnApplyRust => true,
+        // OnGainShrapnel is handled specially when shrapnel is gained
+        TriggerType::OnGainShrapnel => true,
+        // DayStart is processed outside combat system
+        TriggerType::DayStart => false,
+        // FirstTimeWounded is handled specially with state tracking
+        TriggerType::FirstTimeWounded => true,
+    }
+}
+
+/// Check if a condition is satisfied
+pub fn check_condition(
+    condition: Condition,
+    owner_stats: &CombatantStats,
+    opponent_stats: &CombatantStats,
+    opponent_status: &StatusEffects,
+) -> bool {
+    match condition {
+        Condition::None => true,
+        Condition::EnemyHasStatus(status_type) => match status_type {
+            StatusType::Chill => opponent_status.chill > 0,
+            StatusType::Shrapnel => opponent_status.shrapnel > 0,
+            StatusType::Rust => opponent_status.rust > 0,
+            StatusType::Bleed => opponent_status.bleed > 0,
+            StatusType::Reflection => opponent_status.reflection > 0,
+        },
+        Condition::EnemyHasArmor => opponent_stats.arm > 0,
+        Condition::DigGreaterThanEnemyDig => owner_stats.dig > opponent_stats.dig,
+        Condition::SpdGreaterThanEnemySpd => owner_stats.spd > opponent_stats.spd,
+        Condition::OwnerWounded => check_wounded(owner_stats.hp, owner_stats.max_hp),
+        Condition::OwnerExposed => check_exposed(owner_stats.arm),
+        Condition::EnemyWounded => check_wounded(opponent_stats.hp, opponent_stats.max_hp),
+        Condition::OwnerHasArmor => owner_stats.arm > 0,
     }
 }
 
@@ -60,7 +107,12 @@ fn apply_status_effect(
     let add = u8::try_from(value).unwrap_or(u8::MAX);
     *status_field = status_field.saturating_add(add);
     if value > 0 {
-        log.push(CombatLogEntry::apply_status(turn, is_target_player, status_id, value));
+        log.push(CombatLogEntry::apply_status(
+            turn,
+            is_target_player,
+            status_id,
+            value,
+        ));
     }
 }
 
@@ -126,16 +178,44 @@ pub fn apply_effect(
             }
         }
         EffectType::ApplyChill => {
-            apply_status_effect(&mut status.chill, value, turn, is_target_player, STATUS_CHILL, log);
+            apply_status_effect(
+                &mut status.chill,
+                value,
+                turn,
+                is_target_player,
+                STATUS_CHILL,
+                log,
+            );
         }
         EffectType::ApplyShrapnel => {
-            apply_status_effect(&mut status.shrapnel, value, turn, is_target_player, STATUS_SHRAPNEL, log);
+            apply_status_effect(
+                &mut status.shrapnel,
+                value,
+                turn,
+                is_target_player,
+                STATUS_SHRAPNEL,
+                log,
+            );
         }
         EffectType::ApplyRust => {
-            apply_status_effect(&mut status.rust, value, turn, is_target_player, STATUS_RUST, log);
+            apply_status_effect(
+                &mut status.rust,
+                value,
+                turn,
+                is_target_player,
+                STATUS_RUST,
+                log,
+            );
         }
         EffectType::ApplyBleed => {
-            apply_status_effect(&mut status.bleed, value, turn, is_target_player, STATUS_BLEED, log);
+            apply_status_effect(
+                &mut status.bleed,
+                value,
+                turn,
+                is_target_player,
+                STATUS_BLEED,
+                log,
+            );
         }
         EffectType::RemoveArmor => {
             let old_arm = stats.arm;
@@ -160,14 +240,57 @@ pub fn apply_effect(
             }
         }
         EffectType::ApplyReflection => {
-            apply_status_effect(&mut status.reflection, value, turn, is_target_player, STATUS_REFLECTION, log);
+            apply_status_effect(
+                &mut status.reflection,
+                value,
+                turn,
+                is_target_player,
+                STATUS_REFLECTION,
+                log,
+            );
         }
-        // These effects are processed outside the combat system
+        EffectType::ReduceEnemySpd => {
+            let old_spd = stats.spd;
+            stats.spd = stats.spd.saturating_sub(value);
+            let actual_reduction = old_spd - stats.spd;
+            if actual_reduction > 0 {
+                log.push(CombatLogEntry::spd_change(
+                    turn,
+                    is_target_player,
+                    -actual_reduction,
+                ));
+            }
+        }
+        EffectType::DealSelfNonWeaponDamage => {
+            // Deal non-weapon damage to self (for bomb self-damage)
+            stats.hp = stats.hp.checked_sub(value).unwrap_or(i16::MIN);
+            if value > 0 {
+                log.push(CombatLogEntry::non_weapon_damage(
+                    turn,
+                    is_target_player,
+                    value,
+                ));
+            }
+        }
+        // These effects are processed outside the combat system or need special handling
         EffectType::GainStrikes
         | EffectType::GoldToArmor
         | EffectType::GainDig
         | EffectType::GainGold
-        | EffectType::ApplyBomb => {}
+        | EffectType::ApplyBomb
+        | EffectType::MaxHp
+        | EffectType::GoldToArmorScaled
+        | EffectType::ConsumeGoldForArmor
+        | EffectType::PreventDeath
+        | EffectType::SetArmorPiercing
+        | EffectType::ArmorToMaxHp
+        | EffectType::ReduceAllCountdowns
+        | EffectType::AmplifyNonWeaponDamage
+        | EffectType::StoreDamage
+        | EffectType::BlastImmunity
+        | EffectType::DoubleBombTrigger
+        | EffectType::DoubleOnHitEffects
+        | EffectType::TriggerAllShards => {}
     }
 }
 
@@ -204,6 +327,16 @@ pub fn process_triggers_for_phase(
         };
 
         if !should_fire {
+            continue;
+        }
+
+        // Check condition if one is specified
+        if !check_condition(
+            effect.condition,
+            owner_stats,
+            opponent_stats,
+            opponent_status,
+        ) {
             continue;
         }
 
@@ -285,19 +418,20 @@ fn targets_opponent(effect_type: EffectType) -> bool {
         EffectType::DealDamage
             | EffectType::DealNonWeaponDamage
             | EffectType::ApplyChill
-            | EffectType::ApplyShrapnel
             | EffectType::ApplyRust
             | EffectType::ApplyBleed
             | EffectType::RemoveArmor
             | EffectType::ApplyBomb
             | EffectType::StealGold
             | EffectType::ApplyReflection
+            | EffectType::ReduceEnemySpd
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::Condition;
 
     #[test]
     fn test_battle_start_trigger() {
@@ -316,17 +450,47 @@ mod tests {
     #[test]
     fn test_first_turn_if_faster_trigger() {
         // Only fires on turn 1 AND if this combatant acts first
-        assert!(should_trigger(TriggerType::FirstTurnIfFaster, 1, true, true));
-        assert!(!should_trigger(TriggerType::FirstTurnIfFaster, 1, true, false));
-        assert!(!should_trigger(TriggerType::FirstTurnIfFaster, 2, false, true));
+        assert!(should_trigger(
+            TriggerType::FirstTurnIfFaster,
+            1,
+            true,
+            true
+        ));
+        assert!(!should_trigger(
+            TriggerType::FirstTurnIfFaster,
+            1,
+            true,
+            false
+        ));
+        assert!(!should_trigger(
+            TriggerType::FirstTurnIfFaster,
+            2,
+            false,
+            true
+        ));
     }
 
     #[test]
     fn test_first_turn_if_slower_trigger() {
         // Only fires on turn 1 AND if this combatant acts second
-        assert!(should_trigger(TriggerType::FirstTurnIfSlower, 1, true, false));
-        assert!(!should_trigger(TriggerType::FirstTurnIfSlower, 1, true, true));
-        assert!(!should_trigger(TriggerType::FirstTurnIfSlower, 2, false, false));
+        assert!(should_trigger(
+            TriggerType::FirstTurnIfSlower,
+            1,
+            true,
+            false
+        ));
+        assert!(!should_trigger(
+            TriggerType::FirstTurnIfSlower,
+            1,
+            true,
+            true
+        ));
+        assert!(!should_trigger(
+            TriggerType::FirstTurnIfSlower,
+            2,
+            false,
+            false
+        ));
     }
 
     #[test]
@@ -339,6 +503,7 @@ mod tests {
             atk: 2,
             arm: 0,
             spd: 1, // Enemy is slower
+            dig: 0,
         };
         let mut owner_status = StatusEffects::default();
         let mut opponent_stats = CombatantStats {
@@ -347,6 +512,7 @@ mod tests {
             atk: 2,
             arm: 0,
             spd: 3, // Player is faster
+            dig: 0,
         };
         let mut opponent_status = StatusEffects::default();
 
@@ -355,6 +521,7 @@ mod tests {
             once_per_turn: false,
             effect_type: EffectType::ApplyChill,
             value: 2,
+            condition: Condition::None,
         }];
         let mut flags = vec![false; effects.len()];
         let mut gold_change = 0i16;
@@ -393,6 +560,7 @@ mod tests {
             atk: 2,
             arm: 0,
             spd: 3, // Enemy is faster
+            dig: 0,
         };
         let mut owner_status = StatusEffects::default();
         let mut opponent_stats = CombatantStats {
@@ -401,6 +569,7 @@ mod tests {
             atk: 2,
             arm: 0,
             spd: 1, // Player is slower
+            dig: 0,
         };
         let mut opponent_status = StatusEffects::default();
 
@@ -409,6 +578,7 @@ mod tests {
             once_per_turn: false,
             effect_type: EffectType::ApplyChill,
             value: 2,
+            condition: Condition::None,
         }];
         let mut flags = vec![false; effects.len()];
         let mut gold_change = 0i16;
@@ -446,9 +616,19 @@ mod tests {
 
     #[test]
     fn test_every_other_turn_trigger() {
-        assert!(!should_trigger(TriggerType::EveryOtherTurn, 1, false, false));
+        assert!(!should_trigger(
+            TriggerType::EveryOtherTurn,
+            1,
+            false,
+            false
+        ));
         assert!(should_trigger(TriggerType::EveryOtherTurn, 2, false, false));
-        assert!(!should_trigger(TriggerType::EveryOtherTurn, 3, false, false));
+        assert!(!should_trigger(
+            TriggerType::EveryOtherTurn,
+            3,
+            false,
+            false
+        ));
         assert!(should_trigger(TriggerType::EveryOtherTurn, 4, false, false));
     }
 
@@ -474,6 +654,7 @@ mod tests {
             atk: 1,
             arm: 0,
             spd: 1,
+            dig: 0,
         };
         let mut status = StatusEffects::default();
         let mut opponent_stats = CombatantStats {
@@ -482,6 +663,7 @@ mod tests {
             atk: 1,
             arm: 0,
             spd: 1,
+            dig: 0,
         };
         let mut opponent_status = StatusEffects::default();
 
@@ -491,12 +673,14 @@ mod tests {
                 once_per_turn: false,
                 effect_type: EffectType::GainAtk,
                 value: 2,
+                condition: Condition::None,
             },
             ItemEffect {
                 trigger: TriggerType::TurnStart,
                 once_per_turn: false,
                 effect_type: EffectType::GainAtk,
                 value: 1,
+                condition: Condition::None,
             },
         ];
         let mut flags = vec![false; effects.len()];
@@ -535,6 +719,7 @@ mod tests {
                 atk: 3,
                 arm: 0,
                 spd: 1,
+                dig: 0,
             },
             StatusEffects::default(),
         )
@@ -552,6 +737,7 @@ mod tests {
             once_per_turn: false,
             effect_type: EffectType::ApplyChill,
             value: 2,
+            condition: Condition::None,
         }];
         let mut flags = vec![false; effects.len()];
         let mut gold_change = 0i16;
@@ -594,6 +780,7 @@ mod tests {
             once_per_turn: false,
             effect_type: EffectType::ApplyBleed,
             value: 3,
+            condition: Condition::None,
         }];
         let mut flags = vec![false; effects.len()];
         let mut gold_change = 0i16;
@@ -636,6 +823,7 @@ mod tests {
             once_per_turn: false,
             effect_type: EffectType::ApplyReflection,
             value: 2,
+            condition: Condition::None,
         }];
         let mut flags = vec![false; effects.len()];
         let mut gold_change = 0i16;
@@ -680,6 +868,7 @@ mod tests {
             once_per_turn: false,
             effect_type: EffectType::ApplyRust,
             value: 1,
+            condition: Condition::None,
         }];
         let mut flags = vec![false; effects.len()];
         let mut gold_change = 0i16;
@@ -721,6 +910,7 @@ mod tests {
             once_per_turn: false,
             effect_type: EffectType::DealDamage,
             value: 5,
+            condition: Condition::None,
         }];
         let mut flags = vec![false; effects.len()];
         let mut gold_change = 0i16;
@@ -758,19 +948,22 @@ mod tests {
         let mut opponent_status = StatusEffects::default();
         opponent_status.reflection = 2; // 2 Reflection stacks
 
-        // Two different status effects
+        // Two different status effects that target opponent (Chill and Rust)
+        // Note: ApplyShrapnel targets SELF (for Shard Beetle, Spiked Bracers), not opponent
         let mut effects = vec![
             ItemEffect {
                 trigger: TriggerType::OnHit,
                 once_per_turn: false,
                 effect_type: EffectType::ApplyChill,
                 value: 1,
+                condition: Condition::None,
             },
             ItemEffect {
                 trigger: TriggerType::OnHit,
                 once_per_turn: false,
-                effect_type: EffectType::ApplyShrapnel,
+                effect_type: EffectType::ApplyRust,
                 value: 2,
+                condition: Condition::None,
             },
         ];
         let mut flags = vec![false; effects.len()];
@@ -794,15 +987,9 @@ mod tests {
 
         // Both status effects should be reflected
         assert_eq!(owner_status.chill, 1, "Chill should be reflected to owner");
-        assert_eq!(
-            owner_status.shrapnel, 2,
-            "Shrapnel should be reflected to owner"
-        );
+        assert_eq!(owner_status.rust, 2, "Rust should be reflected to owner");
         assert_eq!(opponent_status.chill, 0, "Opponent should not have Chill");
-        assert_eq!(
-            opponent_status.shrapnel, 0,
-            "Opponent should not have Shrapnel"
-        );
+        assert_eq!(opponent_status.rust, 0, "Opponent should not have Rust");
         assert_eq!(
             opponent_status.reflection, 0,
             "Both Reflection stacks should be consumed"
@@ -824,18 +1011,21 @@ mod tests {
                 once_per_turn: false,
                 effect_type: EffectType::ApplyChill,
                 value: 1,
+                condition: Condition::None,
             },
             ItemEffect {
                 trigger: TriggerType::OnHit,
                 once_per_turn: false,
                 effect_type: EffectType::ApplyBleed,
                 value: 2,
+                condition: Condition::None,
             },
             ItemEffect {
                 trigger: TriggerType::OnHit,
                 once_per_turn: false,
                 effect_type: EffectType::ApplyRust,
                 value: 3,
+                condition: Condition::None,
             },
         ];
         let mut flags = vec![false; effects.len()];
@@ -874,6 +1064,9 @@ mod tests {
             opponent_status.rust, 3,
             "Rust should hit opponent (no Reflection left)"
         );
-        assert_eq!(opponent_status.reflection, 0, "Reflection should be exhausted");
+        assert_eq!(
+            opponent_status.reflection, 0,
+            "Reflection should be exhausted"
+        );
     }
 }

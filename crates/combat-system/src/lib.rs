@@ -53,6 +53,7 @@ pub fn resolve_combat(
         player_atk: player_stats.atk,
         player_arm: player_stats.arm,
         player_spd: player_stats.spd,
+        player_dig: player_stats.dig,
         player_strikes: player_stats.strikes.max(MIN_STRIKES),
         player_status: StatusEffects::default(),
         enemy_hp: enemy_stats.hp,
@@ -60,6 +61,7 @@ pub fn resolve_combat(
         enemy_atk: enemy_stats.atk,
         enemy_arm: enemy_stats.arm,
         enemy_spd: enemy_stats.spd,
+        enemy_dig: enemy_stats.dig,
         enemy_strikes: enemy_stats.strikes.max(MIN_STRIKES),
         enemy_status: StatusEffects::default(),
         sudden_death_bonus: 0,
@@ -290,6 +292,9 @@ fn execute_turn(
 
     combat_state.player_hp = player_stats.hp;
     combat_state.enemy_hp = enemy_stats.hp;
+    // ARM changes during combat must be synced (from weapon damage and effects like RemoveArmor)
+    combat_state.player_arm = player_stats.arm;
+    combat_state.enemy_arm = enemy_stats.arm;
     combat_state.player_status = player_status;
     combat_state.enemy_status = enemy_status;
 
@@ -445,7 +450,6 @@ fn apply_status_effects(
 }
 
 #[allow(clippy::too_many_arguments)]
-
 fn process_phase_effects(
     effects: &mut [ItemEffect],
     combat_state: &mut CombatState,

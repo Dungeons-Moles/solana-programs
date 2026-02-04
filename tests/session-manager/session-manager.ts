@@ -212,7 +212,14 @@ describe("session-manager", () => {
         playerInventoryProgram: playerInventoryProgram.programId,
         systemProgram: SystemProgram.programId,
       } as any)
-      .preInstructions([anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({ units: 1400000 }), anchor.web3.ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 })])
+      .preInstructions([
+        anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+          units: 1400000,
+        }),
+        anchor.web3.ComputeBudgetProgram.requestHeapFrame({
+          bytes: 256 * 1024,
+        }),
+      ])
       .signers([user, burnerWallet])
       .rpc();
 
@@ -279,7 +286,7 @@ describe("session-manager", () => {
       // Clean up: end the session (also closes inventory via CPI)
       const [inventoryPDA] = getInventoryPDA(sessionPDA);
       await program.methods
-        .endSession(campaignLevel, true)
+        .abandonSession(campaignLevel)
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
@@ -340,7 +347,7 @@ describe("session-manager", () => {
         .rpc();
 
       await program.methods
-        .endSession(campaignLevel, true)
+        .abandonSession(campaignLevel)
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
@@ -387,7 +394,7 @@ describe("session-manager", () => {
       // Clean up
       const [inventoryPDA] = getInventoryPDA(sessionPDA);
       await program.methods
-        .endSession(campaignLevel, true)
+        .abandonSession(campaignLevel)
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
@@ -433,7 +440,7 @@ describe("session-manager", () => {
       // Clean up
       const [inventoryPDA] = getInventoryPDA(sessionPDA);
       await program.methods
-        .endSession(campaignLevel, true)
+        .abandonSession(campaignLevel)
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
@@ -475,7 +482,7 @@ describe("session-manager", () => {
 
       // End session (also closes inventory via CPI, returning rent)
       await program.methods
-        .endSession(campaignLevel, true)
+        .abandonSession(campaignLevel)
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,

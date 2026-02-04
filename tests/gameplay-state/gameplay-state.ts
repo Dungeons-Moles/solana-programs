@@ -183,7 +183,14 @@ describe("gameplay-state", () => {
         owner: user.publicKey,
         systemProgram: SystemProgram.programId,
       } as any)
-      .preInstructions([anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({ units: 1400000 }), anchor.web3.ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 })])
+      .preInstructions([
+        anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+          units: 1400000,
+        }),
+        anchor.web3.ComputeBudgetProgram.requestHeapFrame({
+          bytes: 256 * 1024,
+        }),
+      ])
       .signers([user])
       .rpc();
 
@@ -208,7 +215,14 @@ describe("gameplay-state", () => {
         playerProfileProgram: playerProfileProgram.programId,
         systemProgram: SystemProgram.programId,
       } as any)
-      .preInstructions([anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({ units: 1400000 }), anchor.web3.ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 })])
+      .preInstructions([
+        anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+          units: 1400000,
+        }),
+        anchor.web3.ComputeBudgetProgram.requestHeapFrame({
+          bytes: 256 * 1024,
+        }),
+      ])
       .signers([user, burnerWallet])
       .rpc();
 
@@ -222,7 +236,11 @@ describe("gameplay-state", () => {
           generatedMap: generatedMapPDA,
           systemProgram: SystemProgram.programId,
         } as any)
-        .preInstructions([anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({ units: 1400000 })])
+        .preInstructions([
+          anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+            units: 1400000,
+          }),
+        ])
         .signers([user])
         .rpc();
     } catch (error: any) {
@@ -271,7 +289,7 @@ describe("gameplay-state", () => {
     }
     try {
       await sessionProgram.methods
-        .endSession(campaignLevel, true)
+        .abandonSession(campaignLevel)
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,
@@ -430,9 +448,7 @@ describe("gameplay-state", () => {
         const gameState =
           await gameplayProgram.account.gameState.fetch(gameStatePDA);
 
-        expect(gameState.player.toString()).to.equal(
-          user.publicKey.toString(),
-        );
+        expect(gameState.player.toString()).to.equal(user.publicKey.toString());
         expect(gameState.burnerWallet.toString()).to.equal(
           burnerWallet.publicKey.toString(),
         );
@@ -926,7 +942,11 @@ describe("gameplay-state", () => {
             mapGeneratorProgram: mapGeneratorProgram.programId,
             systemProgram: SystemProgram.programId,
           } as any)
-          .preInstructions([anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({ units: 1400000 })])
+          .preInstructions([
+            anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+              units: 1400000,
+            }),
+          ])
           .signers([user])
           .rpc();
 
@@ -1040,7 +1060,7 @@ describe("gameplay-state", () => {
 
         const [inventoryPDA] = getInventoryPDA(sessionPDA);
         await sessionProgram.methods
-          .endSession(campaignLevel, true)
+          .abandonSession(campaignLevel)
           .accounts({
             gameSession: sessionPDA,
             player: user.publicKey,

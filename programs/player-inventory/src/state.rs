@@ -82,7 +82,7 @@ impl Tier {
 }
 
 /// Combat-system trigger/effect types shared across gameplay.
-pub use combat_system::state::{EffectType, ItemEffect, TriggerType};
+pub use combat_system::state::{Condition, EffectType, ItemEffect, StatusType, TriggerType};
 
 /// Effect definition with tier-scaled values (compile-time constant)
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -95,10 +95,12 @@ pub struct EffectDefinition {
     pub once_per_turn: bool,
     /// Values for Tier I, II, III
     pub values: [i16; 3],
+    /// Optional condition that must be met for effect to fire
+    pub condition: Condition,
 }
 
 impl EffectDefinition {
-    /// Create a new EffectDefinition
+    /// Create a new EffectDefinition without condition
     pub const fn new(
         trigger: TriggerType,
         effect_type: EffectType,
@@ -110,6 +112,24 @@ impl EffectDefinition {
             effect_type,
             once_per_turn,
             values,
+            condition: Condition::None,
+        }
+    }
+
+    /// Create a new EffectDefinition with a condition
+    pub const fn with_condition(
+        trigger: TriggerType,
+        effect_type: EffectType,
+        once_per_turn: bool,
+        values: [i16; 3],
+        condition: Condition,
+    ) -> Self {
+        Self {
+            trigger,
+            effect_type,
+            once_per_turn,
+            values,
+            condition,
         }
     }
 
@@ -125,6 +145,7 @@ impl EffectDefinition {
             once_per_turn: self.once_per_turn,
             effect_type: self.effect_type,
             value: self.value_for_tier(tier),
+            condition: self.condition,
         }
     }
 }
@@ -136,6 +157,7 @@ pub fn stat_bonus(effect_type: EffectType, value: i16) -> ItemEffect {
         once_per_turn: false,
         effect_type,
         value,
+        condition: Condition::None,
     }
 }
 

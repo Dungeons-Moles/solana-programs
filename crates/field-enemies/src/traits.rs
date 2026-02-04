@@ -1,4 +1,4 @@
-use combat_system::state::{EffectType, ItemEffect, TriggerType};
+use combat_system::state::{Condition, EffectType, ItemEffect, TriggerType};
 
 use crate::archetypes::ids;
 
@@ -8,6 +8,7 @@ pub static TUNNEL_RAT_TRAITS: [ItemEffect; 1] = [ItemEffect {
     once_per_turn: true,
     effect_type: EffectType::StealGold,
     value: 1,
+    condition: Condition::None,
 }];
 
 /// Cave Bat: Every other turn: restore 1 HP
@@ -16,6 +17,7 @@ pub static CAVE_BAT_TRAITS: [ItemEffect; 1] = [ItemEffect {
     once_per_turn: false,
     effect_type: EffectType::Heal,
     value: 1,
+    condition: Condition::None,
 }];
 
 /// Spore Slime: Battle Start: apply 2 Chill to player
@@ -24,6 +26,7 @@ pub static SPORE_SLIME_TRAITS: [ItemEffect; 1] = [ItemEffect {
     once_per_turn: false,
     effect_type: EffectType::ApplyChill,
     value: 2,
+    condition: Condition::None,
 }];
 
 /// Rust Mite Swarm: On Hit (once/turn): apply 1 Rust
@@ -32,6 +35,7 @@ pub static RUST_MITE_TRAITS: [ItemEffect; 1] = [ItemEffect {
     once_per_turn: true,
     effect_type: EffectType::ApplyRust,
     value: 1,
+    condition: Condition::None,
 }];
 
 /// Collapsed Miner: Wounded: gain +3 ATK (this battle)
@@ -40,6 +44,7 @@ pub static COLLAPSED_MINER_TRAITS: [ItemEffect; 1] = [ItemEffect {
     once_per_turn: false,
     effect_type: EffectType::GainAtk,
     value: 3,
+    condition: Condition::None,
 }];
 
 /// Shard Beetle: Battle Start: gain 6 Shrapnel
@@ -48,6 +53,7 @@ pub static SHARD_BEETLE_TRAITS: [ItemEffect; 1] = [ItemEffect {
     once_per_turn: false,
     effect_type: EffectType::ApplyShrapnel,
     value: 6,
+    condition: Condition::None,
 }];
 
 /// Tunnel Warden: First strike each turn: remove 3 Armor from player before damage
@@ -56,6 +62,7 @@ pub static TUNNEL_WARDEN_TRAITS: [ItemEffect; 1] = [ItemEffect {
     once_per_turn: true,
     effect_type: EffectType::RemoveArmor,
     value: 3,
+    condition: Condition::None,
 }];
 
 /// Burrow Ambusher: Battle Start: deal 3 damage ignoring Armor
@@ -64,6 +71,7 @@ pub static BURROW_AMBUSHER_TRAITS: [ItemEffect; 1] = [ItemEffect {
     once_per_turn: false,
     effect_type: EffectType::DealNonWeaponDamage,
     value: 3,
+    condition: Condition::None,
 }];
 
 /// Frost Wisp: If it acts first on Turn 1: apply 2 Chill
@@ -72,6 +80,7 @@ pub static FROST_WISP_TRAITS: [ItemEffect; 1] = [ItemEffect {
     once_per_turn: false,
     effect_type: EffectType::ApplyChill,
     value: 2,
+    condition: Condition::None,
 }];
 
 /// Powder Tick: Countdown(2): deal 6 damage to player (non-weapon)
@@ -81,6 +90,7 @@ pub static POWDER_TICK_TRAITS: [ItemEffect; 1] = [ItemEffect {
     once_per_turn: false,
     effect_type: EffectType::DealNonWeaponDamage,
     value: 6,
+    condition: Condition::None,
 }];
 
 /// Coin Slug: Battle Start: gain Armor equal to floor(player Gold/10) (cap 3)
@@ -91,6 +101,7 @@ pub static COIN_SLUG_TRAITS: [ItemEffect; 1] = [ItemEffect {
     once_per_turn: false,
     effect_type: EffectType::GainArmor,
     value: 0, // Placeholder - calculated dynamically in preprocess_enemy_effects()
+    condition: Condition::None,
 }];
 
 /// Blood Mosquito: On Hit (once/turn): apply 1 Bleed
@@ -99,6 +110,7 @@ pub static BLOOD_MOSQUITO_TRAITS: [ItemEffect; 1] = [ItemEffect {
     once_per_turn: true,
     effect_type: EffectType::ApplyBleed,
     value: 1,
+    condition: Condition::None,
 }];
 
 /// Get the trait effects for an enemy archetype

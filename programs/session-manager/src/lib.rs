@@ -5,6 +5,7 @@ pub mod state;
 
 use errors::SessionManagerError;
 use gameplay_state::program::GameplayState;
+use gameplay_state::state::GameState;
 use map_generator::program::MapGenerator;
 use map_generator::state::{GeneratedMap, MapConfig as MapConfigAccount};
 use player_inventory::program::PlayerInventory;
@@ -28,14 +29,21 @@ pub const POI_SYSTEM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     0xeb, 0xa6, 0xeb, 0xd8, 0xf1, 0x6b, 0x02, 0x23, 0xb9, 0x0e, 0xb1, 0x15, 0x96, 0x67, 0xd7, 0x4d,
 ]);
 
+/// Map Generator program ID for CPI.
+/// Must match the declare_id! in map-generator/src/lib.rs
+/// BYdGuEGf8NqtLnHpSRuZFrPGEgvdxMfGfTt71QVBxYHa
+pub const MAP_GENERATOR_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
+    156, 174, 227, 192, 77, 77, 237, 57, 57, 229, 227, 42, 100, 51, 52, 5, 241, 68, 44, 141, 222,
+    59, 35, 223, 249, 8, 30, 121, 140, 38, 69, 149,
+]);
+
 /// Discriminator for player_profile::consume_run instruction.
 /// Computed as sha256("global:consume_run")[..8].
 ///
 /// NOTE: This is manually specified because session-manager already has a
 /// manual PlayerProfile struct (avoiding circular deps). If player-profile's
 /// consume_run instruction changes, this must be updated.
-pub const CONSUME_RUN_DISCRIMINATOR: [u8; 8] =
-    [0x6b, 0x65, 0x36, 0x52, 0x84, 0x9c, 0x0f, 0x22];
+pub const CONSUME_RUN_DISCRIMINATOR: [u8; 8] = [0x6b, 0x65, 0x36, 0x52, 0x84, 0x9c, 0x0f, 0x22];
 
 /// Discriminator for poi_system::initialize_map_pois instruction.
 /// Computed as sha256("global:initialize_map_pois")[..8].
@@ -278,15 +286,36 @@ pub mod session_manager {
         Ok(())
     }
 
-    /// Ends the session normally, undelegating from rollup and closing the account.
+    /// Ends the session after death or level completion.
+    /// Only callable by burner wallet when player is dead OR has completed the level.
     /// Also closes the player's inventory via CPI to ensure fresh inventory for next session.
-    pub fn end_session(ctx: Context<EndSession>, _campaign_level: u8, victory: bool) -> Result<()> {
+    ///
+    /// This is designed to be called automatically by the frontend after combat,
+    /// signed only by the burner wallet (no user interaction required).
+    pub fn end_session(ctx: Context<EndSession>, _campaign_level: u8) -> Result<()> {
         let session = &ctx.accounts.game_session;
+        let game_state = &ctx.accounts.game_state;
         let clock = Clock::get()?;
 
-        // In production:
-        // - Call ephemeral_rollups_sdk::cpi::commit_and_undelegate_accounts
-        // - CPI to player_profile::record_run_result(level, victory)
+        // Validate: session can only be ended if player is dead OR completed the level
+        require!(
+            game_state.is_dead || game_state.completed,
+            SessionManagerError::SessionNotEndable
+        );
+
+        // Determine victory from game state (completed = true means victory)
+        let victory = game_state.completed && !game_state.is_dead;
+
+        // Record run result via CPI to player-profile
+        // This updates total_runs, and on first-time victory unlocks next level + random item
+        record_run_result_cpi(
+            &ctx.accounts.player_profile_program,
+            &ctx.accounts.player_profile.to_account_info(),
+            &ctx.accounts.game_session.to_account_info(),
+            &ctx.accounts.burner_wallet.to_account_info(),
+            session.campaign_level,
+            victory,
+        )?;
 
         emit!(SessionEnded {
             player: session.player,
@@ -297,7 +326,45 @@ pub mod session_manager {
             timestamp: clock.unix_timestamp,
         });
 
-        // Close inventory via CPI to ensure fresh inventory for next session
+        // Close all session-related accounts via CPI
+        // Order matters: close child accounts before parent accounts
+
+        // 1. Close map_pois (depends on session)
+        close_map_pois_via_burner_cpi(
+            &ctx.accounts.poi_system_program,
+            &ctx.accounts.map_pois,
+            &ctx.accounts.game_session.to_account_info(),
+            &ctx.accounts.player,
+            &ctx.accounts.burner_wallet.to_account_info(),
+        )?;
+
+        // 2. Close generated_map (depends on session)
+        close_generated_map_cpi(
+            &ctx.accounts.map_generator_program,
+            &ctx.accounts.generated_map,
+            &ctx.accounts.game_session.to_account_info(),
+            &ctx.accounts.player,
+            &ctx.accounts.burner_wallet.to_account_info(),
+        )?;
+
+        // 3. Close map_enemies (depends on game_state)
+        close_map_enemies_cpi(
+            &ctx.accounts.gameplay_state_program.to_account_info(),
+            &ctx.accounts.map_enemies,
+            &ctx.accounts.game_state.to_account_info(),
+            &ctx.accounts.player,
+            &ctx.accounts.burner_wallet.to_account_info(),
+        )?;
+
+        // 4. Close game_state
+        close_game_state_via_burner_cpi(
+            &ctx.accounts.gameplay_state_program.to_account_info(),
+            &ctx.accounts.game_state.to_account_info(),
+            &ctx.accounts.player,
+            &ctx.accounts.burner_wallet.to_account_info(),
+        )?;
+
+        // 5. Close inventory via CPI to ensure fresh inventory for next session
         // Use burner_wallet since it's the inventory owner (set during start_session)
         player_inventory::cpi::close_inventory(CpiContext::new(
             ctx.accounts.player_inventory_program.to_account_info(),
@@ -307,7 +374,75 @@ pub mod session_manager {
             },
         ))?;
 
-        // Account will be closed by Anchor (close = player constraint)
+        // 6. Session account will be closed by Anchor (close = player constraint)
+        Ok(())
+    }
+
+    /// Abandons a session at any time (user-initiated).
+    /// Requires the main wallet signature.
+    /// Used when player wants to quit a session early.
+    /// Closes all session-related accounts to allow starting a new session on the same level.
+    pub fn abandon_session(ctx: Context<AbandonSession>, _campaign_level: u8) -> Result<()> {
+        let session = &ctx.accounts.game_session;
+        let clock = Clock::get()?;
+
+        emit!(SessionEnded {
+            player: session.player,
+            session_id: session.session_id,
+            campaign_level: session.campaign_level,
+            victory: false, // Abandoning counts as a loss
+            final_state_hash: session.state_hash,
+            timestamp: clock.unix_timestamp,
+        });
+
+        // Close all session-related accounts via CPI
+        // Order matters: close child accounts before parent accounts
+
+        // 1. Close map_pois (depends on session)
+        close_map_pois_via_burner_cpi(
+            &ctx.accounts.poi_system_program,
+            &ctx.accounts.map_pois,
+            &ctx.accounts.game_session.to_account_info(),
+            &ctx.accounts.player,
+            &ctx.accounts.burner_wallet.to_account_info(),
+        )?;
+
+        // 2. Close generated_map (depends on session)
+        close_generated_map_cpi(
+            &ctx.accounts.map_generator_program,
+            &ctx.accounts.generated_map,
+            &ctx.accounts.game_session.to_account_info(),
+            &ctx.accounts.player,
+            &ctx.accounts.burner_wallet.to_account_info(),
+        )?;
+
+        // 3. Close map_enemies (depends on game_state)
+        close_map_enemies_cpi(
+            &ctx.accounts.gameplay_state_program.to_account_info(),
+            &ctx.accounts.map_enemies,
+            &ctx.accounts.game_state.to_account_info(),
+            &ctx.accounts.player,
+            &ctx.accounts.burner_wallet.to_account_info(),
+        )?;
+
+        // 4. Close game_state
+        close_game_state_via_burner_cpi(
+            &ctx.accounts.gameplay_state_program.to_account_info(),
+            &ctx.accounts.game_state.to_account_info(),
+            &ctx.accounts.player,
+            &ctx.accounts.burner_wallet.to_account_info(),
+        )?;
+
+        // 5. Close inventory via CPI
+        player_inventory::cpi::close_inventory(CpiContext::new(
+            ctx.accounts.player_inventory_program.to_account_info(),
+            player_inventory::cpi::accounts::CloseInventory {
+                inventory: ctx.accounts.inventory.to_account_info(),
+                player: ctx.accounts.burner_wallet.to_account_info(),
+            },
+        ))?;
+
+        // 6. Session account will be closed by Anchor (close = player constraint)
         Ok(())
     }
 }
@@ -491,6 +626,9 @@ pub struct CommitSession<'info> {
     pub player: Signer<'info>,
 }
 
+/// End session after death or level completion.
+/// Only burner wallet needs to sign - player just receives rent refund.
+/// Closes all session-related accounts: session, game_state, generated_map, map_enemies, map_pois, inventory.
 #[derive(Accounts)]
 #[instruction(campaign_level: u8)]
 pub struct EndSession<'info> {
@@ -504,10 +642,45 @@ pub struct EndSession<'info> {
     )]
     pub game_session: Account<'info, GameSession>,
 
-    #[account(mut)]
-    pub player: Signer<'info>,
+    /// Game state account to validate death/completion status (closed via gameplay-state CPI)
+    #[account(
+        mut,
+        seeds = [b"game_state", game_session.key().as_ref()],
+        bump = game_state.bump,
+        seeds::program = gameplay_state::ID,
+    )]
+    pub game_state: Account<'info, GameState>,
 
-    /// Burner wallet that owns the inventory (must sign to close inventory)
+    /// Map enemies account (closed via gameplay-state CPI)
+    #[account(mut)]
+    /// CHECK: Validated by gameplay-state CPI
+    pub map_enemies: UncheckedAccount<'info>,
+
+    /// Generated map account (closed via map-generator CPI)
+    #[account(mut)]
+    /// CHECK: Validated by map-generator CPI
+    pub generated_map: UncheckedAccount<'info>,
+
+    /// Map POIs account (closed via poi-system CPI)
+    #[account(mut)]
+    /// CHECK: Validated by poi-system CPI
+    pub map_pois: UncheckedAccount<'info>,
+
+    /// Player profile for recording run result
+    #[account(
+        mut,
+        seeds = [b"player", player.key().as_ref()],
+        bump,
+        seeds::program = PlayerProfileRef::id()
+    )]
+    pub player_profile: Account<'info, PlayerProfile>,
+
+    /// Player wallet - receives rent refund but does NOT need to sign
+    /// CHECK: Validated by has_one constraint on game_session
+    #[account(mut)]
+    pub player: AccountInfo<'info>,
+
+    /// Burner wallet - must sign to authorize session end and close inventory
     #[account(mut)]
     pub burner_wallet: Signer<'info>,
 
@@ -517,6 +690,81 @@ pub struct EndSession<'info> {
     pub inventory: UncheckedAccount<'info>,
 
     pub player_inventory_program: Program<'info, PlayerInventory>,
+    pub gameplay_state_program: Program<'info, GameplayState>,
+
+    #[account(address = PLAYER_PROFILE_PROGRAM_ID)]
+    /// CHECK: Player profile program for manual CPI, validated by address constraint
+    pub player_profile_program: UncheckedAccount<'info>,
+
+    #[account(address = MAP_GENERATOR_PROGRAM_ID)]
+    /// CHECK: Map generator program for CPI, validated by address constraint
+    pub map_generator_program: UncheckedAccount<'info>,
+
+    #[account(address = POI_SYSTEM_PROGRAM_ID)]
+    /// CHECK: POI system program for CPI, validated by address constraint
+    pub poi_system_program: UncheckedAccount<'info>,
+}
+
+/// Abandon session at any time (user-initiated).
+/// Requires both main wallet and burner wallet signatures.
+/// Main wallet authorizes the abandonment, burner wallet is needed to close sub-accounts.
+/// Closes all session-related accounts: session, game_state, generated_map, map_enemies, map_pois, inventory.
+#[derive(Accounts)]
+#[instruction(campaign_level: u8)]
+pub struct AbandonSession<'info> {
+    #[account(
+        mut,
+        seeds = [GameSession::SEED_PREFIX, player.key().as_ref(), &[campaign_level]],
+        bump = game_session.bump,
+        has_one = player @ SessionManagerError::Unauthorized,
+        has_one = burner_wallet @ SessionManagerError::Unauthorized,
+        close = player
+    )]
+    pub game_session: Account<'info, GameSession>,
+
+    /// Game state account (closed via gameplay-state CPI)
+    #[account(mut)]
+    /// CHECK: Validated by gameplay-state CPI
+    pub game_state: UncheckedAccount<'info>,
+
+    /// Map enemies account (closed via gameplay-state CPI)
+    #[account(mut)]
+    /// CHECK: Validated by gameplay-state CPI
+    pub map_enemies: UncheckedAccount<'info>,
+
+    /// Generated map account (closed via map-generator CPI)
+    #[account(mut)]
+    /// CHECK: Validated by map-generator CPI
+    pub generated_map: UncheckedAccount<'info>,
+
+    /// Map POIs account (closed via poi-system CPI)
+    #[account(mut)]
+    /// CHECK: Validated by poi-system CPI
+    pub map_pois: UncheckedAccount<'info>,
+
+    /// Player wallet - must sign to authorize abandonment
+    #[account(mut)]
+    pub player: Signer<'info>,
+
+    /// Burner wallet - must sign to close sub-accounts (owns the inventory)
+    #[account(mut)]
+    pub burner_wallet: Signer<'info>,
+
+    /// Player's inventory account (closed via CPI)
+    #[account(mut)]
+    /// CHECK: Validated by player-inventory CPI
+    pub inventory: UncheckedAccount<'info>,
+
+    pub player_inventory_program: Program<'info, PlayerInventory>,
+    pub gameplay_state_program: Program<'info, GameplayState>,
+
+    #[account(address = MAP_GENERATOR_PROGRAM_ID)]
+    /// CHECK: Map generator program for CPI, validated by address constraint
+    pub map_generator_program: UncheckedAccount<'info>,
+
+    #[account(address = POI_SYSTEM_PROGRAM_ID)]
+    /// CHECK: POI system program for CPI, validated by address constraint
+    pub poi_system_program: UncheckedAccount<'info>,
 }
 
 // ============================================================================
@@ -651,6 +899,231 @@ fn initialize_map_pois_cpi<'info>(
     Ok(())
 }
 
+/// Discriminator for player_profile::record_run_result_cpi instruction.
+/// Computed as sha256("global:record_run_result_cpi")[..8].
+/// This constant is validated by the test below.
+pub const RECORD_RUN_RESULT_CPI_DISCRIMINATOR: [u8; 8] =
+    [0x09, 0xaf, 0xf6, 0x09, 0x1f, 0x62, 0x79, 0x45];
+
+/// Manual CPI to player_profile::record_run_result_cpi.
+///
+/// This records the run result (victory/defeat) and updates the player profile.
+/// Uses session account for authorization instead of requiring player signature.
+fn record_run_result_cpi<'info>(
+    player_profile_program: &AccountInfo<'info>,
+    player_profile: &AccountInfo<'info>,
+    session: &AccountInfo<'info>,
+    burner_wallet: &AccountInfo<'info>,
+    level_completed: u8,
+    victory: bool,
+) -> Result<()> {
+    use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
+    use anchor_lang::solana_program::program::invoke;
+
+    // Build instruction data: discriminator + level_completed + victory
+    let mut data = Vec::with_capacity(8 + 1 + 1);
+    data.extend_from_slice(&RECORD_RUN_RESULT_CPI_DISCRIMINATOR);
+    data.push(level_completed);
+    data.push(if victory { 1 } else { 0 });
+
+    let accounts = vec![
+        AccountMeta::new(player_profile.key(), false),
+        AccountMeta::new_readonly(session.key(), false),
+        AccountMeta::new_readonly(burner_wallet.key(), true),
+    ];
+
+    let instruction = Instruction {
+        program_id: PLAYER_PROFILE_PROGRAM_ID,
+        accounts,
+        data,
+    };
+
+    invoke(
+        &instruction,
+        &[
+            player_profile.clone(),
+            session.clone(),
+            burner_wallet.clone(),
+            player_profile_program.clone(),
+        ],
+    )?;
+
+    Ok(())
+}
+
+// ============================================================================
+// Close CPI Functions for end_session
+// ============================================================================
+
+/// Discriminator for gameplay_state::close_game_state_via_burner
+pub const CLOSE_GAME_STATE_VIA_BURNER_DISCRIMINATOR: [u8; 8] = [71, 137, 243, 70, 95, 193, 114, 51];
+
+/// Discriminator for gameplay_state::close_map_enemies
+pub const CLOSE_MAP_ENEMIES_DISCRIMINATOR: [u8; 8] = [192, 111, 190, 66, 236, 132, 252, 88];
+
+/// Discriminator for map_generator::close_generated_map
+pub const CLOSE_GENERATED_MAP_DISCRIMINATOR: [u8; 8] = [249, 208, 241, 231, 57, 214, 174, 103];
+
+/// Discriminator for poi_system::close_map_pois_via_burner
+pub const CLOSE_MAP_POIS_VIA_BURNER_DISCRIMINATOR: [u8; 8] = [96, 5, 252, 241, 226, 138, 10, 215];
+
+/// CPI to gameplay_state::close_game_state_via_burner
+fn close_game_state_via_burner_cpi<'info>(
+    gameplay_state_program: &AccountInfo<'info>,
+    game_state: &AccountInfo<'info>,
+    player: &AccountInfo<'info>,
+    burner_wallet: &AccountInfo<'info>,
+) -> Result<()> {
+    use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
+    use anchor_lang::solana_program::program::invoke;
+
+    let data = CLOSE_GAME_STATE_VIA_BURNER_DISCRIMINATOR.to_vec();
+
+    let accounts = vec![
+        AccountMeta::new(game_state.key(), false),
+        AccountMeta::new(player.key(), false),
+        AccountMeta::new_readonly(burner_wallet.key(), true),
+    ];
+
+    let instruction = Instruction {
+        program_id: gameplay_state::ID,
+        accounts,
+        data,
+    };
+
+    invoke(
+        &instruction,
+        &[
+            game_state.clone(),
+            player.clone(),
+            burner_wallet.clone(),
+            gameplay_state_program.clone(),
+        ],
+    )?;
+
+    Ok(())
+}
+
+/// CPI to gameplay_state::close_map_enemies
+fn close_map_enemies_cpi<'info>(
+    gameplay_state_program: &AccountInfo<'info>,
+    map_enemies: &AccountInfo<'info>,
+    game_state: &AccountInfo<'info>,
+    player: &AccountInfo<'info>,
+    burner_wallet: &AccountInfo<'info>,
+) -> Result<()> {
+    use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
+    use anchor_lang::solana_program::program::invoke;
+
+    let data = CLOSE_MAP_ENEMIES_DISCRIMINATOR.to_vec();
+
+    let accounts = vec![
+        AccountMeta::new(map_enemies.key(), false),
+        AccountMeta::new_readonly(game_state.key(), false),
+        AccountMeta::new(player.key(), false),
+        AccountMeta::new_readonly(burner_wallet.key(), true),
+    ];
+
+    let instruction = Instruction {
+        program_id: gameplay_state::ID,
+        accounts,
+        data,
+    };
+
+    invoke(
+        &instruction,
+        &[
+            map_enemies.clone(),
+            game_state.clone(),
+            player.clone(),
+            burner_wallet.clone(),
+            gameplay_state_program.clone(),
+        ],
+    )?;
+
+    Ok(())
+}
+
+/// CPI to map_generator::close_generated_map
+fn close_generated_map_cpi<'info>(
+    map_generator_program: &AccountInfo<'info>,
+    generated_map: &AccountInfo<'info>,
+    session: &AccountInfo<'info>,
+    player: &AccountInfo<'info>,
+    burner_wallet: &AccountInfo<'info>,
+) -> Result<()> {
+    use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
+    use anchor_lang::solana_program::program::invoke;
+
+    let data = CLOSE_GENERATED_MAP_DISCRIMINATOR.to_vec();
+
+    let accounts = vec![
+        AccountMeta::new(generated_map.key(), false),
+        AccountMeta::new_readonly(session.key(), false),
+        AccountMeta::new(player.key(), false),
+        AccountMeta::new_readonly(burner_wallet.key(), true),
+    ];
+
+    let instruction = Instruction {
+        program_id: MAP_GENERATOR_PROGRAM_ID,
+        accounts,
+        data,
+    };
+
+    invoke(
+        &instruction,
+        &[
+            generated_map.clone(),
+            session.clone(),
+            player.clone(),
+            burner_wallet.clone(),
+            map_generator_program.clone(),
+        ],
+    )?;
+
+    Ok(())
+}
+
+/// CPI to poi_system::close_map_pois_via_burner
+fn close_map_pois_via_burner_cpi<'info>(
+    poi_system_program: &AccountInfo<'info>,
+    map_pois: &AccountInfo<'info>,
+    session: &AccountInfo<'info>,
+    player: &AccountInfo<'info>,
+    burner_wallet: &AccountInfo<'info>,
+) -> Result<()> {
+    use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
+    use anchor_lang::solana_program::program::invoke;
+
+    let data = CLOSE_MAP_POIS_VIA_BURNER_DISCRIMINATOR.to_vec();
+
+    let accounts = vec![
+        AccountMeta::new(map_pois.key(), false),
+        AccountMeta::new_readonly(session.key(), false),
+        AccountMeta::new(player.key(), false),
+        AccountMeta::new_readonly(burner_wallet.key(), true),
+    ];
+
+    let instruction = Instruction {
+        program_id: POI_SYSTEM_PROGRAM_ID,
+        accounts,
+        data,
+    };
+
+    invoke(
+        &instruction,
+        &[
+            map_pois.clone(),
+            session.clone(),
+            player.clone(),
+            burner_wallet.clone(),
+            poi_system_program.clone(),
+        ],
+    )?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -659,7 +1132,7 @@ mod tests {
     /// Computes the hash at test time so a rename is caught immediately.
     #[test]
     fn test_end_session_discriminator() {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let hash = Sha256::digest(b"global:end_session");
         let expected: [u8; 8] = hash[..8].try_into().unwrap();
         assert_eq!(
@@ -672,7 +1145,7 @@ mod tests {
     /// Computes the hash at test time so a rename is caught immediately.
     #[test]
     fn test_consume_run_discriminator() {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let hash = Sha256::digest(b"global:consume_run");
         let expected: [u8; 8] = hash[..8].try_into().unwrap();
         assert_eq!(
@@ -685,12 +1158,69 @@ mod tests {
     /// Computes the hash at test time so a rename is caught immediately.
     #[test]
     fn test_initialize_map_pois_discriminator() {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let hash = Sha256::digest(b"global:initialize_map_pois");
         let expected: [u8; 8] = hash[..8].try_into().unwrap();
         assert_eq!(
             INITIALIZE_MAP_POIS_DISCRIMINATOR, expected,
             "INITIALIZE_MAP_POIS_DISCRIMINATOR doesn't match sha256(\"global:initialize_map_pois\")[..8]"
+        );
+    }
+
+    /// Validates that RECORD_RUN_RESULT_CPI_DISCRIMINATOR matches sha256("global:record_run_result_cpi")[..8].
+    /// Computes the hash at test time so a rename is caught immediately.
+    #[test]
+    fn test_record_run_result_cpi_discriminator() {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(b"global:record_run_result_cpi");
+        let expected: [u8; 8] = hash[..8].try_into().unwrap();
+        assert_eq!(
+            RECORD_RUN_RESULT_CPI_DISCRIMINATOR, expected,
+            "RECORD_RUN_RESULT_CPI_DISCRIMINATOR doesn't match sha256(\"global:record_run_result_cpi\")[..8]"
+        );
+    }
+
+    #[test]
+    fn test_close_game_state_via_burner_discriminator() {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(b"global:close_game_state_via_burner");
+        let expected: [u8; 8] = hash[..8].try_into().unwrap();
+        assert_eq!(
+            CLOSE_GAME_STATE_VIA_BURNER_DISCRIMINATOR, expected,
+            "CLOSE_GAME_STATE_VIA_BURNER_DISCRIMINATOR doesn't match"
+        );
+    }
+
+    #[test]
+    fn test_close_map_enemies_discriminator() {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(b"global:close_map_enemies");
+        let expected: [u8; 8] = hash[..8].try_into().unwrap();
+        assert_eq!(
+            CLOSE_MAP_ENEMIES_DISCRIMINATOR, expected,
+            "CLOSE_MAP_ENEMIES_DISCRIMINATOR doesn't match"
+        );
+    }
+
+    #[test]
+    fn test_close_generated_map_discriminator() {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(b"global:close_generated_map");
+        let expected: [u8; 8] = hash[..8].try_into().unwrap();
+        assert_eq!(
+            CLOSE_GENERATED_MAP_DISCRIMINATOR, expected,
+            "CLOSE_GENERATED_MAP_DISCRIMINATOR doesn't match"
+        );
+    }
+
+    #[test]
+    fn test_close_map_pois_via_burner_discriminator() {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(b"global:close_map_pois_via_burner");
+        let expected: [u8; 8] = hash[..8].try_into().unwrap();
+        assert_eq!(
+            CLOSE_MAP_POIS_VIA_BURNER_DISCRIMINATOR, expected,
+            "CLOSE_MAP_POIS_VIA_BURNER_DISCRIMINATOR doesn't match"
         );
     }
 }

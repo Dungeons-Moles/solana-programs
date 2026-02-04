@@ -421,7 +421,8 @@ pub mod poi_system {
         for (i, offer) in filtered.iter().take(3).enumerate() {
             items[i] = state::OfferItem {
                 item_id: offer.item_id,
-                rarity: offer.tier,
+                rarity: offers::rarity_from_item_id(&offer.item_id),
+                tier: offer.tier,
             };
         }
 
@@ -486,7 +487,7 @@ pub mod poi_system {
             .iter()
             .map(|item| state::ItemOffer {
                 item_id: item.item_id,
-                tier: item.rarity,
+                tier: item.tier,
                 price: 0,
                 purchased: false,
             })
@@ -510,7 +511,7 @@ pub mod poi_system {
         if is_tool {
             equip_tool_authorized_cpi(
                 &ctx.accounts.inventory.to_account_info(),
-                &ctx.accounts.game_state_writable,
+                &ctx.accounts.game_state.to_account_info(),
                 &ctx.accounts.inventory_authority,
                 &ctx.accounts.poi_authority,
                 &ctx.accounts.player_inventory_program.to_account_info(),
@@ -522,7 +523,7 @@ pub mod poi_system {
         } else {
             equip_gear_authorized_cpi(
                 &ctx.accounts.inventory.to_account_info(),
-                &ctx.accounts.game_state_writable,
+                &ctx.accounts.game_state.to_account_info(),
                 &ctx.accounts.inventory_authority,
                 &ctx.accounts.poi_authority,
                 &ctx.accounts.player_inventory_program.to_account_info(),
@@ -1372,18 +1373,14 @@ pub struct InteractPickItem<'info> {
     )]
     pub map_pois: Account<'info, MapPois>,
 
-    /// Player's GameState for position/time validation (read-only)
+    /// Player's GameState for position/time validation and HP modification via CPI
     #[account(
+        mut,
         seeds = [b"game_state", map_pois.session.as_ref()],
         bump = game_state.bump,
         seeds::program = gameplay_state::ID,
     )]
     pub game_state: Account<'info, GameState>,
-
-    /// Player's GameState for HP modification via CPI (writable)
-    /// CHECK: Same account as game_state but mutable for CPI
-    #[account(mut)]
-    pub game_state_writable: AccountInfo<'info>,
 
     /// Player's inventory for equipping items
     #[account(

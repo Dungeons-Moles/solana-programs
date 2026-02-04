@@ -1580,6 +1580,103 @@ mod tests {
             excluded_oil
         );
     }
+
+    // =========================================================================
+    // Rarity from Item ID Tests
+    // =========================================================================
+
+    #[test]
+    fn test_rarity_from_gear_common() {
+        assert_eq!(rarity_from_item_id(b"G-ST-01\0"), 0);
+        assert_eq!(rarity_from_item_id(b"G-FR-02\0"), 0);
+    }
+
+    #[test]
+    fn test_rarity_from_gear_rare() {
+        assert_eq!(rarity_from_item_id(b"G-ST-03\0"), 1);
+        assert_eq!(rarity_from_item_id(b"G-BL-04\0"), 1);
+        assert_eq!(rarity_from_item_id(b"G-TE-05\0"), 1);
+    }
+
+    #[test]
+    fn test_rarity_from_gear_heroic() {
+        assert_eq!(rarity_from_item_id(b"G-RU-06\0"), 2);
+        assert_eq!(rarity_from_item_id(b"G-BO-07\0"), 2);
+    }
+
+    #[test]
+    fn test_rarity_from_gear_mythic() {
+        assert_eq!(rarity_from_item_id(b"G-ST-08\0"), 3);
+        assert_eq!(rarity_from_item_id(b"G-FR-08\0"), 3);
+    }
+
+    #[test]
+    fn test_rarity_from_tool_common() {
+        assert_eq!(rarity_from_item_id(b"T-ST-01\0"), 0);
+        assert_eq!(rarity_from_item_id(b"T-SC-01\0"), 0);
+    }
+
+    #[test]
+    fn test_rarity_from_tool_rare() {
+        assert_eq!(rarity_from_item_id(b"T-ST-02\0"), 1);
+        assert_eq!(rarity_from_item_id(b"T-FR-02\0"), 1);
+    }
+
+    #[test]
+    fn test_rarity_from_item_id_malformed() {
+        // Unknown type prefix
+        assert_eq!(rarity_from_item_id(b"X-ST-01\0"), 0);
+        // Non-digit number bytes
+        assert_eq!(rarity_from_item_id(b"G-ST-AB\0"), 0);
+    }
+
+    #[test]
+    fn test_rarity_from_item_id_out_of_range_gear() {
+        // Gear item number 0 or 9+ falls through to default
+        assert_eq!(rarity_from_item_id(b"G-ST-00\0"), 0);
+        assert_eq!(rarity_from_item_id(b"G-ST-09\0"), 0);
+    }
+}
+
+// =============================================================================
+// Rarity from Item ID
+// =============================================================================
+
+/// Derive item rarity from an item_id based on the item number.
+///
+/// Gear (G-XX-NN):
+///   01..02 = Common (0), 03..05 = Rare (1), 06..07 = Heroic (2), 08 = Mythic (3)
+/// Tool (T-XX-NN):
+///   01 = Common (0), 02 = Rare (1)
+///
+/// Returns 0 (Common) for unrecognised or malformed IDs.
+pub fn rarity_from_item_id(item_id: &[u8; 8]) -> u8 {
+    // Parse two-digit item number from bytes 5-6
+    let tens = match item_id[5].checked_sub(b'0') {
+        Some(d) if d <= 9 => d,
+        _ => return 0,
+    };
+    let ones = match item_id[6].checked_sub(b'0') {
+        Some(d) if d <= 9 => d,
+        _ => return 0,
+    };
+    let num = tens * 10 + ones;
+
+    match item_id[0] {
+        b'G' => match num {
+            1..=2 => 0, // Common
+            3..=5 => 1, // Rare
+            6..=7 => 2, // Heroic
+            8 => 3,     // Mythic
+            _ => 0,
+        },
+        b'T' => match num {
+            1 => 0, // Common
+            2 => 1, // Rare
+            _ => 0,
+        },
+        _ => 0,
+    }
 }
 
 // =============================================================================

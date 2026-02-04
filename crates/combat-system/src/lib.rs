@@ -1874,4 +1874,79 @@ mod tests {
             outcome.log
         );
     }
+
+    /// Test that OnStruck fires when only armor is damaged (no HP damage).
+    /// This confirms that "when struck" means any damage dealt, not just HP damage.
+    /// Rime Cloak's own ARM bonus should not work against its triggered effect.
+    #[test]
+    fn test_on_struck_fires_on_armor_only_damage() {
+        let player = CombatantInput {
+            hp: 50,
+            max_hp: 50,
+            atk: 3,
+            arm: 20, // High armor absorbs all damage
+            spd: 1,  // Player acts second
+            dig: 0,
+            strikes: 1,
+        };
+        let enemy = CombatantInput {
+            hp: 50,
+            max_hp: 50,
+            atk: 5, // Less than player's ARM, only armor damage
+            arm: 0,
+            spd: 2, // Enemy acts first
+            dig: 0,
+            strikes: 1,
+        };
+
+        // Rime Cloak: OnStruck (once per turn), apply 1 Chill to attacker
+        let player_effects = vec![ItemEffect {
+            trigger: TriggerType::OnStruck,
+            once_per_turn: true,
+            effect_type: EffectType::ApplyChill,
+            value: 1,
+            condition: Condition::None,
+        }];
+        let enemy_effects = vec![];
+
+        let outcome = resolve_combat(player, enemy, player_effects, enemy_effects).unwrap();
+
+        // On turn 1, enemy (ATK 5) hits player (ARM 20). All damage goes to armor.
+        // Attack log with is_player=false means the enemy dealt HP damage through armor.
+        // There should be NO such entry on turn 1 (armor absorbs everything).
+        let enemy_hp_damage_turn_1 = outcome.log.iter().any(|entry| {
+            matches!(entry.action, LogAction::Attack)
+                && !entry.is_player // enemy is the attacker
+                && entry.turn == 1
+        });
+        assert!(
+            !enemy_hp_damage_turn_1,
+            "Enemy should not deal HP damage on turn 1 (armor absorbs all). Log: {:?}",
+            outcome.log
+        );
+
+        // Confirm armor WAS damaged on turn 1 (the hit landed, just on armor)
+        let armor_hit_turn_1 = outcome.log.iter().any(|entry| {
+            matches!(entry.action, LogAction::ArmorChange)
+                && entry.is_player // player's armor
+                && entry.turn == 1
+        });
+        assert!(
+            armor_hit_turn_1,
+            "Player's armor should take damage on turn 1. Log: {:?}",
+            outcome.log
+        );
+
+        // OnStruck should fire on turn 1 despite only armor damage
+        let chill_on_turn_1 = outcome.log.iter().any(|entry| {
+            matches!(entry.action, LogAction::ApplyStatus)
+                && !entry.is_player // applied to enemy
+                && entry.turn == 1
+        });
+        assert!(
+            chill_on_turn_1,
+            "OnStruck SHOULD fire on armor-only damage (turn 1). Log: {:?}",
+            outcome.log
+        );
+    }
 }

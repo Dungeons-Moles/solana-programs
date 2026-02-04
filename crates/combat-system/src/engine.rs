@@ -81,6 +81,8 @@ pub fn execute_strikes(
     defender_status: &mut StatusEffects,
     on_hit_effects: &mut [ItemEffect],
     triggered_flags: &mut [bool],
+    defender_effects: &mut [ItemEffect],
+    defender_triggered_flags: &mut [bool],
     turn: u8,
     is_player_attacking: bool,
     gold_change: &mut i16,
@@ -187,6 +189,23 @@ pub fn execute_strikes(
                     log,
                 );
             }
+
+            // Fire OnStruck effects for the defender (e.g., Rime Cloak applies Chill to attacker)
+            // Note: defender is the "owner" of OnStruck effects, attacker is the "opponent"
+            process_triggers_for_phase(
+                defender_effects,
+                TriggerType::OnStruck,
+                turn,
+                defender_stats,
+                defender_status,
+                attacker_stats,
+                attacker_status,
+                defender_triggered_flags,
+                !is_player_attacking, // defender is player if attacker is not
+                false,                // acts_first: unused for OnStruck triggers
+                gold_change,
+                log,
+            );
         }
 
         // Shrapnel: defender retaliates with damage when struck
@@ -274,6 +293,8 @@ mod tests {
         let mut defender_status = StatusEffects::default();
         let mut effects: Vec<ItemEffect> = Vec::new();
         let mut flags: Vec<bool> = Vec::new();
+        let mut defender_effects: Vec<ItemEffect> = Vec::new();
+        let mut defender_flags: Vec<bool> = Vec::new();
         let mut gold_change: i16 = 0;
         let mut log: Vec<CombatLogEntry> = Vec::new();
 
@@ -288,6 +309,8 @@ mod tests {
             &mut defender_status,
             &mut effects,
             &mut flags,
+            &mut defender_effects,
+            &mut defender_flags,
             1,
             true,
             &mut gold_change,
@@ -316,6 +339,8 @@ mod tests {
         let mut defender_status_again = StatusEffects::default();
         let mut effects_again: Vec<ItemEffect> = Vec::new();
         let mut flags_again: Vec<bool> = Vec::new();
+        let mut defender_effects_again: Vec<ItemEffect> = Vec::new();
+        let mut defender_flags_again: Vec<bool> = Vec::new();
         let mut gold_change_again: i16 = 0;
         let mut log_again: Vec<CombatLogEntry> = Vec::new();
 
@@ -327,6 +352,8 @@ mod tests {
             &mut defender_status_again,
             &mut effects_again,
             &mut flags_again,
+            &mut defender_effects_again,
+            &mut defender_flags_again,
             1,
             true,
             &mut gold_change_again,

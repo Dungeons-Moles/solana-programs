@@ -248,6 +248,8 @@ fn execute_turn(
             &mut enemy_status,
             player_effects,
             player_triggered,
+            enemy_effects,
+            enemy_triggered,
             turn,
             true, // is_player attacking
             &mut combat_state.gold_change,
@@ -265,6 +267,8 @@ fn execute_turn(
                 &mut player_status,
                 enemy_effects,
                 enemy_triggered,
+                player_effects,
+                player_triggered,
                 turn,
                 false, // enemy attacking
                 &mut combat_state.gold_change,
@@ -282,6 +286,8 @@ fn execute_turn(
             &mut player_status,
             enemy_effects,
             enemy_triggered,
+            player_effects,
+            player_triggered,
             turn,
             false, // enemy attacking
             &mut combat_state.gold_change,
@@ -299,6 +305,8 @@ fn execute_turn(
                 &mut enemy_status,
                 player_effects,
                 player_triggered,
+                enemy_effects,
+                enemy_triggered,
                 turn,
                 true, // is_player attacking
                 &mut combat_state.gold_change,
@@ -1643,5 +1651,227 @@ mod tests {
                 outcome.log
             );
         }
+    }
+
+    // ========================================================================
+    // OnStruck Trigger Tests (G-FR-05 Rime Cloak)
+    // ========================================================================
+
+    /// Test that OnStruck triggers when the defender is struck.
+    /// This verifies Rime Cloak (G-FR-05) functionality: "When struck (once/turn): apply 1 Chill to attacker"
+    #[test]
+    fn test_on_struck_applies_chill_to_attacker() {
+        // Player has Rime Cloak (OnStruck: apply Chill to attacker)
+        // Enemy attacks player, so player's OnStruck should fire
+        let player = CombatantInput {
+            hp: 50,
+            max_hp: 50,
+            atk: 3,
+            arm: 5,
+            spd: 1, // Player acts second (enemy attacks first)
+            dig: 0,
+            strikes: 1,
+        };
+        let enemy = CombatantInput {
+            hp: 50,
+            max_hp: 50,
+            atk: 5,
+            arm: 0,
+            spd: 2, // Enemy acts first
+            dig: 0,
+            strikes: 1,
+        };
+
+        // Rime Cloak: OnStruck (once per turn), apply 1 Chill to attacker
+        let player_effects = vec![ItemEffect {
+            trigger: TriggerType::OnStruck,
+            once_per_turn: true,
+            effect_type: EffectType::ApplyChill,
+            value: 1,
+            condition: Condition::None,
+        }];
+        let enemy_effects = vec![];
+
+        let outcome = resolve_combat(player, enemy, player_effects, enemy_effects).unwrap();
+
+        // Enemy should have received Chill from OnStruck on turn 1
+        let chill_applied_to_enemy = outcome.log.iter().any(|entry| {
+            matches!(entry.action, LogAction::ApplyStatus)
+                && !entry.is_player // Chill applied to enemy
+                && entry.turn == 1
+        });
+
+        assert!(
+            chill_applied_to_enemy,
+            "OnStruck should apply Chill to enemy when player is struck. Log: {:?}",
+            outcome.log
+        );
+    }
+
+    /// Test that OnStruck fires once per turn when once_per_turn is true,
+    /// even if the defender is struck multiple times.
+    #[test]
+    fn test_on_struck_once_per_turn_with_multiple_strikes() {
+        let player = CombatantInput {
+            hp: 100,
+            max_hp: 100,
+            atk: 3,
+            arm: 0, // No armor so all strikes deal damage
+            spd: 1, // Player acts second
+            dig: 0,
+            strikes: 1,
+        };
+        let enemy = CombatantInput {
+            hp: 100,
+            max_hp: 100,
+            atk: 2,
+            arm: 0,
+            spd: 2, // Enemy acts first
+            dig: 0,
+            strikes: 3, // Multiple strikes
+        };
+
+        // OnStruck once per turn: apply 1 Chill
+        let player_effects = vec![ItemEffect {
+            trigger: TriggerType::OnStruck,
+            once_per_turn: true,
+            effect_type: EffectType::ApplyChill,
+            value: 1,
+            condition: Condition::None,
+        }];
+        let enemy_effects = vec![];
+
+        let outcome = resolve_combat(player, enemy, player_effects, enemy_effects).unwrap();
+
+        // Count Chill applications on turn 1 - should be exactly 1
+        let chill_on_turn_1 = outcome
+            .log
+            .iter()
+            .filter(|entry| {
+                matches!(entry.action, LogAction::ApplyStatus)
+                    && !entry.is_player
+                    && entry.turn == 1
+            })
+            .count();
+
+        assert_eq!(
+            chill_on_turn_1, 1,
+            "OnStruck with once_per_turn should fire exactly once on turn 1 despite 3 strikes. Log: {:?}",
+            outcome.log
+        );
+    }
+
+    /// Test that OnStruck does NOT fire when the defender is not struck
+    /// (e.g., attacker deals 0 damage).
+    #[test]
+    fn test_on_struck_does_not_fire_without_damage() {
+        let player = CombatantInput {
+            hp: 50,
+            max_hp: 50,
+            atk: 3,
+            arm: 10, // High armor
+            spd: 1,
+            dig: 0,
+            strikes: 1,
+        };
+        let enemy = CombatantInput {
+            hp: 50,
+            max_hp: 50,
+            atk: 0, // Zero ATK, deals no damage
+            arm: 0,
+            spd: 2, // Enemy acts first
+            dig: 0,
+            strikes: 1,
+        };
+
+        let player_effects = vec![ItemEffect {
+            trigger: TriggerType::OnStruck,
+            once_per_turn: true,
+            effect_type: EffectType::ApplyChill,
+            value: 1,
+            condition: Condition::None,
+        }];
+        let enemy_effects = vec![];
+
+        let outcome = resolve_combat(player, enemy, player_effects, enemy_effects).unwrap();
+
+        // No Chill should be applied since enemy deals 0 damage
+        let any_chill = outcome
+            .log
+            .iter()
+            .any(|entry| matches!(entry.action, LogAction::ApplyStatus) && !entry.is_player);
+
+        assert!(
+            !any_chill,
+            "OnStruck should NOT fire when no damage is dealt. Log: {:?}",
+            outcome.log
+        );
+    }
+
+    /// Test that OnStruck fires for both combatants when both have OnStruck effects.
+    #[test]
+    fn test_on_struck_fires_for_both_combatants() {
+        let player = CombatantInput {
+            hp: 100,
+            max_hp: 100,
+            atk: 5,
+            arm: 0,
+            spd: 2, // Player acts first
+            dig: 0,
+            strikes: 1,
+        };
+        let enemy = CombatantInput {
+            hp: 100,
+            max_hp: 100,
+            atk: 5,
+            arm: 0,
+            spd: 1,
+            dig: 0,
+            strikes: 1,
+        };
+
+        // Player: OnStruck apply Chill to attacker
+        let player_effects = vec![ItemEffect {
+            trigger: TriggerType::OnStruck,
+            once_per_turn: true,
+            effect_type: EffectType::ApplyChill,
+            value: 1,
+            condition: Condition::None,
+        }];
+        // Enemy: OnStruck apply Bleed to attacker
+        let enemy_effects = vec![ItemEffect {
+            trigger: TriggerType::OnStruck,
+            once_per_turn: true,
+            effect_type: EffectType::ApplyBleed,
+            value: 1,
+            condition: Condition::None,
+        }];
+
+        let outcome = resolve_combat(player, enemy, player_effects, enemy_effects).unwrap();
+
+        // Player attacks enemy -> enemy's OnStruck fires -> Bleed on player
+        let bleed_on_player = outcome.log.iter().any(|entry| {
+            matches!(entry.action, LogAction::ApplyStatus)
+                && entry.is_player // Bleed applied to player
+                && entry.turn == 1
+        });
+
+        // Enemy attacks player -> player's OnStruck fires -> Chill on enemy
+        let chill_on_enemy = outcome.log.iter().any(|entry| {
+            matches!(entry.action, LogAction::ApplyStatus)
+                && !entry.is_player // Chill applied to enemy
+                && entry.turn == 1
+        });
+
+        assert!(
+            bleed_on_player,
+            "Enemy's OnStruck should apply Bleed to player when player attacks. Log: {:?}",
+            outcome.log
+        );
+        assert!(
+            chill_on_enemy,
+            "Player's OnStruck should apply Chill to enemy when enemy attacks. Log: {:?}",
+            outcome.log
+        );
     }
 }

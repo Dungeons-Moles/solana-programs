@@ -1158,4 +1158,323 @@ mod tests {
             outcome.log
         );
     }
+
+    // ========================================================================
+    // EveryOtherTurnFirstHit Trigger Tests (G-GR-05 through G-GR-08 Shards)
+    // ========================================================================
+
+    /// Test that EveryOtherTurnFirstHit triggers on turn 2 (first even turn) on first hit.
+    /// This verifies Emerald Shard (G-GR-05) functionality.
+    #[test]
+    fn test_every_other_turn_first_hit_fires_on_even_turns() {
+        // Combat that lasts at least 2 turns
+        let player = CombatantInput {
+            hp: 50,
+            max_hp: 60, // max_hp > hp so we can verify healing
+            atk: 3,
+            arm: 5,
+            spd: 2, // Player attacks first
+            dig: 0,
+            strikes: 1,
+        };
+        let enemy = CombatantInput {
+            hp: 50,
+            max_hp: 50,
+            atk: 2,
+            arm: 5,
+            spd: 1,
+            dig: 0,
+            strikes: 1,
+        };
+
+        // Player has EveryOtherTurnFirstHit heal effect (like Emerald Shard)
+        let player_effects = vec![ItemEffect {
+            trigger: TriggerType::EveryOtherTurnFirstHit,
+            once_per_turn: true, // first hit only
+            effect_type: EffectType::Heal,
+            value: 3,
+            condition: Condition::None,
+        }];
+        let enemy_effects = vec![];
+
+        let outcome = resolve_combat(player, enemy, player_effects, enemy_effects).unwrap();
+
+        // Should have healed on turn 2 (first even turn)
+        let heal_on_turn_2 = outcome.log.iter().any(|entry| {
+            matches!(entry.action, LogAction::Heal)
+                && entry.is_player
+                && entry.turn == 2
+                && entry.value == 3
+        });
+
+        assert!(
+            heal_on_turn_2,
+            "Player should have healed 3 HP on turn 2 from EveryOtherTurnFirstHit. Log: {:?}",
+            outcome.log
+        );
+    }
+
+    /// Test that EveryOtherTurnFirstHit does NOT fire on odd turns.
+    #[test]
+    fn test_every_other_turn_first_hit_does_not_fire_on_odd_turns() {
+        let player = CombatantInput {
+            hp: 50,
+            max_hp: 60,
+            atk: 3,
+            arm: 5,
+            spd: 2,
+            dig: 0,
+            strikes: 1,
+        };
+        let enemy = CombatantInput {
+            hp: 50,
+            max_hp: 50,
+            atk: 2,
+            arm: 5,
+            spd: 1,
+            dig: 0,
+            strikes: 1,
+        };
+
+        let player_effects = vec![ItemEffect {
+            trigger: TriggerType::EveryOtherTurnFirstHit,
+            once_per_turn: true,
+            effect_type: EffectType::Heal,
+            value: 5,
+            condition: Condition::None,
+        }];
+        let enemy_effects = vec![];
+
+        let outcome = resolve_combat(player, enemy, player_effects, enemy_effects).unwrap();
+
+        // Should NOT have healed on turn 1 (odd turn)
+        let heal_on_turn_1 = outcome.log.iter().any(|entry| {
+            matches!(entry.action, LogAction::Heal)
+                && entry.is_player
+                && entry.turn == 1
+                && entry.value == 5
+        });
+
+        assert!(
+            !heal_on_turn_1,
+            "Player should NOT have healed on turn 1 (odd turn). Log: {:?}",
+            outcome.log
+        );
+    }
+
+    /// Test that EveryOtherTurnFirstHit only fires once per turn (first hit only).
+    /// With multiple strikes, only the first hit should trigger the effect.
+    #[test]
+    fn test_every_other_turn_first_hit_fires_once_per_turn() {
+        let player = CombatantInput {
+            hp: 50,
+            max_hp: 60,
+            atk: 3,
+            arm: 5,
+            spd: 2,
+            dig: 0,
+            strikes: 3, // Multiple strikes
+        };
+        let enemy = CombatantInput {
+            hp: 100, // High HP to survive multiple turns
+            max_hp: 100,
+            atk: 2,
+            arm: 0, // No armor so player deals damage
+            spd: 1,
+            dig: 0,
+            strikes: 1,
+        };
+
+        let player_effects = vec![ItemEffect {
+            trigger: TriggerType::EveryOtherTurnFirstHit,
+            once_per_turn: true, // First hit only
+            effect_type: EffectType::Heal,
+            value: 2,
+            condition: Condition::None,
+        }];
+        let enemy_effects = vec![];
+
+        let outcome = resolve_combat(player, enemy, player_effects, enemy_effects).unwrap();
+
+        // Count heals on turn 2 - should be exactly 1 despite 3 strikes
+        let heals_on_turn_2 = outcome
+            .log
+            .iter()
+            .filter(|entry| {
+                matches!(entry.action, LogAction::Heal)
+                    && entry.is_player
+                    && entry.turn == 2
+                    && entry.value == 2
+            })
+            .count();
+
+        assert_eq!(
+            heals_on_turn_2, 1,
+            "Should heal exactly once on turn 2 despite multiple strikes. Log: {:?}",
+            outcome.log
+        );
+    }
+
+    /// Test EveryOtherTurnFirstHit with non-weapon damage (like Ruby Shard G-GR-06).
+    #[test]
+    fn test_every_other_turn_first_hit_deals_damage() {
+        let player = CombatantInput {
+            hp: 50,
+            max_hp: 50,
+            atk: 3,
+            arm: 5,
+            spd: 2,
+            dig: 0,
+            strikes: 1,
+        };
+        let enemy = CombatantInput {
+            hp: 50,
+            max_hp: 50,
+            atk: 2,
+            arm: 5,
+            spd: 1,
+            dig: 0,
+            strikes: 1,
+        };
+
+        // Ruby Shard: Deal non-weapon damage on first hit every other turn
+        let player_effects = vec![ItemEffect {
+            trigger: TriggerType::EveryOtherTurnFirstHit,
+            once_per_turn: true,
+            effect_type: EffectType::DealNonWeaponDamage,
+            value: 2,
+            condition: Condition::None,
+        }];
+        let enemy_effects = vec![];
+
+        let outcome = resolve_combat(player, enemy, player_effects, enemy_effects).unwrap();
+
+        // Should have dealt non-weapon damage on turn 2
+        let damage_on_turn_2 = outcome.log.iter().any(|entry| {
+            matches!(entry.action, LogAction::NonWeaponDamage)
+                && !entry.is_player // Damage dealt TO enemy
+                && entry.turn == 2
+                && entry.value == 2
+        });
+
+        assert!(
+            damage_on_turn_2,
+            "Ruby Shard should deal 2 non-weapon damage on turn 2. Log: {:?}",
+            outcome.log
+        );
+    }
+
+    /// Test EveryOtherTurnFirstHit with armor gain (like Sapphire Shard G-GR-07).
+    #[test]
+    fn test_every_other_turn_first_hit_gains_armor() {
+        let player = CombatantInput {
+            hp: 50,
+            max_hp: 50,
+            atk: 3,
+            arm: 0, // Start with no armor
+            spd: 2,
+            dig: 0,
+            strikes: 1,
+        };
+        let enemy = CombatantInput {
+            hp: 50,
+            max_hp: 50,
+            atk: 2,
+            arm: 5,
+            spd: 1,
+            dig: 0,
+            strikes: 1,
+        };
+
+        // Sapphire Shard: Gain armor on first hit every other turn
+        let player_effects = vec![ItemEffect {
+            trigger: TriggerType::EveryOtherTurnFirstHit,
+            once_per_turn: true,
+            effect_type: EffectType::GainArmor,
+            value: 2,
+            condition: Condition::None,
+        }];
+        let enemy_effects = vec![];
+
+        let outcome = resolve_combat(player, enemy, player_effects, enemy_effects).unwrap();
+
+        // Should have gained armor on turn 2
+        let armor_on_turn_2 = outcome.log.iter().any(|entry| {
+            matches!(entry.action, LogAction::ArmorChange)
+                && entry.is_player
+                && entry.turn == 2
+                && entry.value == 2
+        });
+
+        assert!(
+            armor_on_turn_2,
+            "Sapphire Shard should gain 2 armor on turn 2. Log: {:?}",
+            outcome.log
+        );
+    }
+
+    /// Test that EveryOtherTurnFirstHit fires on multiple even turns (2, 4, 6...).
+    #[test]
+    fn test_every_other_turn_first_hit_fires_on_multiple_even_turns() {
+        // Long combat to verify trigger fires on turns 2 and 4
+        let player = CombatantInput {
+            hp: 100,
+            max_hp: 100,
+            atk: 3,
+            arm: 10,
+            spd: 2,
+            dig: 0,
+            strikes: 1,
+        };
+        let enemy = CombatantInput {
+            hp: 100,
+            max_hp: 100,
+            atk: 2,
+            arm: 10,
+            spd: 1,
+            dig: 0,
+            strikes: 1,
+        };
+
+        let player_effects = vec![ItemEffect {
+            trigger: TriggerType::EveryOtherTurnFirstHit,
+            once_per_turn: true,
+            effect_type: EffectType::GainArmor,
+            value: 1,
+            condition: Condition::None,
+        }];
+        let enemy_effects = vec![];
+
+        let outcome = resolve_combat(player, enemy, player_effects, enemy_effects).unwrap();
+
+        // Count armor gains on even turns
+        let armor_on_turn_2 = outcome.log.iter().any(|entry| {
+            matches!(entry.action, LogAction::ArmorChange)
+                && entry.is_player
+                && entry.turn == 2
+                && entry.value == 1
+        });
+        let armor_on_turn_4 = outcome.log.iter().any(|entry| {
+            matches!(entry.action, LogAction::ArmorChange)
+                && entry.is_player
+                && entry.turn == 4
+                && entry.value == 1
+        });
+
+        // The combat should last long enough to reach turn 4
+        if outcome.turns_taken >= 4 {
+            assert!(
+                armor_on_turn_2 && armor_on_turn_4,
+                "Should gain armor on both turn 2 and turn 4. Log: {:?}",
+                outcome.log
+            );
+        } else {
+            // At minimum, turn 2 should have triggered
+            assert!(
+                armor_on_turn_2,
+                "Should gain armor on turn 2. Log: {:?}",
+                outcome.log
+            );
+        }
+    }
 }

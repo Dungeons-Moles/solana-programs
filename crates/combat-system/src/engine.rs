@@ -130,6 +130,23 @@ pub fn execute_strikes(
                 log,
             );
 
+            // Process EveryOtherTurnFirstHit triggers (fires on even turns, first hit only)
+            // The once_per_turn flag ensures only the first hit triggers the effect
+            process_triggers_for_phase(
+                on_hit_effects,
+                TriggerType::EveryOtherTurnFirstHit,
+                turn,
+                attacker_stats,
+                attacker_status,
+                defender_stats,
+                defender_status,
+                triggered_flags,
+                is_player_attacking,
+                false, // acts_first: unused for this trigger
+                gold_change,
+                log,
+            );
+
             // Check if rust was applied to defender (for OnApplyRust)
             let rust_applied_to_defender = defender_status.rust > defender_rust_before;
             // Check if shrapnel was gained by attacker (for OnGainShrapnel)

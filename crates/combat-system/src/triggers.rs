@@ -54,7 +54,8 @@ pub fn should_trigger(
         TriggerType::OnGainShrapnel => true,
         // DayStart is processed outside combat system
         TriggerType::DayStart => false,
-        // FirstTimeWounded is handled specially with state tracking
+        // FirstTimeWounded is invoked by the combat loop only once when HP first
+        // drops below 50%. The "first time" check is handled by CombatState flags.
         TriggerType::FirstTimeWounded => true,
     }
 }

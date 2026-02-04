@@ -13,7 +13,7 @@ use effects::{
 };
 use errors::CombatSystemError;
 use state::{CombatState, CombatantInput, StatusEffects};
-use triggers::{process_triggers_for_phase, reset_once_per_turn_flags};
+use triggers::{check_wounded, process_triggers_for_phase, reset_once_per_turn_flags};
 
 // Re-export common types for use by other programs
 pub use state::{
@@ -66,6 +66,8 @@ pub fn resolve_combat(
         enemy_status: StatusEffects::default(),
         sudden_death_bonus: 0,
         gold_change: 0,
+        player_has_become_wounded: false,
+        enemy_has_become_wounded: false,
     };
 
     let mut player_triggered = vec![false; player_effects.len()];
@@ -298,7 +300,99 @@ fn execute_turn(
     combat_state.player_status = player_status;
     combat_state.enemy_status = enemy_status;
 
+    // Check for first-time wounded transitions and fire FirstTimeWounded triggers
+    check_first_time_wounded(
+        combat_state,
+        player_effects,
+        enemy_effects,
+        player_triggered,
+        enemy_triggered,
+        log,
+    );
+
     Ok((player_damage_dealt, enemy_damage_dealt))
+}
+
+/// Check if either combatant became wounded for the first time this battle and fire
+/// the FirstTimeWounded trigger for their effects. This ensures items like Gore Mantle
+/// (G-BO-07) work correctly.
+fn check_first_time_wounded(
+    combat_state: &mut CombatState,
+    player_effects: &mut [ItemEffect],
+    enemy_effects: &mut [ItemEffect],
+    player_triggered: &mut [bool],
+    enemy_triggered: &mut [bool],
+    log: &mut Vec<CombatLogEntry>,
+) {
+    let turn = combat_state.turn;
+    let (player_acts_first, _) =
+        engine::determine_turn_order(combat_state.player_spd, combat_state.enemy_spd);
+
+    // Check if player became wounded for the first time
+    if !combat_state.player_has_become_wounded
+        && check_wounded(combat_state.player_hp, combat_state.player_max_hp)
+    {
+        combat_state.player_has_become_wounded = true;
+
+        // Fire FirstTimeWounded effects for player
+        let mut player_stats = combat_state.player_stats();
+        let mut player_status = combat_state.player_status;
+        let mut enemy_stats = combat_state.enemy_stats();
+        let mut enemy_status = combat_state.enemy_status;
+
+        process_triggers_for_phase(
+            player_effects,
+            TriggerType::FirstTimeWounded,
+            turn,
+            &mut player_stats,
+            &mut player_status,
+            &mut enemy_stats,
+            &mut enemy_status,
+            player_triggered,
+            true, // is_owner_player
+            player_acts_first,
+            &mut combat_state.gold_change,
+            log,
+        );
+
+        combat_state.set_player_stats(&player_stats);
+        combat_state.player_status = player_status;
+        combat_state.set_enemy_stats(&enemy_stats);
+        combat_state.enemy_status = enemy_status;
+    }
+
+    // Check if enemy became wounded for the first time
+    if !combat_state.enemy_has_become_wounded
+        && check_wounded(combat_state.enemy_hp, combat_state.enemy_max_hp)
+    {
+        combat_state.enemy_has_become_wounded = true;
+
+        // Fire FirstTimeWounded effects for enemy
+        let mut enemy_stats = combat_state.enemy_stats();
+        let mut enemy_status = combat_state.enemy_status;
+        let mut player_stats = combat_state.player_stats();
+        let mut player_status = combat_state.player_status;
+
+        process_triggers_for_phase(
+            enemy_effects,
+            TriggerType::FirstTimeWounded,
+            turn,
+            &mut enemy_stats,
+            &mut enemy_status,
+            &mut player_stats,
+            &mut player_status,
+            enemy_triggered,
+            false, // is_owner_player (enemy is owner)
+            !player_acts_first,
+            &mut combat_state.gold_change,
+            log,
+        );
+
+        combat_state.set_enemy_stats(&enemy_stats);
+        combat_state.enemy_status = enemy_status;
+        combat_state.set_player_stats(&player_stats);
+        combat_state.player_status = player_status;
+    }
 }
 
 fn apply_sudden_death(combat_state: &mut CombatState, turn: u8) -> Result<()> {
@@ -542,4 +636,168 @@ fn update_status_applied(
     target.rust = target.rust.saturating_add(applied.rust);
     target.bleed = target.bleed.saturating_add(applied.bleed);
     target.reflection = target.reflection.saturating_add(applied.reflection);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use state::{Condition, ItemEffect};
+
+    /// Test that FirstTimeWounded triggers when player HP first drops below 50%.
+    /// This verifies Gore Mantle (G-BO-07) functionality.
+    #[test]
+    fn test_first_time_wounded_triggers_once_for_player() {
+        // Player: 20 HP, enemy: 10 HP. Enemy has enough ATK to wound player.
+        let player = CombatantInput {
+            hp: 20,
+            max_hp: 20,
+            atk: 2,
+            arm: 0,
+            spd: 1, // Player acts second
+            dig: 0,
+            strikes: 1,
+        };
+        let enemy = CombatantInput {
+            hp: 100, // Enemy won't die quickly
+            max_hp: 100,
+            atk: 5, // Will deal 5 damage per strike, wounding player after 2 hits
+            arm: 0,
+            spd: 2, // Enemy acts first
+            dig: 0,
+            strikes: 2,
+        };
+
+        // Player has a FirstTimeWounded effect that grants 6 armor (simulating Gore Mantle)
+        let player_effects = vec![ItemEffect {
+            trigger: TriggerType::FirstTimeWounded,
+            once_per_turn: false,
+            effect_type: EffectType::GainArmor,
+            value: 6,
+            condition: Condition::None,
+        }];
+        let enemy_effects = vec![];
+
+        let outcome = resolve_combat(player, enemy, player_effects, enemy_effects).unwrap();
+
+        // The combat should proceed without errors, and the player should have gained armor
+        // from the FirstTimeWounded trigger when they first became wounded.
+        // Player takes 10 damage on turn 1 (2 strikes * 5 ATK = 10 damage).
+        // 20 - 10 = 10 HP, which is exactly 50%, so NOT wounded (wounded = HP * 2 < max_hp).
+        // But enemy hits again on turn 2, bringing player to lower HP.
+        // When player HP drops below 50% (< 10 HP out of 20), FirstTimeWounded fires.
+
+        // Check that log contains an armor_change entry (proof the trigger fired)
+        let armor_gain_log_entries: Vec<_> = outcome
+            .log
+            .iter()
+            .filter(|entry| {
+                matches!(entry.action, LogAction::ArmorChange) && entry.is_player && entry.value > 0
+            })
+            .collect();
+
+        assert!(
+            !armor_gain_log_entries.is_empty(),
+            "Player should have gained armor from FirstTimeWounded trigger. Log: {:?}",
+            outcome.log
+        );
+    }
+
+    /// Test that FirstTimeWounded only fires once, even if player stays wounded.
+    #[test]
+    fn test_first_time_wounded_only_fires_once() {
+        // Player will be wounded early and stay wounded for multiple turns
+        let player = CombatantInput {
+            hp: 20,
+            max_hp: 20,
+            atk: 1,  // Low damage to extend combat
+            arm: 10, // Some armor to survive
+            spd: 1,
+            dig: 0,
+            strikes: 1,
+        };
+        let enemy = CombatantInput {
+            hp: 50,
+            max_hp: 50,
+            atk: 15, // High damage to wound player quickly
+            arm: 0,
+            spd: 2,
+            dig: 0,
+            strikes: 1,
+        };
+
+        // Player has a FirstTimeWounded effect that grants 6 armor
+        let player_effects = vec![ItemEffect {
+            trigger: TriggerType::FirstTimeWounded,
+            once_per_turn: false,
+            effect_type: EffectType::GainArmor,
+            value: 6,
+            condition: Condition::None,
+        }];
+        let enemy_effects = vec![];
+
+        let outcome = resolve_combat(player, enemy, player_effects, enemy_effects).unwrap();
+
+        // Count how many times player gained exactly 6 armor (our trigger value)
+        let armor_gain_count = outcome
+            .log
+            .iter()
+            .filter(|entry| {
+                matches!(entry.action, LogAction::ArmorChange)
+                    && entry.is_player
+                    && entry.value == 6
+            })
+            .count();
+
+        assert_eq!(
+            armor_gain_count, 1,
+            "FirstTimeWounded should fire exactly once. Log: {:?}",
+            outcome.log
+        );
+    }
+
+    /// Test that FirstTimeWounded triggers for enemy when their HP drops below 50%.
+    #[test]
+    fn test_first_time_wounded_triggers_for_enemy() {
+        let player = CombatantInput {
+            hp: 100,
+            max_hp: 100,
+            atk: 15, // High damage to wound enemy
+            arm: 0,
+            spd: 2, // Player acts first
+            dig: 0,
+            strikes: 1,
+        };
+        let enemy = CombatantInput {
+            hp: 20,
+            max_hp: 20,
+            atk: 1,
+            arm: 0,
+            spd: 1,
+            dig: 0,
+            strikes: 1,
+        };
+
+        let player_effects = vec![];
+        // Enemy has a FirstTimeWounded effect that grants 6 armor
+        let enemy_effects = vec![ItemEffect {
+            trigger: TriggerType::FirstTimeWounded,
+            once_per_turn: false,
+            effect_type: EffectType::GainArmor,
+            value: 6,
+            condition: Condition::None,
+        }];
+
+        let outcome = resolve_combat(player, enemy, player_effects, enemy_effects).unwrap();
+
+        // Check that log contains an armor_change entry for enemy
+        let enemy_armor_gain = outcome.log.iter().any(|entry| {
+            matches!(entry.action, LogAction::ArmorChange) && !entry.is_player && entry.value > 0
+        });
+
+        assert!(
+            enemy_armor_gain,
+            "Enemy should have gained armor from FirstTimeWounded trigger. Log: {:?}",
+            outcome.log
+        );
+    }
 }

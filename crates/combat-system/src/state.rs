@@ -295,6 +295,12 @@ pub(crate) struct CombatState {
     pub sudden_death_bonus: i16,
     /// Net gold change during combat (positive = player gains, negative = player loses)
     pub gold_change: i16,
+    /// Whether the player has already become wounded (HP < 50%) this battle.
+    /// Used for FirstTimeWounded trigger to fire only once.
+    pub player_has_become_wounded: bool,
+    /// Whether the enemy has already become wounded (HP < 50%) this battle.
+    /// Used for FirstTimeWounded trigger to fire only once.
+    pub enemy_has_become_wounded: bool,
 }
 
 impl CombatState {

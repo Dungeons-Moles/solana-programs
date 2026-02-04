@@ -134,10 +134,20 @@ pub fn apply_effect(
 
     match effect_type {
         EffectType::DealDamage => {
-            let damage = (value - stats.arm).max(0);
-            stats.hp = stats.hp.checked_sub(damage).unwrap_or(i16::MIN);
-            if damage > 0 {
-                log.push(CombatLogEntry::attack(turn, !is_target_player, damage));
+            // ARM is "HP before HP": deplete ARM first, overflow to HP
+            let arm_damage = value.min(stats.arm.max(0));
+            stats.arm = stats.arm.saturating_sub(arm_damage);
+            let hp_damage = value.saturating_sub(arm_damage);
+            stats.hp = stats.hp.checked_sub(hp_damage).unwrap_or(i16::MIN);
+            if arm_damage > 0 {
+                log.push(CombatLogEntry::armor_change(
+                    turn,
+                    is_target_player,
+                    -arm_damage,
+                ));
+            }
+            if hp_damage > 0 {
+                log.push(CombatLogEntry::attack(turn, !is_target_player, hp_damage));
             }
         }
         EffectType::DealNonWeaponDamage => {

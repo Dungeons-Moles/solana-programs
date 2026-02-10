@@ -44,6 +44,11 @@ impl GameSession {
     /// 8 (started_at) + 8 (last_activity) + 1 (is_delegated) + 1 (bump) +
     /// 10 (active_item_pool) + 32 (burner_wallet) + 32 (state_hash)
     pub const INIT_SPACE: usize = 32 + 8 + 1 + 8 + 8 + 1 + 1 + 10 + 32 + 32;
+
+    /// Byte offset of `player` field in serialized account data (after 8-byte discriminator).
+    pub const PLAYER_OFFSET: usize = 8;
+    /// Byte offset of `burner_wallet` field in serialized account data.
+    pub const BURNER_WALLET_OFFSET: usize = 77;
 }
 
 /// Global counter for generating unique session IDs

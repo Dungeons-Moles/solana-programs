@@ -20,12 +20,12 @@ pub static CAVE_BAT_TRAITS: [ItemEffect; 1] = [ItemEffect {
     condition: Condition::None,
 }];
 
-/// Spore Slime: Battle Start: apply 2 Chill to player
+/// Spore Slime: Battle Start: apply 1 Chill to player
 pub static SPORE_SLIME_TRAITS: [ItemEffect; 1] = [ItemEffect {
     trigger: TriggerType::BattleStart,
     once_per_turn: false,
     effect_type: EffectType::ApplyChill,
-    value: 2,
+    value: 1,
     condition: Condition::None,
 }];
 
@@ -38,39 +38,39 @@ pub static RUST_MITE_TRAITS: [ItemEffect; 1] = [ItemEffect {
     condition: Condition::None,
 }];
 
-/// Collapsed Miner: Wounded: gain +3 ATK (this battle)
+/// Collapsed Miner: Wounded: gain +2 ATK (this battle)
 pub static COLLAPSED_MINER_TRAITS: [ItemEffect; 1] = [ItemEffect {
     trigger: TriggerType::Wounded,
     once_per_turn: false,
     effect_type: EffectType::GainAtk,
-    value: 3,
+    value: 2,
     condition: Condition::None,
 }];
 
-/// Shard Beetle: Battle Start: gain 6 Shrapnel
+/// Shard Beetle: Battle Start: gain 3 Shrapnel
 pub static SHARD_BEETLE_TRAITS: [ItemEffect; 1] = [ItemEffect {
     trigger: TriggerType::BattleStart,
     once_per_turn: false,
     effect_type: EffectType::ApplyShrapnel,
-    value: 6,
+    value: 3,
     condition: Condition::None,
 }];
 
-/// Tunnel Warden: First strike each turn: remove 3 Armor from player before damage
+/// Tunnel Warden: First strike each turn: remove 2 Armor from player before damage
 pub static TUNNEL_WARDEN_TRAITS: [ItemEffect; 1] = [ItemEffect {
     trigger: TriggerType::TurnStart,
     once_per_turn: true,
     effect_type: EffectType::RemoveArmor,
-    value: 3,
+    value: 2,
     condition: Condition::None,
 }];
 
-/// Burrow Ambusher: Battle Start: deal 3 damage ignoring Armor
+/// Burrow Ambusher: Battle Start: deal 2 damage ignoring Armor
 pub static BURROW_AMBUSHER_TRAITS: [ItemEffect; 1] = [ItemEffect {
     trigger: TriggerType::BattleStart,
     once_per_turn: false,
     effect_type: EffectType::DealNonWeaponDamage,
-    value: 3,
+    value: 2,
     condition: Condition::None,
 }];
 
@@ -83,13 +83,13 @@ pub static FROST_WISP_TRAITS: [ItemEffect; 1] = [ItemEffect {
     condition: Condition::None,
 }];
 
-/// Powder Tick: Countdown(2): deal 6 damage to player (non-weapon)
-/// Fires every 2 turns (turn 2, 4, 6, etc.)
+/// Powder Tick: Countdown(3): deal 5 damage to player (non-weapon)
+/// Fires every 3 turns (turn 3, 6, 9, etc.)
 pub static POWDER_TICK_TRAITS: [ItemEffect; 1] = [ItemEffect {
-    trigger: TriggerType::Countdown { turns: 2 },
+    trigger: TriggerType::Countdown { turns: 3 },
     once_per_turn: false,
     effect_type: EffectType::DealNonWeaponDamage,
-    value: 6,
+    value: 5,
     condition: Condition::None,
 }];
 
@@ -142,7 +142,7 @@ mod tests {
         assert_eq!(traits.len(), 1);
         assert!(matches!(traits[0].trigger, TriggerType::BattleStart));
         assert!(matches!(traits[0].effect_type, EffectType::ApplyShrapnel));
-        assert_eq!(traits[0].value, 6);
+        assert_eq!(traits[0].value, 3);
     }
 
     #[test]
@@ -161,7 +161,7 @@ mod tests {
         assert_eq!(traits.len(), 1);
         assert!(matches!(traits[0].trigger, TriggerType::BattleStart));
         assert!(matches!(traits[0].effect_type, EffectType::ApplyChill));
-        assert_eq!(traits[0].value, 2);
+        assert_eq!(traits[0].value, 1);
     }
 
     #[test]

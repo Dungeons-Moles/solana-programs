@@ -47,7 +47,15 @@ pub fn generate_gear_effects(gear_slots: &[Option<ItemInstance>]) -> Vec<ItemEff
     gear_slots
         .iter()
         .flatten()
-        .flat_map(generate_item_effects)
+        .flat_map(|item| {
+            let mut effects = generate_item_effects(item);
+            for effect in effects.iter_mut() {
+                if effect.effect_type == EffectType::GainAtk {
+                    effect.effect_type = EffectType::GainGearAtk;
+                }
+            }
+            effects
+        })
         .collect()
 }
 
@@ -108,19 +116,19 @@ mod tests {
 
     #[test]
     fn test_tool_effects_with_tier_scaling() {
-        // T-FR-01 (Rime Pike): +2/3/4 ATK, OnHit 1 Chill (flat, per GDD)
+        // T-FR-01 (Rime Pike): +1/2/3 ATK, OnHit 1 Chill (flat, per GDD)
         let tool = ItemInstance::new(*b"T-FR-01\0", Tier::II);
         let effects = generate_tool_effects(&tool);
 
-        // Should have 2 effects (ATK and Chill)
-        assert_eq!(effects.len(), 2);
+        // Should have 3 effects (ATK, Chill, and chilled-target bonus damage)
+        assert_eq!(effects.len(), 3);
 
-        // Check ATK bonus uses Tier II value (3)
+        // Check ATK bonus uses Tier II value (2)
         let atk_effect = effects
             .iter()
             .find(|e| e.effect_type == EffectType::GainAtk);
         assert!(atk_effect.is_some());
-        assert_eq!(atk_effect.unwrap().value, 3);
+        assert_eq!(atk_effect.unwrap().value, 2);
 
         // Check Chill is flat 1 (per GDD: "On Hit (once/turn): apply 1 Chill")
         let chill_effect = effects
@@ -224,13 +232,13 @@ mod tests {
         let effects = generate_combat_effects(&inventory);
 
         // Should have:
-        // - 2 from tool (ATK, Chill)
+        // - 3 from tool (ATK, Chill, chilled-target bonus damage)
         // - 1 from G-ST-01 (ARM)
         // - 2 from G-ST-02 (ARM, Heal)
         // - 1 from G-SC-01 (DIG)
         // - 2 from Union Standard (ARM, DIG)
-        // Total: 8 effects
-        assert_eq!(effects.len(), 8);
+        // Total: 9 effects
+        assert_eq!(effects.len(), 9);
     }
 
     #[test]

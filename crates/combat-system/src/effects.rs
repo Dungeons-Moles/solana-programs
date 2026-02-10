@@ -1,5 +1,10 @@
 use crate::state::StatusEffects;
 
+#[inline]
+pub fn chill_damage_bonus(chill_stacks: u8) -> i16 {
+    i16::from(chill_stacks.min(3))
+}
+
 pub fn apply_chill_to_strikes(base_strikes: u8, chill_stacks: u8) -> u8 {
     let reduced = base_strikes.saturating_sub(chill_stacks);
     reduced.max(1)
@@ -11,6 +16,20 @@ pub fn process_shrapnel_retaliation(shrapnel_stacks: u8, attacker_hp: i16) -> i1
     }
 
     let damage = i16::from(shrapnel_stacks);
+    attacker_hp.checked_sub(damage).unwrap_or(i16::MIN)
+}
+
+pub fn process_shrapnel_retaliation_with_chill(
+    shrapnel_stacks: u8,
+    attacker_chill_stacks: u8,
+    attacker_hp: i16,
+) -> i16 {
+    if shrapnel_stacks == 0 {
+        return attacker_hp;
+    }
+
+    let damage =
+        i16::from(shrapnel_stacks).saturating_add(chill_damage_bonus(attacker_chill_stacks));
     attacker_hp.checked_sub(damage).unwrap_or(i16::MIN)
 }
 
@@ -30,6 +49,15 @@ pub fn process_bleed_damage(bleed_stacks: u8, current_hp: i16) -> i16 {
     }
 
     let damage = i16::from(bleed_stacks);
+    current_hp.checked_sub(damage).unwrap_or(i16::MIN)
+}
+
+pub fn process_bleed_damage_with_chill(bleed_stacks: u8, chill_stacks: u8, current_hp: i16) -> i16 {
+    if bleed_stacks == 0 {
+        return current_hp;
+    }
+
+    let damage = i16::from(bleed_stacks).saturating_add(chill_damage_bonus(chill_stacks));
     current_hp.checked_sub(damage).unwrap_or(i16::MIN)
 }
 

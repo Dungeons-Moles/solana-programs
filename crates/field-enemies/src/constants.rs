@@ -84,7 +84,7 @@ pub fn get_biome_weights(act: u8) -> &'static [u8; ARCHETYPE_COUNT] {
 
 /// Get spawn count for an act (1-indexed)
 pub fn get_spawn_count(act: u8) -> u8 {
-    if act >= 1 && act <= 4 {
+    if (1..=4).contains(&act) {
         SPAWN_COUNTS[(act - 1) as usize]
     } else {
         SPAWN_COUNTS[0] // fallback to Act 1
@@ -93,7 +93,7 @@ pub fn get_spawn_count(act: u8) -> u8 {
 
 /// Get tier distribution for an act (1-indexed)
 pub fn get_tier_distribution(act: u8) -> &'static TierDistribution {
-    if act >= 1 && act <= 4 {
+    if (1..=4).contains(&act) {
         &TIER_DISTRIBUTIONS[(act - 1) as usize]
     } else {
         &TIER_DISTRIBUTIONS[0] // fallback to Act 1

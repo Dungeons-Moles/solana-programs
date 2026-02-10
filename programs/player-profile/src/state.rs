@@ -29,7 +29,7 @@ pub struct PlayerProfile {
     pub bump: u8,
 
     /// Bitmask of unlocked items (80 bits = 10 bytes)
-    /// Bits 0-39 are starter items, bits 40-79 are unlockable items
+    /// Bits 0-39 are starter items, bits 40-92 are unlockable items
     pub unlocked_items: [u8; ITEM_BITMASK_SIZE],
 
     /// Bitmask of items in the active pool for new sessions

@@ -2,7 +2,7 @@
 //!
 //! Contains all 12 itemset definitions as compile-time constants.
 
-use crate::state::{EffectDefinition, EffectType, PlayerInventory, TriggerType};
+use crate::state::{Condition, EffectDefinition, EffectType, PlayerInventory, TriggerType};
 
 /// Static itemset definition (compile-time constant)
 #[derive(Clone, Copy, Debug)]
@@ -47,33 +47,41 @@ pub const UNION_STANDARD: ItemsetDefinition = ItemsetDefinition {
 };
 
 /// Shard Circuit: G-GR-05, G-GR-06, G-GR-07, G-GR-08
-/// Bonus: Shards trigger every turn (represented as extra gold per turn)
+/// Bonus: Shards trigger every turn
 pub const SHARD_CIRCUIT: ItemsetDefinition = ItemsetDefinition {
     id: "shard-circuit",
     name: "Shard Circuit",
     emoji: "💎",
     required_items: &[*b"G-GR-05\0", *b"G-GR-06\0", *b"G-GR-07\0", *b"G-GR-08\0"],
     bonus_effect: &[EffectDefinition::new(
-        TriggerType::TurnStart,
-        EffectType::GainGold,
+        TriggerType::BattleStart,
+        EffectType::ShardsEveryTurn,
         false,
-        [3, 3, 3],
+        [1, 1, 1],
     )],
 };
 
 /// Demolition Permit: G-BL-01, G-BL-02, G-BL-03
-/// Bonus: Bombs tick 1 turn faster (extra bomb damage)
+/// Bonus: Bombs tick 1 turn faster and gain recurring self-damage mitigation
 pub const DEMOLITION_PERMIT: ItemsetDefinition = ItemsetDefinition {
     id: "demolition-permit",
     name: "Demolition Permit",
     emoji: "💣",
     required_items: &[*b"G-BL-01\0", *b"G-BL-02\0", *b"G-BL-03\0"],
-    bonus_effect: &[EffectDefinition::new(
-        TriggerType::TurnStart,
-        EffectType::DealNonWeaponDamage,
-        false,
-        [2, 2, 2],
-    )],
+    bonus_effect: &[
+        EffectDefinition::new(
+            TriggerType::TurnStart,
+            EffectType::ReduceAllCountdowns,
+            false,
+            [1, 1, 1],
+        ),
+        EffectDefinition::new(
+            TriggerType::TurnStart,
+            EffectType::ReduceNextBombSelfDamage,
+            false,
+            [2, 2, 2],
+        ),
+    ],
 };
 
 /// Fuse Network: T-BL-02, G-BL-05, G-BL-04
@@ -84,75 +92,120 @@ pub const FUSE_NETWORK: ItemsetDefinition = ItemsetDefinition {
     emoji: "🔥",
     required_items: &[*b"T-BL-02\0", *b"G-BL-05\0", *b"G-BL-04\0"],
     bonus_effect: &[EffectDefinition::new(
-        TriggerType::FirstTurn,
-        EffectType::DealNonWeaponDamage,
-        true,
+        TriggerType::TurnStart,
+        EffectType::EmpowerNextNonWeaponDamage,
+        false,
         [2, 2, 2],
     )],
 };
 
 /// Shrapnel Harness: G-ST-03, G-ST-06, T-ST-01
-/// Bonus: Keep up to 3 Shrapnel at turn end (extra shrapnel gain)
+/// Bonus: Keep up to 2 Shrapnel at turn end and gain Armor when struck.
 pub const SHRAPNEL_HARNESS: ItemsetDefinition = ItemsetDefinition {
     id: "shrapnel-harness",
     name: "Shrapnel Harness",
     emoji: "🔩",
     required_items: &[*b"G-ST-03\0", *b"G-ST-06\0", *b"T-ST-01\0"],
-    bonus_effect: &[EffectDefinition::new(
-        TriggerType::BattleStart,
-        EffectType::ApplyShrapnel,
-        false,
-        [3, 3, 3],
-    )],
+    bonus_effect: &[
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::PreserveShrapnel,
+            false,
+            [2, 2, 2],
+        ),
+        EffectDefinition::with_condition(
+            TriggerType::OnStruck,
+            EffectType::GainArmor,
+            false,
+            [1, 1, 1],
+            Condition::OwnerHasStatus(crate::state::StatusType::Shrapnel),
+        ),
+    ],
 };
 
 /// Rust Ritual: T-RU-01, G-RU-02, G-RU-03
-/// Bonus: On Hit +1 extra Rust
+/// Bonus: On Hit +1 extra Rust; if enemy has 0 Armor, deal up to 3 non-weapon damage from Rust stacks
 pub const RUST_RITUAL: ItemsetDefinition = ItemsetDefinition {
     id: "rust-ritual",
     name: "Rust Ritual",
     emoji: "🦠",
     required_items: &[*b"T-RU-01\0", *b"G-RU-02\0", *b"G-RU-03\0"],
-    bonus_effect: &[EffectDefinition::new(
-        TriggerType::OnHit,
-        EffectType::ApplyRust,
-        true,
-        [1, 1, 1],
-    )],
+    bonus_effect: &[
+        EffectDefinition::new(TriggerType::OnHit, EffectType::ApplyRust, true, [1, 1, 1]),
+        EffectDefinition::with_condition(
+            TriggerType::OnHit,
+            EffectType::DealNonWeaponDamage,
+            true,
+            [1, 1, 1],
+            Condition::EnemyHasNoArmorAndStatusAtLeast(crate::state::StatusType::Rust, 1),
+        ),
+        EffectDefinition::with_condition(
+            TriggerType::OnHit,
+            EffectType::DealNonWeaponDamage,
+            true,
+            [1, 1, 1],
+            Condition::EnemyHasNoArmorAndStatusAtLeast(crate::state::StatusType::Rust, 2),
+        ),
+        EffectDefinition::with_condition(
+            TriggerType::OnHit,
+            EffectType::DealNonWeaponDamage,
+            true,
+            [1, 1, 1],
+            Condition::EnemyHasNoArmorAndStatusAtLeast(crate::state::StatusType::Rust, 3),
+        ),
+    ],
 };
 
 /// Swift Digger Kit: T-SC-01, G-SC-01, G-SC-06
-/// Bonus: If DIG > enemy DIG: +2 strikes (represented as bonus damage)
+/// Bonus: If DIG > enemy DIG: +1 strike and +2 ATK.
 pub const SWIFT_DIGGER_KIT: ItemsetDefinition = ItemsetDefinition {
     id: "swift-digger-kit",
     name: "Swift Digger Kit",
     emoji: "⛏️",
     required_items: &[*b"T-SC-01\0", *b"G-SC-01\0", *b"G-SC-06\0"],
-    bonus_effect: &[EffectDefinition::new(
-        TriggerType::BattleStart,
-        EffectType::GainDig,
-        false,
-        [3, 3, 3],
-    )],
+    bonus_effect: &[
+        EffectDefinition::with_condition(
+            TriggerType::BattleStart,
+            EffectType::GainStrikes,
+            false,
+            [1, 1, 1],
+            Condition::DigGreaterThanEnemyDig,
+        ),
+        EffectDefinition::with_condition(
+            TriggerType::BattleStart,
+            EffectType::GainAtk,
+            false,
+            [2, 2, 2],
+            Condition::DigGreaterThanEnemyDig,
+        ),
+    ],
 };
 
 /// Royal Extraction: G-GR-01, G-GR-04, T-GR-02
-/// Bonus: Gold→Armor becomes 1→4 (extra armor from gold)
+/// Bonus: Gold->Armor becomes 1->4 and gain +1 Gold at battle start.
 pub const ROYAL_EXTRACTION: ItemsetDefinition = ItemsetDefinition {
     id: "royal-extraction",
     name: "Royal Extraction",
     emoji: "👑",
     required_items: &[*b"G-GR-01\0", *b"G-GR-04\0", *b"T-GR-02\0"],
-    bonus_effect: &[EffectDefinition::new(
-        TriggerType::TurnStart,
-        EffectType::GainArmor,
-        false,
-        [2, 2, 2],
-    )],
+    bonus_effect: &[
+        EffectDefinition::new(
+            TriggerType::TurnStart,
+            EffectType::ConsumeGoldForArmor,
+            false,
+            [4, 4, 4],
+        ),
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainGold,
+            false,
+            [1, 1, 1],
+        ),
+    ],
 };
 
 /// Whiteout Initiative: G-FR-04, G-FR-03, G-TE-05
-/// Bonus: Battle Start +1 SPD; act first Turn 1: +2 Chill
+/// Bonus: Battle Start +1 SPD; act first Turn 1: +2 Chill and +3 first-strike damage.
 pub const WHITEOUT_INITIATIVE: ItemsetDefinition = ItemsetDefinition {
     id: "whiteout-initiative",
     name: "Whiteout Initiative",
@@ -166,10 +219,16 @@ pub const WHITEOUT_INITIATIVE: ItemsetDefinition = ItemsetDefinition {
             [1, 1, 1],
         ),
         EffectDefinition::new(
-            TriggerType::FirstTurn,
+            TriggerType::FirstTurnIfFaster,
             EffectType::ApplyChill,
             false,
             [2, 2, 2],
+        ),
+        EffectDefinition::new(
+            TriggerType::FirstTurnIfFaster,
+            EffectType::DealDamage,
+            true,
+            [3, 3, 3],
         ),
     ],
 };
@@ -189,9 +248,9 @@ pub const BLOODRUSH_PROTOCOL: ItemsetDefinition = ItemsetDefinition {
             [2, 2, 2],
         ),
         EffectDefinition::new(
-            TriggerType::FirstTurn,
+            TriggerType::OnEnemyBleedDamage,
             EffectType::GainSpd,
-            false,
+            true,
             [1, 1, 1],
         ),
     ],
@@ -205,9 +264,9 @@ pub const CORROSION_PAYLOAD: ItemsetDefinition = ItemsetDefinition {
     emoji: "☢️",
     required_items: &[*b"G-RU-02\0", *b"G-BL-03\0", *b"G-BL-05\0"],
     bonus_effect: &[EffectDefinition::new(
-        TriggerType::TurnStart,
+        TriggerType::Countdown { turns: 1 },
         EffectType::ApplyRust,
-        false,
+        true,
         [1, 1, 1],
     )],
 };
@@ -220,9 +279,9 @@ pub const GOLDEN_SHRAPNEL_EXCHANGE: ItemsetDefinition = ItemsetDefinition {
     emoji: "✨",
     required_items: &[*b"G-GR-04\0", *b"G-ST-06\0", *b"G-GR-03\0"],
     bonus_effect: &[EffectDefinition::new(
-        TriggerType::TurnStart,
+        TriggerType::OnGoldArmorConverted,
         EffectType::ApplyShrapnel,
-        false,
+        true,
         [3, 3, 3],
     )],
 };

@@ -169,11 +169,13 @@ pub struct ToolOilResult {
     pub modification: u8,
     /// New tool oil flags after applying
     pub new_flags: u8,
+    /// Gold cost for this interaction
+    pub cost: u16,
 }
 
 /// Execute tool oil interaction for L4 (Tool Oil Rack).
 ///
-/// Tool Oil Rack is RepeatablePerTool - each oil type can only be applied once per tool.
+/// Tool Oil Rack is one-time use. The selected oil still must not already be on the tool.
 /// The player can choose between +1 ATK, +1 SPD, or +1 DIG.
 ///
 /// Arguments:
@@ -185,6 +187,8 @@ pub fn execute_tool_oil_interaction(
     poi: &PoiInstance,
     current_oil_flags: u8,
     modification: u8,
+    _act: u8,
+    _player_gold: u16,
     is_night: bool,
 ) -> Result<ToolOilResult, PoiSystemError> {
     let def = can_interact(poi, is_night)?;
@@ -214,6 +218,7 @@ pub fn execute_tool_oil_interaction(
     Ok(ToolOilResult {
         modification,
         new_flags,
+        cost: 0,
     })
 }
 
@@ -221,7 +226,7 @@ pub fn execute_tool_oil_interaction(
 // Shop Interactions (L9 Smuggler Hatch)
 // =============================================================================
 
-use crate::offers::{calculate_price, ItemRarity, ItemType as OfferItemType};
+use crate::offers::{calculate_price, rarity_from_item_id, ItemRarity, ItemType as OfferItemType};
 use crate::state::ShopState;
 
 /// Validate that a POI can be used as a shop (L9 Smuggler Hatch)
@@ -322,7 +327,7 @@ pub struct AnvilUpgradeResult {
 
 /// Execute Rusty Anvil upgrade (L10).
 ///
-/// Upgrades a tool tier: I -> II costs 8 Gold, II -> III costs 16 Gold.
+/// Upgrades a tool tier: I -> II costs 10 Gold, II -> III costs 20 Gold.
 /// POI is one-time use.
 pub fn execute_anvil_upgrade(
     poi: &PoiInstance,
@@ -720,12 +725,14 @@ pub struct ScrapGearResult {
     pub item_id: [u8; 8],
     /// Gold cost paid
     pub cost: u16,
+    /// Gold refunded based on item rarity
+    pub refund: u16,
 }
 
 /// Execute Scrap Chute interaction (L14).
 ///
-/// Destroys one gear item for a gold cost (8-12 depending on act).
-/// POI is one-time use.
+/// Destroys one gear item for a flat 4 Gold cost, with rarity refund.
+/// POI is repeatable.
 pub fn execute_scrap_gear(
     poi: &PoiInstance,
     item_id: [u8; 8],
@@ -747,7 +754,19 @@ pub fn execute_scrap_gear(
         return Err(PoiSystemError::InsufficientGold);
     }
 
-    Ok(ScrapGearResult { item_id, cost })
+    let refund = match rarity_from_item_id(&item_id) {
+        0 => 2,
+        1 => 4,
+        2 => 6,
+        3 => 10,
+        _ => 2,
+    };
+
+    Ok(ScrapGearResult {
+        item_id,
+        cost,
+        refund,
+    })
 }
 
 // =============================================================================
@@ -1132,7 +1151,7 @@ mod tests {
     #[test]
     fn test_execute_tool_oil_apply_atk() {
         let poi = create_test_poi(4, 5, 5, false, false); // L4 Tool Oil Rack
-        let result = execute_tool_oil_interaction(&poi, 0, OIL_FLAG_ATK, true);
+        let result = execute_tool_oil_interaction(&poi, 0, OIL_FLAG_ATK, 1, 100, true);
 
         assert!(result.is_ok());
         let result = result.unwrap();
@@ -1143,7 +1162,7 @@ mod tests {
     #[test]
     fn test_execute_tool_oil_apply_spd() {
         let poi = create_test_poi(4, 5, 5, false, false);
-        let result = execute_tool_oil_interaction(&poi, 0, OIL_FLAG_SPD, true);
+        let result = execute_tool_oil_interaction(&poi, 0, OIL_FLAG_SPD, 1, 100, true);
 
         assert!(result.is_ok());
         let result = result.unwrap();
@@ -1154,7 +1173,7 @@ mod tests {
     #[test]
     fn test_execute_tool_oil_apply_dig() {
         let poi = create_test_poi(4, 5, 5, false, false);
-        let result = execute_tool_oil_interaction(&poi, 0, OIL_FLAG_DIG, true);
+        let result = execute_tool_oil_interaction(&poi, 0, OIL_FLAG_DIG, 1, 100, true);
 
         assert!(result.is_ok());
         let result = result.unwrap();
@@ -1167,17 +1186,19 @@ mod tests {
         let poi = create_test_poi(4, 5, 5, false, false);
 
         // Apply ATK first
-        let result1 = execute_tool_oil_interaction(&poi, 0, OIL_FLAG_ATK, true).unwrap();
+        let result1 = execute_tool_oil_interaction(&poi, 0, OIL_FLAG_ATK, 1, 100, true).unwrap();
         assert_eq!(result1.new_flags, OIL_FLAG_ATK);
 
         // Apply SPD second
         let result2 =
-            execute_tool_oil_interaction(&poi, result1.new_flags, OIL_FLAG_SPD, true).unwrap();
+            execute_tool_oil_interaction(&poi, result1.new_flags, OIL_FLAG_SPD, 1, 100, true)
+                .unwrap();
         assert_eq!(result2.new_flags, OIL_FLAG_ATK | OIL_FLAG_SPD);
 
         // Apply DIG third
         let result3 =
-            execute_tool_oil_interaction(&poi, result2.new_flags, OIL_FLAG_DIG, true).unwrap();
+            execute_tool_oil_interaction(&poi, result2.new_flags, OIL_FLAG_DIG, 1, 100, true)
+                .unwrap();
         assert_eq!(
             result3.new_flags,
             OIL_FLAG_ATK | OIL_FLAG_SPD | OIL_FLAG_DIG
@@ -1187,7 +1208,7 @@ mod tests {
     #[test]
     fn test_execute_tool_oil_already_applied() {
         let poi = create_test_poi(4, 5, 5, false, false);
-        let result = execute_tool_oil_interaction(&poi, OIL_FLAG_ATK, OIL_FLAG_ATK, true);
+        let result = execute_tool_oil_interaction(&poi, OIL_FLAG_ATK, OIL_FLAG_ATK, 1, 100, true);
 
         assert!(matches!(result, Err(PoiSystemError::OilAlreadyApplied)));
     }
@@ -1195,7 +1216,7 @@ mod tests {
     #[test]
     fn test_execute_tool_oil_wrong_poi_type() {
         let poi = create_test_poi(2, 5, 5, false, false); // L2 Supply Cache - not tool oil
-        let result = execute_tool_oil_interaction(&poi, 0, OIL_FLAG_ATK, true);
+        let result = execute_tool_oil_interaction(&poi, 0, OIL_FLAG_ATK, 1, 100, true);
 
         assert!(matches!(result, Err(PoiSystemError::InvalidInteraction)));
     }
@@ -1203,7 +1224,7 @@ mod tests {
     #[test]
     fn test_execute_tool_oil_invalid_modification() {
         let poi = create_test_poi(4, 5, 5, false, false);
-        let result = execute_tool_oil_interaction(&poi, 0, 0x10, true); // Invalid flag (0x10 is not a valid oil)
+        let result = execute_tool_oil_interaction(&poi, 0, 0x10, 1, 100, true); // Invalid flag (0x10 is not a valid oil)
 
         assert!(matches!(result, Err(PoiSystemError::InvalidInteraction)));
     }
@@ -1211,7 +1232,7 @@ mod tests {
     #[test]
     fn test_execute_tool_oil_apply_arm() {
         let poi = create_test_poi(4, 5, 5, false, false);
-        let result = execute_tool_oil_interaction(&poi, 0, OIL_FLAG_ARM, true);
+        let result = execute_tool_oil_interaction(&poi, 0, OIL_FLAG_ARM, 1, 100, true);
 
         assert!(result.is_ok());
         let result = result.unwrap();
@@ -1224,10 +1245,10 @@ mod tests {
         let poi = create_test_poi(4, 5, 5, false, false);
 
         // Works during day
-        assert!(execute_tool_oil_interaction(&poi, 0, OIL_FLAG_ATK, false).is_ok());
+        assert!(execute_tool_oil_interaction(&poi, 0, OIL_FLAG_ATK, 1, 100, false).is_ok());
 
         // Works during night
-        assert!(execute_tool_oil_interaction(&poi, 0, OIL_FLAG_SPD, true).is_ok());
+        assert!(execute_tool_oil_interaction(&poi, 0, OIL_FLAG_SPD, 1, 100, true).is_ok());
     }
 
     // =========================================================================
@@ -1377,7 +1398,7 @@ mod tests {
         let result = result.unwrap();
         assert_eq!(result.item_id, item_id);
         assert_eq!(result.new_tier, 2);
-        assert_eq!(result.cost, 8); // Tier 1 -> 2 costs 8 gold
+        assert_eq!(result.cost, 10); // Tier 1 -> 2 costs 10 gold
     }
 
     #[test]
@@ -1389,14 +1410,14 @@ mod tests {
         assert!(result.is_ok());
         let result = result.unwrap();
         assert_eq!(result.new_tier, 3);
-        assert_eq!(result.cost, 16); // Tier 2 -> 3 costs 16 gold
+        assert_eq!(result.cost, 20); // Tier 2 -> 3 costs 20 gold
     }
 
     #[test]
     fn test_execute_anvil_upgrade_insufficient_gold() {
         let poi = create_test_poi(10, 5, 5, false, false);
         let item_id = *b"T-ST-01\0";
-        let result = execute_anvil_upgrade(&poi, item_id, 1, 5, true); // Only 5 gold, need 8
+        let result = execute_anvil_upgrade(&poi, item_id, 1, 5, true); // Only 5 gold, need 10
 
         assert!(matches!(result, Err(PoiSystemError::InsufficientGold)));
     }
@@ -1411,12 +1432,12 @@ mod tests {
     }
 
     #[test]
-    fn test_execute_anvil_upgrade_poi_already_used() {
-        let poi = create_test_poi(10, 5, 5, true, false); // POI already used
+    fn test_execute_anvil_upgrade_repeatable_when_used_flag_set() {
+        let poi = create_test_poi(10, 5, 5, true, false); // L10 is repeatable
         let item_id = *b"T-ST-01\0";
         let result = execute_anvil_upgrade(&poi, item_id, 1, 100, true);
 
-        assert!(matches!(result, Err(PoiSystemError::PoiAlreadyUsed)));
+        assert!(result.is_ok(), "Rusty Anvil should be repeatable");
     }
 
     #[test]
@@ -1744,39 +1765,40 @@ mod tests {
         assert!(result.is_ok());
         let result = result.unwrap();
         assert_eq!(result.item_id, item_id);
-        assert_eq!(result.cost, 8); // Act 1 cost
+        assert_eq!(result.cost, 4); // Act 1 cost
+        assert_eq!(result.refund, 2); // Common refund
     }
 
     #[test]
-    fn test_execute_scrap_gear_act_costs() {
+    fn test_execute_scrap_gear_cost_is_flat_across_acts() {
         let poi = create_test_poi(14, 5, 5, false, false);
         let item_id = *b"G-ST-01\0";
 
-        // Act 1: 8 gold
+        // Act 1
         let r1 = execute_scrap_gear(&poi, item_id, 100, 1, true).unwrap();
-        assert_eq!(r1.cost, 8);
+        assert_eq!(r1.cost, 4);
 
-        // Act 2: 8 gold
+        // Act 2
         let poi2 = create_test_poi(14, 5, 5, false, false);
         let r2 = execute_scrap_gear(&poi2, item_id, 100, 2, true).unwrap();
-        assert_eq!(r2.cost, 8);
+        assert_eq!(r2.cost, 4);
 
-        // Act 3: 10 gold
+        // Act 3
         let poi3 = create_test_poi(14, 5, 5, false, false);
         let r3 = execute_scrap_gear(&poi3, item_id, 100, 3, true).unwrap();
-        assert_eq!(r3.cost, 10);
+        assert_eq!(r3.cost, 4);
 
-        // Act 4: 12 gold
+        // Act 4
         let poi4 = create_test_poi(14, 5, 5, false, false);
         let r4 = execute_scrap_gear(&poi4, item_id, 100, 4, true).unwrap();
-        assert_eq!(r4.cost, 12);
+        assert_eq!(r4.cost, 4);
     }
 
     #[test]
     fn test_execute_scrap_gear_insufficient_gold() {
         let poi = create_test_poi(14, 5, 5, false, false);
         let item_id = *b"G-ST-01\0";
-        let result = execute_scrap_gear(&poi, item_id, 5, 1, true); // Only 5 gold, need 8
+        let result = execute_scrap_gear(&poi, item_id, 3, 1, true); // Only 3 gold, need 4
 
         assert!(matches!(result, Err(PoiSystemError::InsufficientGold)));
     }
@@ -1791,11 +1813,14 @@ mod tests {
     }
 
     #[test]
-    fn test_execute_scrap_gear_already_used() {
-        let poi = create_test_poi(14, 5, 5, true, false); // Already used
+    fn test_execute_scrap_gear_repeatable_when_used_flag_set() {
+        let poi = create_test_poi(14, 5, 5, true, false); // "used" but repeatable
         let item_id = *b"G-ST-01\0";
         let result = execute_scrap_gear(&poi, item_id, 100, 1, true);
 
-        assert!(matches!(result, Err(PoiSystemError::PoiAlreadyUsed)));
+        assert!(
+            result.is_ok(),
+            "Scrap Chute should remain usable when marked used"
+        );
     }
 }

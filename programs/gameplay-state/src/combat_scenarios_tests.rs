@@ -175,8 +175,8 @@ fn test_spore_slime_t1_miner_helmet_atk_oil_full_hp() {
         enemy_tier: 0,
         player_gold: 0,
         expected_player_won: true,
-        expected_final_player_hp: ExpectedHp::Exact(8),
-        expected_final_enemy_hp: ExpectedHp::Exact(0),
+        expected_final_player_hp: ExpectedHp::Exact(7),
+        expected_final_enemy_hp: ExpectedHp::NonPositive,
         expected_turns: 5,
         expected_gold_change: None,
     });
@@ -195,7 +195,7 @@ fn test_spore_slime_t1_miner_helmet_arm_oil_low_hp() {
         expected_player_won: true,
         expected_final_player_hp: ExpectedHp::Exact(1),
         expected_final_enemy_hp: ExpectedHp::Exact(0),
-        expected_turns: 10,
+        expected_turns: 9,
         expected_gold_change: None,
     });
 }
@@ -213,7 +213,7 @@ fn test_spore_slime_t1_miner_helmet_no_oil_low_hp() {
         expected_player_won: false,
         expected_final_player_hp: ExpectedHp::NonPositive,
         expected_final_enemy_hp: ExpectedHp::Exact(1),
-        expected_turns: 10,
+        expected_turns: 9,
         expected_gold_change: None,
     });
 }
@@ -229,8 +229,8 @@ fn test_spore_slime_t1_no_helmet_atk_oil() {
         enemy_tier: 0,
         player_gold: 0,
         expected_player_won: true,
-        expected_final_player_hp: ExpectedHp::Exact(5),
-        expected_final_enemy_hp: ExpectedHp::Exact(0),
+        expected_final_player_hp: ExpectedHp::Exact(4),
+        expected_final_enemy_hp: ExpectedHp::NonPositive,
         expected_turns: 5,
         expected_gold_change: None,
     });
@@ -249,7 +249,7 @@ fn test_spore_slime_t1_no_helmet_no_oil() {
         expected_player_won: false,
         expected_final_player_hp: ExpectedHp::NonPositive,
         expected_final_enemy_hp: ExpectedHp::Exact(1),
-        expected_turns: 10,
+        expected_turns: 9,
         expected_gold_change: None,
     });
 }
@@ -267,7 +267,7 @@ fn test_spore_slime_t1_miner_helmet_spd_oil() {
         expected_player_won: true,
         expected_final_player_hp: ExpectedHp::Exact(4),
         expected_final_enemy_hp: ExpectedHp::Exact(0),
-        expected_turns: 10,
+        expected_turns: 9,
         expected_gold_change: None,
     });
 }
@@ -283,8 +283,8 @@ fn test_spore_slime_t1_miner_helmet_atk_oil_low_hp() {
         enemy_tier: 0,
         player_gold: 0,
         expected_player_won: true,
-        expected_final_player_hp: ExpectedHp::Exact(3),
-        expected_final_enemy_hp: ExpectedHp::Exact(0),
+        expected_final_player_hp: ExpectedHp::Exact(2),
+        expected_final_enemy_hp: ExpectedHp::NonPositive,
         expected_turns: 5,
         expected_gold_change: None,
     });
@@ -300,9 +300,9 @@ fn test_spore_slime_t1_no_helmet_atk_oil_low_hp() {
         enemy_archetype: ids::SPORE_SLIME,
         enemy_tier: 0,
         player_gold: 0,
-        expected_player_won: true,
-        expected_final_player_hp: ExpectedHp::Exact(1),
-        expected_final_enemy_hp: ExpectedHp::Exact(0),
+        expected_player_won: false,
+        expected_final_player_hp: ExpectedHp::NonPositive,
+        expected_final_enemy_hp: ExpectedHp::Exact(1),
         expected_turns: 5,
         expected_gold_change: None,
     });
@@ -321,7 +321,7 @@ fn test_spore_slime_t1_miner_helmet_arm_oil_full_hp() {
         expected_player_won: true,
         expected_final_player_hp: ExpectedHp::Exact(4),
         expected_final_enemy_hp: ExpectedHp::Exact(0),
-        expected_turns: 10,
+        expected_turns: 9,
         expected_gold_change: None,
     });
 }
@@ -345,9 +345,15 @@ fn test_spore_slime_arm_oil_flips_outcome() {
         0,
     );
 
+    // Without forced minimum-through-armor damage, ARM oil now flips the 7 HP
+    // matchup: with oil the player survives, without oil the player dies.
+    assert!(
+        with_arm_oil.player_won,
+        "spore_slime_arm_oil_flips_outcome: expected win with armor oil"
+    );
     assert!(
         with_arm_oil.final_player_hp > 0,
-        "spore_slime_arm_oil_flips_outcome: expected survival with ARM oil"
+        "spore_slime_arm_oil_flips_outcome: expected positive HP with armor oil"
     );
     assert!(
         without_oil.final_player_hp <= 0,
@@ -461,8 +467,8 @@ fn test_shard_beetle_t1_basic_pickaxe() {
         player_gold: 0,
         expected_player_won: false,
         expected_final_player_hp: ExpectedHp::NonPositive,
-        expected_final_enemy_hp: ExpectedHp::Exact(9),
-        expected_turns: 4,
+        expected_final_enemy_hp: ExpectedHp::Exact(4),
+        expected_turns: 7,
         expected_gold_change: None,
     });
 }
@@ -486,7 +492,7 @@ fn test_spore_slime_applies_chill_log() {
         entry.action == LogAction::ApplyStatus
             && entry.is_player
             && entry.extra == STATUS_CHILL
-            && entry.value == 2
+            && entry.value == 1
     });
 }
 
@@ -556,7 +562,7 @@ fn test_shard_beetle_applies_shrapnel_log() {
         entry.action == LogAction::ApplyStatus
             && !entry.is_player
             && entry.extra == STATUS_SHRAPNEL
-            && entry.value == 6
+            && entry.value == 3
     });
 }
 
@@ -590,7 +596,7 @@ fn test_burrow_ambusher_battle_start_damage_log() {
     assert_log_contains(
         &outcome.log,
         "burrow_ambusher_battle_start_damage_log",
-        |entry| entry.action == LogAction::NonWeaponDamage && entry.is_player && entry.value == 3,
+        |entry| entry.action == LogAction::NonWeaponDamage && entry.is_player && entry.value == 2,
     );
 }
 
@@ -671,15 +677,12 @@ fn test_atk_oil_battle_start_atk_log() {
 ///
 /// Expected combat flow:
 /// - Player starts: 14 HP (10 base + 4 Work Vest), 2 ATK (1 base + 1 oil), 1 ARM (0 base + 1 vest)
-/// - Spore Slime applies 2 Chill at BattleStart → player has 1 strike (min 1)
+/// - Spore Slime applies 1 Chill at BattleStart → player takes +1 damage from Chill
 /// - Turn order: SPD tie (0 vs 0), enemy goes first
-/// - Turn 1: Slime 1 ATK vs Player 1 ARM → ARM gone. Player 2 ATK vs Slime 2 ARM → ARM gone.
-/// - Turn 2: Slime 1 dmg → Player 14→13. Player 2 dmg → Slime 8→6.
-/// - Turn 3: Slime 1 dmg → Player 13→12. Player 2 dmg → Slime 6→4.
-/// - Turn 4: Slime 1 dmg → Player 12→11. Player 2 dmg → Slime 4→2.
-/// - Turn 5: Slime 1 dmg → Player 11→10. Player 2 dmg → Slime 2→0. Slime dies.
+/// - Turn 1: Slime 1 ATK vs Player 1 ARM → ARM gone (Chill +1 dmg causes 1 HP loss). Player 2 ATK vs Slime 2 ARM → ARM gone.
+/// - Turn 2-5: Slime 1 dmg/turn, Player 2 dmg/turn → Slime dies turn 5.
 ///
-/// Expected outcome: Player wins with 10 HP.
+/// Expected outcome: Player wins with 9 HP (1 extra damage from Chill on Turn 1).
 #[test]
 fn test_work_vest_atk_oil_vs_spore_slime_t1() {
     // First verify the stats are calculated correctly
@@ -725,10 +728,10 @@ fn test_work_vest_atk_oil_vs_spore_slime_t1() {
     // Verify outcome
     assert!(outcome.player_won, "Player should win");
     assert_eq!(
-        outcome.final_player_hp, 10,
-        "Player should end with 10 HP (took 4 damage after armor)"
+        outcome.final_player_hp, 9,
+        "Player should end with 9 HP (Chill +1 damage on Turn 1)"
     );
-    assert_eq!(outcome.final_enemy_hp, 0, "Enemy should be dead");
+    assert!(outcome.final_enemy_hp <= 0, "Enemy should be dead");
     assert_eq!(outcome.turns_taken, 5, "Combat should take 5 turns");
 }
 

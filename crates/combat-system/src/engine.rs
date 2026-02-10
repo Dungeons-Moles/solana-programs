@@ -1,5 +1,5 @@
-use crate::constants::{MAX_TURNS, SUDDEN_DEATH_TURN};
-use crate::effects::process_shrapnel_retaliation;
+use crate::constants::{MAX_TURNS, SUDDEN_DEATH_RAMP_TURN, SUDDEN_DEATH_TURN};
+use crate::effects::{chill_damage_bonus, process_shrapnel_retaliation_with_chill};
 use crate::state::{CombatLogEntry, ItemEffect, StatusEffects, TriggerType};
 use crate::triggers::{process_triggers_for_phase, CombatantStats};
 
@@ -15,12 +15,16 @@ pub fn determine_turn_order(player_spd: i16, enemy_spd: i16) -> (bool, bool) {
 }
 
 pub fn check_sudden_death(turn: u8) -> i16 {
-    if turn >= SUDDEN_DEATH_TURN {
-        let bonus_turns = turn.saturating_sub(SUDDEN_DEATH_TURN - 1);
-        i16::from(bonus_turns)
-    } else {
-        0
+    if turn < SUDDEN_DEATH_TURN {
+        return 0;
     }
+
+    let mut bonus = i16::from(turn.saturating_sub(SUDDEN_DEATH_TURN - 1));
+    if turn >= SUDDEN_DEATH_RAMP_TURN {
+        bonus =
+            bonus.saturating_add(i16::from(turn.saturating_sub(SUDDEN_DEATH_RAMP_TURN - 1)) * 2);
+    }
+    bonus
 }
 
 pub fn check_failsafe(
@@ -52,20 +56,22 @@ pub fn check_failsafe(
 /// Returns: (new_hp, new_arm, hp_damage, arm_damage)
 pub fn execute_strike(
     attacker_atk: i16,
+    attacker_armor_piercing: i16,
     defender_arm: i16,
     defender_hp: i16,
+    defender_chill: u8,
 ) -> (i16, i16, i16, i16) {
-    let raw_damage = calculate_weapon_damage(attacker_atk);
+    let raw_damage =
+        calculate_weapon_damage(attacker_atk).saturating_add(chill_damage_bonus(defender_chill));
 
     if raw_damage <= 0 {
         return (defender_hp, defender_arm, 0, 0);
     }
 
-    // Apply damage to ARM first
-    let arm_damage = raw_damage.min(defender_arm.max(0));
+    // ARM is "HP before HP": damage depletes ARM first, remainder goes to HP.
+    let effective_defender_arm = defender_arm.saturating_sub(attacker_armor_piercing).max(0);
+    let arm_damage = raw_damage.min(effective_defender_arm);
     let new_arm = defender_arm.saturating_sub(arm_damage);
-
-    // Excess damage goes to HP
     let hp_damage = raw_damage.saturating_sub(arm_damage);
     let new_hp = defender_hp.saturating_sub(hp_damage);
 
@@ -85,14 +91,27 @@ pub fn execute_strikes(
     defender_triggered_flags: &mut [bool],
     turn: u8,
     is_player_attacking: bool,
+    player_gold: &mut u16,
     gold_change: &mut i16,
     log: &mut Vec<CombatLogEntry>,
 ) -> (i16, i16) {
     let mut total_hp_damage: i16 = 0;
 
-    for _ in 0..strikes {
-        let (new_hp, new_arm, hp_damage, arm_damage) =
-            execute_strike(attacker_stats.atk, defender_stats.arm, defender_stats.hp);
+    for strike_index in 0..strikes {
+        let mut strike_atk = attacker_stats.atk;
+        if attacker_stats.half_gear_atk_after_second_strike && strike_index >= 2 {
+            let gear_bonus = attacker_stats.gear_atk_bonus.max(0);
+            let non_gear_atk = attacker_stats.atk.saturating_sub(gear_bonus);
+            strike_atk = non_gear_atk.saturating_add(gear_bonus / 2);
+        }
+
+        let (new_hp, new_arm, hp_damage, arm_damage) = execute_strike(
+            strike_atk,
+            attacker_stats.armor_piercing,
+            defender_stats.arm,
+            defender_stats.hp,
+            defender_status.chill,
+        );
         defender_stats.hp = new_hp;
         defender_stats.arm = new_arm;
         total_hp_damage = total_hp_damage.saturating_add(hp_damage);
@@ -128,6 +147,7 @@ pub fn execute_strikes(
                 triggered_flags,
                 is_player_attacking,
                 false, // acts_first: unused for OnHit triggers
+                player_gold,
                 gold_change,
                 log,
             );
@@ -145,6 +165,7 @@ pub fn execute_strikes(
                 triggered_flags,
                 is_player_attacking,
                 false, // acts_first: unused for this trigger
+                player_gold,
                 gold_change,
                 log,
             );
@@ -167,6 +188,7 @@ pub fn execute_strikes(
                     triggered_flags,
                     is_player_attacking,
                     false,
+                    player_gold,
                     gold_change,
                     log,
                 );
@@ -185,6 +207,7 @@ pub fn execute_strikes(
                     triggered_flags,
                     is_player_attacking,
                     false,
+                    player_gold,
                     gold_change,
                     log,
                 );
@@ -203,6 +226,7 @@ pub fn execute_strikes(
                 defender_triggered_flags,
                 !is_player_attacking, // defender is player if attacker is not
                 false,                // acts_first: unused for OnStruck triggers
+                player_gold,
                 gold_change,
                 log,
             );
@@ -210,8 +234,11 @@ pub fn execute_strikes(
 
         // Shrapnel: defender retaliates with damage when struck
         let old_attacker_hp = attacker_stats.hp;
-        attacker_stats.hp =
-            process_shrapnel_retaliation(defender_status.shrapnel, attacker_stats.hp);
+        attacker_stats.hp = process_shrapnel_retaliation_with_chill(
+            defender_status.shrapnel,
+            attacker_status.chill,
+            attacker_stats.hp,
+        );
         let shrapnel_damage = old_attacker_hp - attacker_stats.hp;
         if shrapnel_damage > 0 {
             log.push(CombatLogEntry::shrapnel_retaliation(
@@ -240,7 +267,7 @@ mod tests {
         let mut arm = 1;
         let mut total_hp_damage = 0;
         for _ in 0..2 {
-            let (new_hp, new_arm, hp_damage, _arm_damage) = execute_strike(2, arm, hp);
+            let (new_hp, new_arm, hp_damage, _arm_damage) = execute_strike(2, 0, arm, hp, 0);
             hp = new_hp;
             arm = new_arm;
             total_hp_damage += hp_damage;
@@ -280,6 +307,17 @@ mod tests {
             arm: 0,
             spd: 1,
             dig: 0,
+            armor_piercing: 0,
+            stored_damage: 0,
+            gear_atk_bonus: 0,
+            half_gear_atk_after_second_strike: false,
+            next_bomb_damage_bonus: 0,
+            next_bomb_self_damage_reduction: 0,
+            active_bomb_self_damage_reduction: 0,
+            non_weapon_damage_bonus: 0,
+            next_non_weapon_damage_bonus: 0,
+            preserve_shrapnel_cap: 0,
+            shards_every_turn: false,
         };
         let mut defender = CombatantStats {
             hp: 8,
@@ -288,6 +326,17 @@ mod tests {
             arm: 1,
             spd: 1,
             dig: 0,
+            armor_piercing: 0,
+            stored_damage: 0,
+            gear_atk_bonus: 0,
+            half_gear_atk_after_second_strike: false,
+            next_bomb_damage_bonus: 0,
+            next_bomb_self_damage_reduction: 0,
+            active_bomb_self_damage_reduction: 0,
+            non_weapon_damage_bonus: 0,
+            next_non_weapon_damage_bonus: 0,
+            preserve_shrapnel_cap: 0,
+            shards_every_turn: false,
         };
         let mut attacker_status = StatusEffects::default();
         let mut defender_status = StatusEffects::default();
@@ -295,6 +344,7 @@ mod tests {
         let mut flags: Vec<bool> = Vec::new();
         let mut defender_effects: Vec<ItemEffect> = Vec::new();
         let mut defender_flags: Vec<bool> = Vec::new();
+        let mut player_gold: u16 = 0;
         let mut gold_change: i16 = 0;
         let mut log: Vec<CombatLogEntry> = Vec::new();
 
@@ -313,6 +363,7 @@ mod tests {
             &mut defender_flags,
             1,
             true,
+            &mut player_gold,
             &mut gold_change,
             &mut log,
         );
@@ -326,6 +377,17 @@ mod tests {
             arm: 0,
             spd: 1,
             dig: 0,
+            armor_piercing: 0,
+            stored_damage: 0,
+            gear_atk_bonus: 0,
+            half_gear_atk_after_second_strike: false,
+            next_bomb_damage_bonus: 0,
+            next_bomb_self_damage_reduction: 0,
+            active_bomb_self_damage_reduction: 0,
+            non_weapon_damage_bonus: 0,
+            next_non_weapon_damage_bonus: 0,
+            preserve_shrapnel_cap: 0,
+            shards_every_turn: false,
         };
         let mut defender_again = CombatantStats {
             hp: 8,
@@ -334,6 +396,17 @@ mod tests {
             arm: 1,
             spd: 1,
             dig: 0,
+            armor_piercing: 0,
+            stored_damage: 0,
+            gear_atk_bonus: 0,
+            half_gear_atk_after_second_strike: false,
+            next_bomb_damage_bonus: 0,
+            next_bomb_self_damage_reduction: 0,
+            active_bomb_self_damage_reduction: 0,
+            non_weapon_damage_bonus: 0,
+            next_non_weapon_damage_bonus: 0,
+            preserve_shrapnel_cap: 0,
+            shards_every_turn: false,
         };
         let mut attacker_status_again = StatusEffects::default();
         let mut defender_status_again = StatusEffects::default();
@@ -341,6 +414,7 @@ mod tests {
         let mut flags_again: Vec<bool> = Vec::new();
         let mut defender_effects_again: Vec<ItemEffect> = Vec::new();
         let mut defender_flags_again: Vec<bool> = Vec::new();
+        let mut player_gold_again: u16 = 0;
         let mut gold_change_again: i16 = 0;
         let mut log_again: Vec<CombatLogEntry> = Vec::new();
 
@@ -356,6 +430,7 @@ mod tests {
             &mut defender_flags_again,
             1,
             true,
+            &mut player_gold_again,
             &mut gold_change_again,
             &mut log_again,
         );
@@ -380,6 +455,78 @@ mod tests {
     }
 
     #[test]
+    fn test_pneumatic_drill_scales_gear_atk_after_second_strike() {
+        let mut attacker = CombatantStats {
+            hp: 20,
+            max_hp: 20,
+            atk: 5, // 1 base/tool + 4 from gear
+            arm: 0,
+            spd: 1,
+            dig: 0,
+            armor_piercing: 0,
+            stored_damage: 0,
+            gear_atk_bonus: 4,
+            half_gear_atk_after_second_strike: true,
+            next_bomb_damage_bonus: 0,
+            next_bomb_self_damage_reduction: 0,
+            active_bomb_self_damage_reduction: 0,
+            non_weapon_damage_bonus: 0,
+            next_non_weapon_damage_bonus: 0,
+            preserve_shrapnel_cap: 0,
+            shards_every_turn: false,
+        };
+        let mut defender = CombatantStats {
+            hp: 20,
+            max_hp: 20,
+            atk: 0,
+            arm: 0,
+            spd: 1,
+            dig: 0,
+            armor_piercing: 0,
+            stored_damage: 0,
+            gear_atk_bonus: 0,
+            half_gear_atk_after_second_strike: false,
+            next_bomb_damage_bonus: 0,
+            next_bomb_self_damage_reduction: 0,
+            active_bomb_self_damage_reduction: 0,
+            non_weapon_damage_bonus: 0,
+            next_non_weapon_damage_bonus: 0,
+            preserve_shrapnel_cap: 0,
+            shards_every_turn: false,
+        };
+        let mut attacker_status = StatusEffects::default();
+        let mut defender_status = StatusEffects::default();
+        let mut effects: Vec<ItemEffect> = Vec::new();
+        let mut flags: Vec<bool> = Vec::new();
+        let mut defender_effects: Vec<ItemEffect> = Vec::new();
+        let mut defender_flags: Vec<bool> = Vec::new();
+        let mut player_gold: u16 = 0;
+        let mut gold_change: i16 = 0;
+        let mut log: Vec<CombatLogEntry> = Vec::new();
+
+        let (_, total_hp_damage) = execute_strikes(
+            3,
+            &mut attacker,
+            &mut attacker_status,
+            &mut defender,
+            &mut defender_status,
+            &mut effects,
+            &mut flags,
+            &mut defender_effects,
+            &mut defender_flags,
+            1,
+            true,
+            &mut player_gold,
+            &mut gold_change,
+            &mut log,
+        );
+
+        // Strike 1: 5, strike 2: 5, strike 3: 1 + floor(4/2) = 3
+        assert_eq!(total_hp_damage, 13);
+        assert_eq!(defender.hp, 7);
+    }
+
+    #[test]
     fn test_damage_floors_at_zero() {
         // Negative ATK should floor at 0
         let damage = calculate_weapon_damage(-2);
@@ -390,7 +537,7 @@ mod tests {
     fn test_arm_as_hp_pool() {
         // ARM is "HP before HP" - damage depletes ARM first, excess to HP
         // 5 ATK vs 3 ARM, 10 HP -> ARM 0, HP 8
-        let (new_hp, new_arm, hp_damage, arm_damage) = execute_strike(5, 3, 10);
+        let (new_hp, new_arm, hp_damage, arm_damage) = execute_strike(5, 0, 3, 10, 0);
         assert_eq!(new_arm, 0, "ARM should be depleted");
         assert_eq!(arm_damage, 3, "Should deal 3 ARM damage");
         assert_eq!(hp_damage, 2, "Excess 2 damage should hit HP");
@@ -399,18 +546,18 @@ mod tests {
 
     #[test]
     fn test_arm_fully_blocks_small_damage() {
-        // 2 ATK vs 5 ARM, 10 HP -> ARM 3, HP 10 (no HP damage)
-        let (new_hp, new_arm, hp_damage, arm_damage) = execute_strike(2, 5, 10);
-        assert_eq!(new_arm, 3, "ARM should be 5 - 2 = 3");
+        // 2 ATK vs 5 ARM, 10 HP -> ARM 3, HP 10 (armor absorbs all damage)
+        let (new_hp, new_arm, hp_damage, arm_damage) = execute_strike(2, 0, 5, 10, 0);
+        assert_eq!(new_arm, 3, "ARM should absorb the full strike");
         assert_eq!(arm_damage, 2, "Should deal 2 ARM damage");
-        assert_eq!(hp_damage, 0, "No HP damage when ARM absorbs all");
-        assert_eq!(new_hp, 10, "HP should remain at 10");
+        assert_eq!(hp_damage, 0, "No HP damage when armor fully absorbs");
+        assert_eq!(new_hp, 10, "HP should remain unchanged");
     }
 
     #[test]
     fn test_no_arm_all_damage_to_hp() {
         // 3 ATK vs 0 ARM, 10 HP -> ARM 0, HP 7
-        let (new_hp, new_arm, hp_damage, arm_damage) = execute_strike(3, 0, 10);
+        let (new_hp, new_arm, hp_damage, arm_damage) = execute_strike(3, 0, 0, 10, 0);
         assert_eq!(new_arm, 0, "ARM should remain 0");
         assert_eq!(arm_damage, 0, "No ARM to damage");
         assert_eq!(hp_damage, 3, "All damage goes to HP");
@@ -433,17 +580,18 @@ mod tests {
 
     #[test]
     fn test_sudden_death_bonus_before_threshold() {
-        assert_eq!(check_sudden_death(24), 0);
+        assert_eq!(check_sudden_death(19), 0);
     }
 
     #[test]
     fn test_sudden_death_bonus_starts_at_25() {
-        assert_eq!(check_sudden_death(25), 1);
+        assert_eq!(check_sudden_death(20), 1);
     }
 
     #[test]
     fn test_sudden_death_bonus_increases_each_turn() {
-        assert_eq!(check_sudden_death(27), 3);
+        assert_eq!(check_sudden_death(27), 8);
+        assert_eq!(check_sudden_death(30), 13);
     }
 
     #[test]

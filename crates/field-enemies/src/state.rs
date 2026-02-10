@@ -1,9 +1,12 @@
 use anchor_lang::prelude::*;
 
 /// Enemy tier determining stat scaling and Gold reward
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug, InitSpace)]
+#[derive(
+    AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug, InitSpace, Default,
+)]
 #[repr(u8)]
 pub enum EnemyTier {
+    #[default]
     T1 = 0,
     T2 = 1,
     T3 = 2,
@@ -28,12 +31,6 @@ impl EnemyTier {
             2 => Some(EnemyTier::T3),
             _ => None,
         }
-    }
-}
-
-impl Default for EnemyTier {
-    fn default() -> Self {
-        EnemyTier::T1
     }
 }
 

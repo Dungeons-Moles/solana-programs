@@ -13,7 +13,8 @@ pub const INITIAL_AVAILABLE_RUNS: u32 = 20;
 /// Maximum campaign level (40 levels total)
 pub const MAX_CAMPAIGN_LEVEL: u8 = 40;
 
-/// Total number of items in the game
+/// Total bitmask capacity for item indices.
+/// Pool is fixed to the core 80-item set.
 pub const TOTAL_ITEMS: u8 = 80;
 
 /// Number of starter items (indices 0-39)

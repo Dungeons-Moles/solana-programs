@@ -161,12 +161,13 @@ pub const TOOL_CRATE_RARITY: [(u8, u8, u8, u8); 4] = [
     (50, 35, 15, 0), // Act 4: 50% Common, 35% Rare, 15% Heroic
 ];
 
-/// Geode Vault (L12) rarity table by act (higher rarity)
+/// Geode Vault (L12) rarity table by act.
+/// Acts 1-3 are Heroic-only; Act 4 allows up to 10% Mythic.
 pub const GEODE_VAULT_RARITY: [(u8, u8, u8, u8); 4] = [
-    (0, 10, 90, 0),  // Act 1: 10% Rare, 90% Heroic
-    (0, 10, 80, 10), // Act 2: 10% Rare, 80% Heroic, 10% Mythic
-    (0, 5, 75, 20),  // Act 3: 5% Rare, 75% Heroic, 20% Mythic
-    (0, 0, 70, 30),  // Act 4: 70% Heroic, 30% Mythic
+    (0, 0, 100, 0), // Act 1: 100% Heroic
+    (0, 0, 100, 0), // Act 2: 100% Heroic
+    (0, 0, 100, 0), // Act 3: 100% Heroic
+    (0, 0, 90, 10), // Act 4: 90% Heroic, 10% Mythic
 ];
 
 /// Smuggler Hatch (L9) Gear rarity table by act
@@ -204,10 +205,13 @@ pub const GEAR_PRICES: [u16; 4] = [8, 14, 22, 34];
 pub const TOOL_PRICES: [u16; 4] = [10, 16, 24, 38];
 
 /// Rusty Anvil upgrade costs: [I->II, II->III]
-pub const ANVIL_UPGRADE_COSTS: [u16; 2] = [8, 16];
+pub const ANVIL_UPGRADE_COSTS: [u16; 2] = [10, 20];
 
-/// Scrap Chute costs by act
-pub const SCRAP_CHUTE_COSTS: [u16; 4] = [8, 8, 10, 12];
+/// Scrap Chute cost (flat 4 Gold across acts)
+pub const SCRAP_CHUTE_COSTS: [u16; 4] = [4, 4, 4, 4];
+
+/// Tool Oil Rack is free in all acts
+pub const TOOL_OIL_COSTS: [u16; 4] = [0, 0, 0, 0];
 
 /// Shop reroll base cost and increment
 pub const REROLL_BASE_COST: u16 = 4;
@@ -296,6 +300,12 @@ pub fn calculate_reroll_cost(reroll_count: u8) -> u16 {
 pub fn calculate_scrap_cost(act: u8) -> u16 {
     let act_index = (act.saturating_sub(1) as usize).min(3);
     SCRAP_CHUTE_COSTS[act_index]
+}
+
+/// Calculate tool oil cost for an act (always 0)
+pub fn calculate_tool_oil_cost(act: u8) -> u16 {
+    let act_index = (act.saturating_sub(1) as usize).min(3);
+    TOOL_OIL_COSTS[act_index]
 }
 
 /// Calculate anvil upgrade cost for a tier upgrade
@@ -524,7 +534,7 @@ pub fn generate_supply_cache_offers(
             let item_id = select_gear_by_rarity_weighted(rarity, &tag_weights, rng.next_u64());
 
             // Check for duplicates
-            let is_duplicate = used_ids[..i].iter().any(|id| *id == item_id);
+            let is_duplicate = used_ids[..i].contains(&item_id);
             if !is_duplicate || attempts >= 10 {
                 used_ids[i] = item_id;
                 offers.push(ItemOffer {
@@ -567,7 +577,7 @@ pub fn generate_tool_crate_offers(
             let item_id = select_tool_by_rarity_weighted(rarity, &tag_weights, rng.next_u64());
 
             // Check for duplicates
-            let is_duplicate = used_ids[..i].iter().any(|id| *id == item_id);
+            let is_duplicate = used_ids[..i].contains(&item_id);
             if !is_duplicate || attempts >= 10 {
                 used_ids[i] = item_id;
                 offers.push(ItemOffer {
@@ -589,7 +599,7 @@ pub fn generate_tool_crate_offers(
 }
 
 /// Generate 3 Heroic+ offers for Geode Vault (L12).
-/// Uses GEODE_VAULT_RARITY table (higher rarity chance, includes Mythic).
+/// Uses GEODE_VAULT_RARITY table and enforces max 1 Mythic in the 3 offers.
 /// Ensures all 3 items are unique by re-rolling duplicates.
 pub fn generate_geode_vault_offers(
     act: u8,
@@ -601,16 +611,17 @@ pub fn generate_geode_vault_offers(
     let mut offers = Vec::with_capacity(3);
     let mut rng = Xorshift64::new(seed);
     let mut used_ids: [[u8; 8]; 3] = [[0; 8]; 3];
+    let mut mythic_used = false;
 
     for i in 0..3 {
         let mut attempts = 0;
         loop {
-            let item_seed = rng.next_u64();
-            let rarity = get_rarity_from_table(&GEODE_VAULT_RARITY, act, item_seed);
+            let rarity =
+                sample_rarity_with_cap(&mut rng, &GEODE_VAULT_RARITY, act, &mut mythic_used);
             let item_id = select_gear_by_rarity_weighted(rarity, &tag_weights, rng.next_u64());
 
             // Check for duplicates
-            let is_duplicate = used_ids[..i].iter().any(|id| *id == item_id);
+            let is_duplicate = used_ids[..i].contains(&item_id);
             if !is_duplicate || attempts >= 10 {
                 used_ids[i] = item_id;
                 offers.push(ItemOffer {
@@ -655,7 +666,7 @@ pub fn generate_counter_cache_offers(
             let item_id = select_gear_by_tag_and_rarity(tag, rarity, rng.next_u64());
 
             // Check for duplicates
-            let is_duplicate = used_ids[..i].iter().any(|id| *id == item_id);
+            let is_duplicate = used_ids[..i].contains(&item_id);
             if !is_duplicate || attempts >= 10 {
                 used_ids[i] = item_id;
                 offers.push(ItemOffer {
@@ -716,7 +727,7 @@ pub fn generate_smuggler_hatch_offers(
             let price = calculate_price(ItemType::Gear, rarity);
 
             // Check for duplicates among gear items
-            let is_duplicate = used_ids[..i].iter().any(|id| *id == item_id);
+            let is_duplicate = used_ids[..i].contains(&item_id);
             if !is_duplicate || attempts >= 10 {
                 used_ids[i] = item_id;
                 offers.push(ItemOffer {
@@ -808,50 +819,20 @@ pub fn validate_oil_selection(offer: &OilOffer, selected_oil: u8) -> bool {
 /// Item tag names for ID generation (T-XX-NN, G-XX-NN)
 const TAG_CODES: [&str; 8] = ["ST", "SC", "GR", "BL", "FR", "RU", "BO", "TE"];
 
-/// Convert local ItemRarity to player_inventory Rarity.
-fn to_inventory_rarity(rarity: ItemRarity) -> player_inventory::state::Rarity {
+/// Convert ItemRarity to the rarity index used by the pre-indexed lookup tables.
+fn rarity_to_index(rarity: ItemRarity) -> usize {
     match rarity {
-        ItemRarity::Common => player_inventory::state::Rarity::Common,
-        ItemRarity::Rare => player_inventory::state::Rarity::Rare,
-        ItemRarity::Heroic => player_inventory::state::Rarity::Heroic,
-        ItemRarity::Mythic => player_inventory::state::Rarity::Mythic,
-    }
-}
-
-/// Convert a WeaknessTag index to the corresponding player_inventory ItemTag.
-fn tag_index_to_item_tag(idx: usize) -> player_inventory::state::ItemTag {
-    match idx {
-        0 => player_inventory::state::ItemTag::Stone,
-        1 => player_inventory::state::ItemTag::Scout,
-        2 => player_inventory::state::ItemTag::Greed,
-        3 => player_inventory::state::ItemTag::Blast,
-        4 => player_inventory::state::ItemTag::Frost,
-        5 => player_inventory::state::ItemTag::Rust,
-        6 => player_inventory::state::ItemTag::Blood,
-        7 => player_inventory::state::ItemTag::Tempo,
-        _ => player_inventory::state::ItemTag::Stone,
-    }
-}
-
-/// Convert a player_inventory ItemTag to a tag index (0-7).
-fn item_tag_to_index(tag: player_inventory::state::ItemTag) -> Option<usize> {
-    match tag {
-        player_inventory::state::ItemTag::Stone => Some(0),
-        player_inventory::state::ItemTag::Scout => Some(1),
-        player_inventory::state::ItemTag::Greed => Some(2),
-        player_inventory::state::ItemTag::Blast => Some(3),
-        player_inventory::state::ItemTag::Frost => Some(4),
-        player_inventory::state::ItemTag::Rust => Some(5),
-        player_inventory::state::ItemTag::Blood => Some(6),
-        player_inventory::state::ItemTag::Tempo => Some(7),
-        _ => None,
+        ItemRarity::Common => 0,
+        ItemRarity::Rare => 1,
+        ItemRarity::Heroic => 2,
+        ItemRarity::Mythic => 3,
     }
 }
 
 /// Select a gear item by rarity with tag weighting.
 ///
-/// Uses the authoritative item definitions from player-inventory to find
-/// gear items matching the requested rarity. Preserves the two-step selection:
+/// Uses pre-indexed lookups from player-inventory instead of scanning the
+/// full ITEMS array. Two-step selection:
 /// 1. Pick a tag (weighted), only considering tags that have items of the target rarity
 /// 2. Pick a random item of that rarity within the selected tag
 fn select_gear_by_rarity_weighted(
@@ -859,25 +840,21 @@ fn select_gear_by_rarity_weighted(
     tag_weights: &[u32; 8],
     seed: u64,
 ) -> [u8; 8] {
-    let target = to_inventory_rarity(rarity);
+    let ri = rarity_to_index(rarity);
 
-    // Step 1: Count matching gear items per tag and build effective weights
     let mut items_per_tag = [0u8; 8];
     let mut effective_weights = [0u32; 8];
 
-    for item in player_inventory::items::ITEMS.iter() {
-        if item.item_type == player_inventory::state::ItemType::Gear && item.rarity == target {
-            if let Some(tag_idx) = item_tag_to_index(item.tag) {
-                items_per_tag[tag_idx] += 1;
-                effective_weights[tag_idx] = tag_weights[tag_idx];
-            }
+    for ti in 0..8 {
+        let count = player_inventory::items::gear_by_rarity_tag(ri, ti).len();
+        if count > 0 {
+            items_per_tag[ti] = count as u8;
+            effective_weights[ti] = tag_weights[ti];
         }
     }
 
-    // Step 2: Select tag (weighted, only tags with matching items)
     let total_weight: u64 = effective_weights.iter().map(|w| *w as u64).sum();
     if total_weight == 0 {
-        // No items of this rarity exist; return a safe fallback
         return *b"G-ST-01\0";
     }
 
@@ -892,32 +869,17 @@ fn select_gear_by_rarity_weighted(
         }
     }
 
-    // Step 3: Select a random item of the target rarity within the selected tag
-    let count = items_per_tag[selected_tag] as u64;
-    let item_roll = (seed >> 8) % count;
-    let selected_item_tag = tag_index_to_item_tag(selected_tag);
-
-    let mut match_index = 0u64;
-    for item in player_inventory::items::ITEMS.iter() {
-        if item.item_type == player_inventory::state::ItemType::Gear
-            && item.rarity == target
-            && item.tag == selected_item_tag
-        {
-            if match_index == item_roll {
-                let mut id = [0u8; 8];
-                id.copy_from_slice(item.id);
-                return id;
-            }
-            match_index += 1;
-        }
-    }
-
-    *b"G-ST-01\0" // fallback (shouldn't reach here)
+    let indices = player_inventory::items::gear_by_rarity_tag(ri, selected_tag);
+    let item_roll = (seed >> 8) % indices.len() as u64;
+    let item = &player_inventory::items::ITEMS[indices[item_roll as usize]];
+    let mut id = [0u8; 8];
+    id.copy_from_slice(item.id);
+    id
 }
 
 /// Select a tool item by rarity with tag weighting.
 ///
-/// Uses the authoritative item definitions from player-inventory.
+/// Uses pre-indexed lookups from player-inventory.
 /// If no tools of the exact rarity exist, falls back through
 /// Mythic -> Heroic -> Rare -> Common.
 fn select_tool_by_rarity_weighted(
@@ -925,46 +887,30 @@ fn select_tool_by_rarity_weighted(
     tag_weights: &[u32; 8],
     seed: u64,
 ) -> [u8; 8] {
-    // Try the requested rarity, then fall back to lower rarities
-    let fallback_chain = match rarity {
-        ItemRarity::Mythic => &[
-            player_inventory::state::Rarity::Mythic,
-            player_inventory::state::Rarity::Heroic,
-            player_inventory::state::Rarity::Rare,
-            player_inventory::state::Rarity::Common,
-        ][..],
-        ItemRarity::Heroic => &[
-            player_inventory::state::Rarity::Heroic,
-            player_inventory::state::Rarity::Rare,
-            player_inventory::state::Rarity::Common,
-        ][..],
-        ItemRarity::Rare => &[
-            player_inventory::state::Rarity::Rare,
-            player_inventory::state::Rarity::Common,
-        ][..],
-        ItemRarity::Common => &[player_inventory::state::Rarity::Common][..],
+    let fallback_chain: &[usize] = match rarity {
+        ItemRarity::Mythic => &[3, 2, 1, 0],
+        ItemRarity::Heroic => &[2, 1, 0],
+        ItemRarity::Rare => &[1, 0],
+        ItemRarity::Common => &[0],
     };
 
-    for &target in fallback_chain {
-        // Count matching tool items per tag
+    for &ri in fallback_chain {
         let mut items_per_tag = [0u8; 8];
         let mut effective_weights = [0u32; 8];
 
-        for item in player_inventory::items::ITEMS.iter() {
-            if item.item_type == player_inventory::state::ItemType::Tool && item.rarity == target {
-                if let Some(tag_idx) = item_tag_to_index(item.tag) {
-                    items_per_tag[tag_idx] += 1;
-                    effective_weights[tag_idx] = tag_weights[tag_idx];
-                }
+        for ti in 0..8 {
+            let count = player_inventory::items::tool_by_rarity_tag(ri, ti).len();
+            if count > 0 {
+                items_per_tag[ti] = count as u8;
+                effective_weights[ti] = tag_weights[ti];
             }
         }
 
         let total_weight: u64 = effective_weights.iter().map(|w| *w as u64).sum();
         if total_weight == 0 {
-            continue; // No tools of this rarity, try next fallback
+            continue;
         }
 
-        // Select tag
         let roll = seed % total_weight;
         let mut cumulative = 0u64;
         let mut selected_tag = 0usize;
@@ -976,91 +922,45 @@ fn select_tool_by_rarity_weighted(
             }
         }
 
-        // Select item within tag
-        let count = items_per_tag[selected_tag] as u64;
-        let item_roll = (seed >> 8) % count;
-        let selected_item_tag = tag_index_to_item_tag(selected_tag);
-
-        let mut match_index = 0u64;
-        for item in player_inventory::items::ITEMS.iter() {
-            if item.item_type == player_inventory::state::ItemType::Tool
-                && item.rarity == target
-                && item.tag == selected_item_tag
-            {
-                if match_index == item_roll {
-                    let mut id = [0u8; 8];
-                    id.copy_from_slice(item.id);
-                    return id;
-                }
-                match_index += 1;
-            }
-        }
+        let indices = player_inventory::items::tool_by_rarity_tag(ri, selected_tag);
+        let item_roll = (seed >> 8) % indices.len() as u64;
+        let item = &player_inventory::items::ITEMS[indices[item_roll as usize]];
+        let mut id = [0u8; 8];
+        id.copy_from_slice(item.id);
+        return id;
     }
 
-    *b"T-ST-01\0" // fallback (shouldn't reach here)
+    *b"T-ST-01\0"
 }
 
 /// Select a gear item by specific tag and rarity.
 ///
-/// Uses the authoritative item definitions from player-inventory.
+/// Uses pre-indexed lookups from player-inventory.
 /// If no gear of the exact rarity exists for the given tag,
 /// falls back through Mythic -> Heroic -> Rare -> Common.
 fn select_gear_by_tag_and_rarity(tag: WeaknessTag, rarity: ItemRarity, seed: u64) -> [u8; 8] {
-    let item_tag = tag_index_to_item_tag(tag as usize);
+    let ti = tag as usize;
 
-    let fallback_chain = match rarity {
-        ItemRarity::Mythic => &[
-            player_inventory::state::Rarity::Mythic,
-            player_inventory::state::Rarity::Heroic,
-            player_inventory::state::Rarity::Rare,
-            player_inventory::state::Rarity::Common,
-        ][..],
-        ItemRarity::Heroic => &[
-            player_inventory::state::Rarity::Heroic,
-            player_inventory::state::Rarity::Rare,
-            player_inventory::state::Rarity::Common,
-        ][..],
-        ItemRarity::Rare => &[
-            player_inventory::state::Rarity::Rare,
-            player_inventory::state::Rarity::Common,
-        ][..],
-        ItemRarity::Common => &[player_inventory::state::Rarity::Common][..],
+    let fallback_chain: &[usize] = match rarity {
+        ItemRarity::Mythic => &[3, 2, 1, 0],
+        ItemRarity::Heroic => &[2, 1, 0],
+        ItemRarity::Rare => &[1, 0],
+        ItemRarity::Common => &[0],
     };
 
-    for &target in fallback_chain {
-        // Collect matching gear items for this tag and rarity
-        let mut count = 0u64;
-        for item in player_inventory::items::ITEMS.iter() {
-            if item.item_type == player_inventory::state::ItemType::Gear
-                && item.rarity == target
-                && item.tag == item_tag
-            {
-                count += 1;
-            }
+    for &ri in fallback_chain {
+        let indices = player_inventory::items::gear_by_rarity_tag(ri, ti);
+        if indices.is_empty() {
+            continue;
         }
 
-        if count == 0 {
-            continue; // No items at this rarity for this tag, try next fallback
-        }
-
-        let item_roll = (seed >> 8) % count;
-        let mut match_index = 0u64;
-        for item in player_inventory::items::ITEMS.iter() {
-            if item.item_type == player_inventory::state::ItemType::Gear
-                && item.rarity == target
-                && item.tag == item_tag
-            {
-                if match_index == item_roll {
-                    let mut id = [0u8; 8];
-                    id.copy_from_slice(item.id);
-                    return id;
-                }
-                match_index += 1;
-            }
-        }
+        let item_roll = (seed >> 8) % indices.len() as u64;
+        let item = &player_inventory::items::ITEMS[indices[item_roll as usize]];
+        let mut id = [0u8; 8];
+        id.copy_from_slice(item.id);
+        return id;
     }
 
-    // Fallback: first gear item in the tag
     format_gear_id(TAG_CODES[tag as usize], 1)
 }
 
@@ -1075,20 +975,6 @@ fn format_gear_id(tag: &str, num: u8) -> [u8; 8] {
     id[5] = b'0' + (num / 10);
     id[6] = b'0' + (num % 10);
     id[7] = 0; // null terminator
-    id
-}
-
-/// Format a tool item ID (e.g., "T-ST-01\0")
-fn format_tool_id(tag: &str, num: u8) -> [u8; 8] {
-    let mut id = [0u8; 8];
-    id[0] = b'T';
-    id[1] = b'-';
-    id[2] = tag.as_bytes()[0];
-    id[3] = tag.as_bytes()[1];
-    id[4] = b'-';
-    id[5] = b'0' + (num / 10);
-    id[6] = b'0' + (num % 10);
-    id[7] = 0;
     id
 }
 
@@ -1156,7 +1042,7 @@ mod tests {
             }
         }
 
-        assert_eq!(heroic_count, 90, "Act 1 Geode Vault should be 90% Heroic");
+        assert_eq!(heroic_count, 100, "Act 1 Geode Vault should be 100% Heroic");
     }
 
     #[test]
@@ -1170,7 +1056,7 @@ mod tests {
             }
         }
 
-        assert_eq!(mythic_count, 30, "Act 4 Geode Vault should have 30% Mythic");
+        assert_eq!(mythic_count, 10, "Act 4 Geode Vault should have 10% Mythic");
     }
 
     #[test]
@@ -1200,16 +1086,16 @@ mod tests {
 
     #[test]
     fn test_scrap_chute_costs() {
-        assert_eq!(calculate_scrap_cost(1), 8);
-        assert_eq!(calculate_scrap_cost(2), 8);
-        assert_eq!(calculate_scrap_cost(3), 10);
-        assert_eq!(calculate_scrap_cost(4), 12);
+        assert_eq!(calculate_scrap_cost(1), 4);
+        assert_eq!(calculate_scrap_cost(2), 4);
+        assert_eq!(calculate_scrap_cost(3), 4);
+        assert_eq!(calculate_scrap_cost(4), 4);
     }
 
     #[test]
     fn test_anvil_upgrade_costs() {
-        assert_eq!(calculate_anvil_cost(1), Some(8));
-        assert_eq!(calculate_anvil_cost(2), Some(16));
+        assert_eq!(calculate_anvil_cost(1), Some(10));
+        assert_eq!(calculate_anvil_cost(2), Some(20));
         assert_eq!(calculate_anvil_cost(3), None);
     }
 
@@ -1355,12 +1241,6 @@ mod tests {
 
         let id = format_gear_id("FR", 8);
         assert_eq!(&id, b"G-FR-08\0");
-    }
-
-    #[test]
-    fn test_format_tool_id() {
-        let id = format_tool_id("SC", 2);
-        assert_eq!(&id, b"T-SC-02\0");
     }
 
     #[test]
@@ -1538,7 +1418,7 @@ mod tests {
 
     #[test]
     fn test_sample_rarity_with_cap_enforces_limit() {
-        // Use Geode Vault Act 4 which has 30% Mythic
+        // Use Geode Vault Act 4 which has 10% Mythic
         let mut rng = Xorshift64::new(12345);
         let mut mythic_count = 0;
 
@@ -1555,9 +1435,7 @@ mod tests {
             }
         }
 
-        // Should be strictly less than without cap
-        // With cap: max 100 Mythic (one per offer)
-        // Without cap: ~90 Mythic (30% * 300)
+        // With cap: max 100 Mythic (one per 3-offer set).
         assert!(
             mythic_count <= 100,
             "Mythic count {} should be <= 100 with cap",
@@ -1573,9 +1451,9 @@ mod tests {
         // Find a seed that produces Mythic
         loop {
             let test_rng_val = rng.next_bounded(100) as u8;
-            // Geode Vault Act 4: 0% Common, 0% Rare, 70% Heroic, 30% Mythic
-            // Mythic if roll >= 70
-            if test_rng_val >= 70 {
+            // Geode Vault Act 4: 0% Common, 0% Rare, 90% Heroic, 10% Mythic
+            // Mythic if roll >= 90
+            if test_rng_val >= 90 {
                 // This roll would be Mythic
                 break;
             }
@@ -1585,7 +1463,7 @@ mod tests {
         let mut mythic_used = true; // Already used
 
         // With mythic_used=true, Mythic should downgrade to Heroic
-        let mut test_rng = Xorshift64::new(70); // Roll of 70+ would be Mythic
+        let mut test_rng = Xorshift64::new(97); // Roll of 90+ would be Mythic
         let rarity =
             sample_rarity_with_cap(&mut test_rng, &GEODE_VAULT_RARITY, 4, &mut mythic_used);
 
@@ -1625,7 +1503,7 @@ mod tests {
     #[test]
     fn test_is_item_in_pool_basic() {
         // Create a pool with bits 0 and 15 set
-        let mut pool = [0u8; 10];
+        let mut pool = [0u8; ITEM_POOL_SIZE];
         pool[0] = 0x01; // bit 0 set
         pool[1] = 0x80; // bit 15 set (byte 1, bit 7)
 
@@ -1637,8 +1515,8 @@ mod tests {
 
     #[test]
     fn test_is_item_in_pool_out_of_bounds() {
-        let pool = [0xFFu8; 10]; // All bits set
-                                 // Index 80+ should return false (out of bounds)
+        let pool = [0xFFu8; ITEM_POOL_SIZE]; // All bits set
+                                             // Index 80+ should return false (out of bounds)
         assert!(!super::is_item_in_pool(&pool, 80));
         assert!(!super::is_item_in_pool(&pool, 255));
     }
@@ -1796,8 +1674,8 @@ mod tests {
         assert_eq!(rarity_from_item_id(b"G-RU-08\0"), 0);
         // T-GR-02 (Gemfinder Staff) = Heroic (NN=02 was Rare in old mapping)
         assert_eq!(rarity_from_item_id(b"T-GR-02\0"), 2);
-        // T-TE-02 (Chrono Rapier) = Heroic (NN=02 was Rare in old mapping)
-        assert_eq!(rarity_from_item_id(b"T-TE-02\0"), 2);
+        // T-TE-02 (Chrono Rapier) = Mythic in revised balance
+        assert_eq!(rarity_from_item_id(b"T-TE-02\0"), 3);
     }
 
     #[test]
@@ -1806,7 +1684,6 @@ mod tests {
         assert_eq!(rarity_from_item_id(b"X-ST-01\0"), 0);
         assert_eq!(rarity_from_item_id(b"G-ST-AB\0"), 0);
         assert_eq!(rarity_from_item_id(b"G-ST-00\0"), 0);
-        assert_eq!(rarity_from_item_id(b"G-ST-09\0"), 0);
     }
 }
 
@@ -1895,9 +1772,9 @@ pub fn item_id_to_pool_index(item_id: &[u8; 8]) -> Option<u8> {
     }
     let item_num = num_tens * 10 + num_ones;
 
-    // Calculate pool index based on item type
-    // Gear: items 0-63 (8 tags * 8 items)
-    // Tools: items 64-79 (8 tags * 2 items)
+    // Core pool index mapping:
+    // Gear: items 0-63 (8 tags * 8 items, IDs 01-08)
+    // Tools: items 64-79 (8 tags * 2 items, IDs 01-02)
     match item_id[0] {
         b'G' => {
             if !(1..=8).contains(&item_num) {

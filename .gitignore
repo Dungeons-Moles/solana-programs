@@ -45,6 +45,9 @@ coverage/
 # Allow spec files
 !specs/**/*.json
 
+# QA test reports
+.qa-reports/
+
 # Temp files
 *.tmp
 *.temp

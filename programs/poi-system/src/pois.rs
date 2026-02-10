@@ -72,7 +72,7 @@ pub const L4_TOOL_OIL_RACK: PoiDefinition = PoiDefinition {
     name: "Tool Oil Rack",
     emoji: [0xF0, 0x9F, 0x9B, 0xA2], // oil drum emoji
     rarity: PoiRarity::Common,
-    use_type: UseType::RepeatablePerTool,
+    use_type: UseType::OneTime,
     active_condition: ActiveCondition::Anytime,
     interaction_type: InteractionType::ToolOil,
     category: PoiCategory::Upgrades,
@@ -144,7 +144,7 @@ pub const L10_RUSTY_ANVIL: PoiDefinition = PoiDefinition {
     name: "Rusty Anvil",
     emoji: [0xE2, 0x9A, 0x92, 0x00], // hammer emoji (3 bytes)
     rarity: PoiRarity::Uncommon,
-    use_type: UseType::OneTime,
+    use_type: UseType::Repeatable,
     active_condition: ActiveCondition::Anytime,
     interaction_type: InteractionType::Upgrade,
     category: PoiCategory::Upgrades,
@@ -192,7 +192,7 @@ pub const L14_SCRAP_CHUTE: PoiDefinition = PoiDefinition {
     name: "Scrap Chute",
     emoji: [0xE2, 0x99, 0xBB, 0x00], // recycle emoji (3 bytes)
     rarity: PoiRarity::Uncommon,
-    use_type: UseType::OneTime,
+    use_type: UseType::Repeatable,
     active_condition: ActiveCondition::Anytime,
     interaction_type: InteractionType::Scrap,
     category: PoiCategory::Utility,
@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn test_one_time_pois() {
-        let one_time_ids = [2, 3, 5, 6, 7, 10, 12, 13, 14];
+        let one_time_ids = [2, 3, 4, 5, 6, 7, 12, 13];
         for id in one_time_ids {
             let poi = get_poi_definition(id).unwrap();
             assert_eq!(poi.use_type, UseType::OneTime, "L{} should be OneTime", id);
@@ -331,7 +331,7 @@ mod tests {
 
     #[test]
     fn test_repeatable_pois() {
-        let repeatable_ids = [1, 8, 9, 11];
+        let repeatable_ids = [1, 8, 9, 10, 11, 14];
         for id in repeatable_ids {
             let poi = get_poi_definition(id).unwrap();
             assert_eq!(
@@ -346,7 +346,7 @@ mod tests {
     #[test]
     fn test_repeatable_per_tool_poi() {
         let poi = get_poi_definition(4).unwrap();
-        assert_eq!(poi.use_type, UseType::RepeatablePerTool);
+        assert_eq!(poi.use_type, UseType::OneTime);
     }
 
     #[test]

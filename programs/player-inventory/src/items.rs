@@ -1,8 +1,7 @@
 //! Item definitions for the player-inventory program.
 //!
-//! Contains all 80 item definitions as compile-time constants.
-//! 16 Tools (2 per tag) + 64 Gear (8 per tag) across 8 tags.
-//! Plus the special Basic Pickaxe starter tool.
+//! Contains the core 80 item definitions as compile-time constants.
+//! 16 Tools + 64 Gear across 8 tags, plus the special Basic Pickaxe starter tool.
 
 use crate::state::{
     Condition, EffectDefinition, EffectType, ItemTag, ItemType, Rarity, StatusType, TriggerType,
@@ -48,7 +47,7 @@ pub const BASIC_PICKAXE: ItemDefinition = ItemDefinition {
 };
 
 // =============================================================================
-// STONE Tag Items (T-ST-01, T-ST-02, G-ST-01 through G-ST-08)
+// STONE Tag Items (T-ST-01 through T-ST-02, G-ST-01 through G-ST-08)
 // Theme: Armor, Shrapnel, durability
 // =============================================================================
 
@@ -179,8 +178,13 @@ pub const G_ST_05: ItemDefinition = ItemDefinition {
     tag: ItemTag::Stone,
     rarity: Rarity::Rare,
     effects: &[
-        // Exposed: +3/5/7 ARM per GDD
-        EffectDefinition::new(TriggerType::Exposed, EffectType::GainArmor, true, [3, 5, 7]),
+        // Exposed (once per battle): +4/6/8 ARM (stronger safety net)
+        EffectDefinition::new(
+            TriggerType::FirstTimeExposed,
+            EffectType::GainArmor,
+            false,
+            [4, 6, 8],
+        ),
     ],
 };
 
@@ -191,12 +195,12 @@ pub const G_ST_06: ItemDefinition = ItemDefinition {
     tag: ItemTag::Stone,
     rarity: Rarity::Rare, // GDD says Rare
     effects: &[
-        // Whenever you gain Shrapnel (once/turn): gain 1/2/3 Armor
+        // First time you gain Shrapnel this battle: gain 2/3/4 Armor
         EffectDefinition::new(
-            TriggerType::OnGainShrapnel,
+            TriggerType::FirstTimeGainShrapnel,
             EffectType::GainArmor,
-            true, // once per turn
-            [1, 2, 3],
+            false,
+            [2, 3, 4],
         ),
     ],
 };
@@ -206,14 +210,14 @@ pub const G_ST_07: ItemDefinition = ItemDefinition {
     name: "Crystal Crown",
     item_type: ItemType::Gear,
     tag: ItemTag::Stone,
-    rarity: Rarity::Heroic,
+    rarity: Rarity::Mythic,
     effects: &[
-        // Battle Start: gain Max HP equal to your starting Armor (cap 12/18/24)
+        // Battle Start: gain Max HP equal to your starting Armor (cap 10/15/20)
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::ArmorToMaxHp,
             false,
-            [12, 18, 24], // Cap values per tier
+            [10, 15, 20], // Cap values per tier
         ),
     ],
 };
@@ -225,13 +229,13 @@ pub const G_ST_08: ItemDefinition = ItemDefinition {
     tag: ItemTag::Stone,
     rarity: Rarity::Heroic, // GDD says Heroic
     effects: &[
-        // End of turn: if you have Armor, gain +1/2/3 Armor
+        // End of turn: if you have >=3 Armor, gain +1/2/3 Armor
         EffectDefinition::with_condition(
             TriggerType::TurnEnd,
             EffectType::GainArmor,
             false,
             [1, 2, 3],
-            Condition::OwnerHasArmor,
+            Condition::OwnerArmorAtLeast(3),
         ),
     ],
 };
@@ -285,6 +289,13 @@ pub const T_SC_02: ItemDefinition = ItemDefinition {
             EffectType::GainStrikes,
             false,
             [2, 2, 2], // Flat +2 strikes at all tiers
+        ),
+        // Strikes beyond the 2nd use only 50% of gear-derived ATK bonus.
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::HalfGearAtkAfterSecondStrike,
+            false,
+            [1, 1, 1],
         ),
     ],
 };
@@ -406,7 +417,7 @@ pub const G_SC_06: ItemDefinition = ItemDefinition {
             TriggerType::Wounded,
             EffectType::GainStrikes,
             true, // once per turn to prevent stacking every check
-            [1, 2, 3],
+            [1, 1, 2],
         ),
     ],
 };
@@ -436,7 +447,8 @@ pub const G_SC_08: ItemDefinition = ItemDefinition {
     tag: ItemTag::Scout,
     rarity: Rarity::Mythic,
     effects: &[
-        // Your On Hit effects trigger twice (once/turn)
+        // On Hit effects trigger twice (once/turn).
+        // Source scoping is enforced by higher-level combat resolution.
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::DoubleOnHitEffects,
@@ -467,6 +479,8 @@ pub const T_GR_01: ItemDefinition = ItemDefinition {
         ),
         // On Hit (once/turn): gain 1 Gold (flat, per GDD)
         EffectDefinition::new(TriggerType::OnHit, EffectType::GainGold, true, [1, 1, 1]),
+        // Victory: gain +2 Gold
+        EffectDefinition::new(TriggerType::Victory, EffectType::GainGold, false, [2, 2, 2]),
     ],
 };
 
@@ -534,6 +548,8 @@ pub const G_GR_02: ItemDefinition = ItemDefinition {
     effects: &[
         // Victory: gain 2/4/6 Gold
         EffectDefinition::new(TriggerType::Victory, EffectType::GainGold, false, [2, 4, 6]),
+        // Victory: heal 2/3/4 HP
+        EffectDefinition::new(TriggerType::Victory, EffectType::Heal, false, [2, 3, 4]),
     ],
 };
 
@@ -542,14 +558,14 @@ pub const G_GR_03: ItemDefinition = ItemDefinition {
     name: "Gilded Band",
     item_type: ItemType::Gear,
     tag: ItemTag::Greed,
-    rarity: Rarity::Rare,
+    rarity: Rarity::Heroic,
     effects: &[
-        // Battle Start: gain Armor equal to floor(Gold/10) (cap 2/3/4)
+        // Battle Start: gain Armor equal to floor(Gold/8) (cap 4/5/6)
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::GoldToArmorScaled,
             false,
-            [2, 3, 4], // Cap values per tier
+            [4, 5, 6], // Cap values per tier
         ),
     ],
 };
@@ -559,14 +575,14 @@ pub const G_GR_04: ItemDefinition = ItemDefinition {
     name: "Royal Bracer",
     item_type: ItemType::Gear,
     tag: ItemTag::Greed,
-    rarity: Rarity::Heroic,
+    rarity: Rarity::Mythic,
     effects: &[
-        // Turn Start: convert 1 Gold → 2/3/4 Armor
+        // Turn Start: convert 1 Gold → 3/4/5 Armor
         EffectDefinition::new(
             TriggerType::TurnStart,
             EffectType::ConsumeGoldForArmor,
             false,
-            [2, 3, 4], // Armor gained per 1 gold consumed
+            [3, 4, 5], // Armor gained per 1 gold consumed
         ),
     ],
 };
@@ -658,12 +674,12 @@ pub const T_BL_01: ItemDefinition = ItemDefinition {
             false,
             [1, 2, 3],
         ),
-        // First hit: 1 non-weapon damage (flat, once per turn) per GDD
+        // First hit: 1/2/2 non-weapon damage (once per turn)
         EffectDefinition::new(
             TriggerType::OnHit,
             EffectType::DealNonWeaponDamage,
             true,
-            [1, 1, 1],
+            [1, 2, 2],
         ),
     ],
 };
@@ -699,19 +715,19 @@ pub const G_BL_01: ItemDefinition = ItemDefinition {
     tag: ItemTag::Blast,
     rarity: Rarity::Common,
     effects: &[
-        // Countdown(2): deal 8/10/12 to enemy (non-weapon)
+        // Countdown(2): deal 10/12/14 to enemy (non-weapon)
         EffectDefinition::new(
             TriggerType::Countdown { turns: 2 },
             EffectType::DealNonWeaponDamage,
             false,
-            [8, 10, 12],
+            [10, 12, 14],
         ),
-        // Also deal 8/10/12 to self (non-weapon)
+        // Also deal 4/5/6 to self (non-weapon)
         EffectDefinition::new(
             TriggerType::Countdown { turns: 2 },
             EffectType::DealSelfNonWeaponDamage,
             false,
-            [8, 10, 12],
+            [4, 5, 6],
         ),
     ],
 };
@@ -729,6 +745,12 @@ pub const G_BL_02: ItemDefinition = ItemDefinition {
             EffectType::BlastImmunity,
             false,
             [1, 1, 1], // Value doesn't matter, just enables immunity
+        ),
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainArmor,
+            false,
+            [2, 3, 4],
         ),
     ],
 };
@@ -793,19 +815,26 @@ pub const G_BL_06: ItemDefinition = ItemDefinition {
     tag: ItemTag::Blast,
     rarity: Rarity::Rare,
     effects: &[
-        // Battle Start: deal 1/2/3 non-weapon damage
+        // Battle Start: deal 2/3/4 non-weapon damage
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::DealNonWeaponDamage,
             false,
-            [1, 2, 3],
+            [2, 3, 4],
         ),
-        // Your next bomb this battle deals +3/5/7 (implemented as general bomb amplification)
+        // Your next bomb this battle deals +3/5/7.
         EffectDefinition::new(
             TriggerType::BattleStart,
-            EffectType::AmplifyNonWeaponDamage,
+            EffectType::EmpowerNextBombDamage,
             false,
             [3, 5, 7],
+        ),
+        // Your next bomb self-damage is reduced by 2/3/4.
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::ReduceNextBombSelfDamage,
+            false,
+            [2, 3, 4],
         ),
     ],
 };
@@ -824,7 +853,7 @@ pub const G_BL_07: ItemDefinition = ItemDefinition {
             false,
             [1, 2, 3],
         ),
-        // When Exposed: deal stored damage (StoreDamage tracks and releases on Exposed)
+        // StoreDamage is released automatically when first exposed by combat-system logic.
     ],
 };
 
@@ -846,7 +875,7 @@ pub const G_BL_08: ItemDefinition = ItemDefinition {
 };
 
 // =============================================================================
-// FROST Tag Items (T-FR-01, T-FR-02, G-FR-01 through G-FR-08)
+// FROST Tag Items (T-FR-01 through T-FR-02, G-FR-01 through G-FR-08)
 // Theme: Chill, SPD manipulation
 // =============================================================================
 
@@ -857,15 +886,23 @@ pub const T_FR_01: ItemDefinition = ItemDefinition {
     tag: ItemTag::Frost,
     rarity: Rarity::Common,
     effects: &[
-        // +2/3/4 ATK
+        // +1/2/3 ATK
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::GainAtk,
             false,
-            [2, 3, 4],
+            [1, 2, 3],
         ),
         // On Hit (once/turn): apply 1 Chill (flat, not scaling)
         EffectDefinition::new(TriggerType::OnHit, EffectType::ApplyChill, true, [1, 1, 1]),
+        // On Hit (once/turn): if enemy has Chill, deal +1 bonus damage
+        EffectDefinition::with_condition(
+            TriggerType::OnHit,
+            EffectType::DealDamage,
+            true,
+            [1, 1, 1],
+            Condition::EnemyHasStatus(StatusType::Chill),
+        ),
     ],
 };
 
@@ -889,6 +926,14 @@ pub const T_FR_02: ItemDefinition = ItemDefinition {
         EffectDefinition::with_condition(
             TriggerType::OnHit,
             EffectType::GainSpd,
+            true,
+            [1, 1, 1],
+            Condition::EnemyHasStatus(StatusType::Chill),
+        ),
+        // If enemy has Chill, deal +1 bonus damage
+        EffectDefinition::with_condition(
+            TriggerType::OnHit,
+            EffectType::DealDamage,
             true,
             [1, 1, 1],
             Condition::EnemyHasStatus(StatusType::Chill),
@@ -918,21 +963,29 @@ pub const G_FR_02: ItemDefinition = ItemDefinition {
     name: "Frostguard Buckler",
     item_type: ItemType::Gear,
     tag: ItemTag::Frost,
-    rarity: Rarity::Rare,
+    rarity: Rarity::Heroic,
     effects: &[
-        // +6/8/10 ARM
+        // +8/10/12 ARM
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::GainArmor,
             false,
-            [6, 8, 10],
+            [8, 10, 12],
         ),
-        // Battle Start: if enemy has Chill, gain +2/3/4 Armor
+        // Battle Start: if enemy has Chill, gain +3/4/5 Armor
         EffectDefinition::with_condition(
             TriggerType::BattleStart,
             EffectType::GainArmor,
             false,
-            [2, 3, 4],
+            [3, 4, 5],
+            Condition::EnemyHasStatus(StatusType::Chill),
+        ),
+        // Battle Start: if enemy has Chill, apply 1 Chill
+        EffectDefinition::with_condition(
+            TriggerType::BattleStart,
+            EffectType::ApplyChill,
+            false,
+            [1, 1, 1],
             Condition::EnemyHasStatus(StatusType::Chill),
         ),
     ],
@@ -969,6 +1022,13 @@ pub const G_FR_04: ItemDefinition = ItemDefinition {
             false,
             [1, 2, 3],
         ),
+        // Exploration utility approximation: +1/1/1 DIG in combat systems.
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainDig,
+            false,
+            [1, 1, 1],
+        ),
     ],
 };
 
@@ -1001,14 +1061,22 @@ pub const G_FR_06: ItemDefinition = ItemDefinition {
     name: "Permafrost Core",
     item_type: ItemType::Gear,
     tag: ItemTag::Frost,
-    rarity: Rarity::Heroic,
+    rarity: Rarity::Mythic,
     effects: &[
-        // Turn Start: if enemy has Chill, gain 1/2/3 Armor
+        // Turn Start: if enemy has Chill, gain 2/3/4 Armor
         EffectDefinition::with_condition(
             TriggerType::TurnStart,
             EffectType::GainArmor,
             false,
-            [1, 2, 3],
+            [2, 3, 4],
+            Condition::EnemyHasStatus(StatusType::Chill),
+        ),
+        // Turn Start: if enemy has Chill, deal 2 non-weapon damage
+        EffectDefinition::with_condition(
+            TriggerType::TurnStart,
+            EffectType::DealNonWeaponDamage,
+            false,
+            [2, 2, 2],
             Condition::EnemyHasStatus(StatusType::Chill),
         ),
     ],
@@ -1025,6 +1093,13 @@ pub const G_FR_07: ItemDefinition = ItemDefinition {
         EffectDefinition::new(
             TriggerType::EveryOtherTurn,
             EffectType::ApplyChill,
+            false,
+            [1, 1, 1],
+        ),
+        // Every other turn: deal 1 non-weapon damage
+        EffectDefinition::new(
+            TriggerType::EveryOtherTurn,
+            EffectType::DealNonWeaponDamage,
             false,
             [1, 1, 1],
         ),
@@ -1060,11 +1135,18 @@ pub const G_FR_08: ItemDefinition = ItemDefinition {
             true,
             [1, 1, 1],
         ),
+        // Approximation of "enemy takes +1 while chilled": amplify non-weapon damage.
+        EffectDefinition::new(
+            TriggerType::Wounded,
+            EffectType::AmplifyNonWeaponDamage,
+            true,
+            [1, 1, 1],
+        ),
     ],
 };
 
 // =============================================================================
-// RUST Tag Items (T-RU-01, T-RU-02, G-RU-01 through G-RU-08)
+// RUST Tag Items (T-RU-01 through T-RU-02, G-RU-01 through G-RU-08)
 // Theme: Armor destruction
 // =============================================================================
 
@@ -1092,7 +1174,7 @@ pub const T_RU_02: ItemDefinition = ItemDefinition {
     name: "Etched Burrowblade",
     item_type: ItemType::Tool,
     tag: ItemTag::Rust,
-    rarity: Rarity::Rare,
+    rarity: Rarity::Heroic,
     effects: &[
         // +2/3/4 ATK
         EffectDefinition::new(
@@ -1101,20 +1183,28 @@ pub const T_RU_02: ItemDefinition = ItemDefinition {
             false,
             [2, 3, 4],
         ),
-        // +1/2/3 SPD
+        // +2/3/4 SPD
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::GainSpd,
             false,
-            [1, 2, 3],
+            [2, 3, 4],
         ),
-        // If enemy has Rust, your strikes ignore 1/2/3 Armor
+        // If enemy has Rust, your strikes ignore 2/3/4 Armor
         EffectDefinition::with_condition(
             TriggerType::BattleStart,
             EffectType::SetArmorPiercing,
             false,
-            [1, 2, 3],
+            [2, 3, 4],
             Condition::EnemyHasStatus(StatusType::Rust),
+        ),
+        // If enemy has >=4 Rust, ignore all Armor.
+        EffectDefinition::with_condition(
+            TriggerType::OnHit,
+            EffectType::SetArmorPiercing,
+            true,
+            [32767, 32767, 32767],
+            Condition::EnemyHasStatusAtLeast(StatusType::Rust, 4),
         ),
     ],
 };
@@ -1153,6 +1243,14 @@ pub const G_RU_02: ItemDefinition = ItemDefinition {
     effects: &[
         // On Hit (once/turn): apply 1 Rust (flat, not scaling)
         EffectDefinition::new(TriggerType::OnHit, EffectType::ApplyRust, true, [1, 1, 1]),
+        // If enemy has Rust >= 3, deal bonus non-weapon damage
+        EffectDefinition::with_condition(
+            TriggerType::OnHit,
+            EffectType::DealNonWeaponDamage,
+            true,
+            [1, 2, 2],
+            Condition::EnemyHasStatusAtLeast(StatusType::Rust, 3),
+        ),
     ],
 };
 
@@ -1218,13 +1316,13 @@ pub const G_RU_06: ItemDefinition = ItemDefinition {
     tag: ItemTag::Rust,
     rarity: Rarity::Heroic,
     effects: &[
-        // Turn Start: if enemy has Rust, deal 1/2/3 non-weapon damage
+        // Turn Start: if enemy has Rust OR no Armor, deal 1/2/3 non-weapon damage
         EffectDefinition::with_condition(
             TriggerType::TurnStart,
             EffectType::DealNonWeaponDamage,
             false,
             [1, 2, 3],
-            Condition::EnemyHasStatus(StatusType::Rust),
+            Condition::EnemyHasStatusOrNoArmor(StatusType::Rust),
         ),
     ],
 };
@@ -1234,15 +1332,17 @@ pub const G_RU_07: ItemDefinition = ItemDefinition {
     name: "Corrosion Loop",
     item_type: ItemType::Gear,
     tag: ItemTag::Rust,
-    rarity: Rarity::Heroic,
+    rarity: Rarity::Mythic,
     effects: &[
-        // OnHit (1/turn): if enemy has Armor, apply +1 additional Rust
+        // OnHit (1/turn): apply +2 additional Rust
+        EffectDefinition::new(TriggerType::OnHit, EffectType::ApplyRust, true, [2, 2, 2]),
+        // OnHit (1/turn): if enemy has 0 Armor, deal 2 non-weapon damage
         EffectDefinition::with_condition(
             TriggerType::OnHit,
-            EffectType::ApplyRust,
+            EffectType::DealNonWeaponDamage,
             true,
-            [1, 1, 1], // Flat +1 Rust per GDD
-            Condition::EnemyHasArmor,
+            [2, 2, 2],
+            Condition::EnemyHasNoArmor,
         ),
     ],
 };
@@ -1260,6 +1360,14 @@ pub const G_RU_08: ItemDefinition = ItemDefinition {
             EffectType::GainGold,
             true,      // once per turn
             [1, 1, 1], // Flat 1 gold per GDD
+        ),
+        // Battle Start: if enemy has no Armor, apply 1 Rust anyway.
+        EffectDefinition::with_condition(
+            TriggerType::BattleStart,
+            EffectType::ApplyRust,
+            false,
+            [1, 1, 1],
+            Condition::EnemyHasNoArmor,
         ),
     ],
 };
@@ -1439,14 +1547,16 @@ pub const G_BO_08: ItemDefinition = ItemDefinition {
     tag: ItemTag::Blood,
     rarity: Rarity::Mythic, // GDD says Mythic
     effects: &[
-        // Your first hit each turn vs a Bleeding enemy heals 2 HP
+        // Your first hit each turn vs a Bleeding enemy heals more (capped approximation)
         EffectDefinition::with_condition(
             TriggerType::OnHit,
             EffectType::Heal,
-            true,      // once per turn (first hit only)
-            [2, 2, 2], // Flat 2 HP per GDD (no scaling)
+            true, // once per turn (first hit only)
+            [5, 5, 5],
             Condition::EnemyHasStatus(StatusType::Bleed),
         ),
+        // Self-enable bleed on hit
+        EffectDefinition::new(TriggerType::OnHit, EffectType::ApplyBleed, true, [1, 1, 1]),
     ],
 };
 
@@ -1469,12 +1579,12 @@ pub const T_TE_01: ItemDefinition = ItemDefinition {
             false,
             [1, 2, 3],
         ),
-        // +1/2/3 SPD
+        // +2/3/4 SPD
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::GainSpd,
             false,
-            [1, 2, 3],
+            [2, 3, 4],
         ),
     ],
 };
@@ -1484,28 +1594,28 @@ pub const T_TE_02: ItemDefinition = ItemDefinition {
     name: "Chrono Rapier",
     item_type: ItemType::Tool,
     tag: ItemTag::Tempo,
-    rarity: Rarity::Heroic, // GDD says Heroic
+    rarity: Rarity::Mythic,
     effects: &[
-        // +1/2/3 ATK
+        // +2/3/4 ATK
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::GainAtk,
             false,
-            [1, 2, 3],
+            [2, 3, 4],
         ),
-        // +2/3/4 SPD
+        // +3/4/5 SPD
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::GainSpd,
             false,
-            [2, 3, 4],
+            [3, 4, 5],
         ),
-        // If you act first on Turn 1, gain +2/3/4 ATK (this battle)
+        // If you act first on Turn 1, gain +3/4/5 ATK (this battle)
         EffectDefinition::new(
             TriggerType::FirstTurnIfFaster,
             EffectType::GainAtk,
             false,
-            [2, 3, 4],
+            [3, 4, 5],
         ),
     ],
 };
@@ -1624,6 +1734,13 @@ pub const G_TE_06: ItemDefinition = ItemDefinition {
     tag: ItemTag::Tempo,
     rarity: Rarity::Rare, // GDD says Rare
     effects: &[
+        // If enemy acts first on Turn 1, gain 4/6/8 Armor
+        EffectDefinition::new(
+            TriggerType::FirstTurnIfSlower,
+            EffectType::GainArmor,
+            false,
+            [4, 6, 8],
+        ),
         // If enemy acts first on Turn 1, your first strike deals +3/5/7 damage
         EffectDefinition::new(
             TriggerType::FirstTurnIfSlower,
@@ -1679,7 +1796,7 @@ pub const G_TE_08: ItemDefinition = ItemDefinition {
 // All Items Array (80 items total)
 // =============================================================================
 
-/// All 80 item definitions as a compile-time constant array
+/// Core 80-item registry (16 tools + 64 gear).
 pub const ITEMS: &[ItemDefinition] = &[
     // STONE (10)
     T_ST_01, T_ST_02, G_ST_01, G_ST_02, G_ST_03, G_ST_04, G_ST_05, G_ST_06, G_ST_07, G_ST_08,
@@ -1726,6 +1843,68 @@ pub fn get_items_by_rarity(rarity: Rarity) -> Vec<&'static ItemDefinition> {
 /// Get all items of a specific type
 pub fn get_items_by_type(item_type: ItemType) -> Vec<&'static ItemDefinition> {
     ITEMS.iter().filter(|i| i.item_type == item_type).collect()
+}
+
+fn rarity_from_index(rarity_index: usize) -> Option<Rarity> {
+    match rarity_index {
+        0 => Some(Rarity::Common),
+        1 => Some(Rarity::Rare),
+        2 => Some(Rarity::Heroic),
+        3 => Some(Rarity::Mythic),
+        _ => None,
+    }
+}
+
+fn tag_from_index(tag_index: usize) -> Option<ItemTag> {
+    match tag_index {
+        0 => Some(ItemTag::Stone),
+        1 => Some(ItemTag::Scout),
+        2 => Some(ItemTag::Greed),
+        3 => Some(ItemTag::Blast),
+        4 => Some(ItemTag::Frost),
+        5 => Some(ItemTag::Rust),
+        6 => Some(ItemTag::Blood),
+        7 => Some(ItemTag::Tempo),
+        _ => None,
+    }
+}
+
+/// Get gear item indices for a given rarity and tag.
+pub fn gear_by_rarity_tag(rarity_index: usize, tag_index: usize) -> Vec<usize> {
+    let Some(rarity) = rarity_from_index(rarity_index) else {
+        return Vec::new();
+    };
+    let Some(tag) = tag_from_index(tag_index) else {
+        return Vec::new();
+    };
+
+    ITEMS
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, item)| {
+            (item.item_type == ItemType::Gear && item.rarity == rarity && item.tag == tag)
+                .then_some(idx)
+        })
+        .collect()
+}
+
+/// Get tool item indices for a given rarity and tag.
+pub fn tool_by_rarity_tag(rarity_index: usize, tag_index: usize) -> Vec<usize> {
+    let Some(rarity) = rarity_from_index(rarity_index) else {
+        return Vec::new();
+    };
+    let Some(tag) = tag_from_index(tag_index) else {
+        return Vec::new();
+    };
+
+    ITEMS
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, item)| {
+            (item.item_type == ItemType::Tool && item.rarity == rarity && item.tag == tag)
+                .then_some(idx)
+        })
+        .collect()
 }
 
 // =============================================================================
@@ -1789,18 +1968,23 @@ mod tests {
 
     #[test]
     fn test_items_by_tag_count() {
-        for tag in [
-            ItemTag::Stone,
-            ItemTag::Scout,
-            ItemTag::Greed,
-            ItemTag::Blast,
-            ItemTag::Frost,
-            ItemTag::Rust,
-            ItemTag::Blood,
-            ItemTag::Tempo,
+        for (tag, expected) in [
+            (ItemTag::Stone, 10usize),
+            (ItemTag::Scout, 10),
+            (ItemTag::Greed, 10),
+            (ItemTag::Blast, 10),
+            (ItemTag::Frost, 10),
+            (ItemTag::Rust, 10),
+            (ItemTag::Blood, 10),
+            (ItemTag::Tempo, 10),
         ] {
             let items = get_items_by_tag(tag);
-            assert_eq!(items.len(), 10, "Each tag should have exactly 10 items");
+            assert_eq!(
+                items.len(),
+                expected,
+                "Unexpected item count for tag {:?}",
+                tag
+            );
         }
     }
 
@@ -1808,13 +1992,13 @@ mod tests {
     fn test_tools_vs_gear_count() {
         let tools = get_items_by_type(ItemType::Tool);
         let gear = get_items_by_type(ItemType::Gear);
-        assert_eq!(tools.len(), 16, "Should have 16 tools (2 per tag)");
-        assert_eq!(gear.len(), 64, "Should have 64 gear items (8 per tag)");
+        assert_eq!(tools.len(), 16, "Should have 16 tool items");
+        assert_eq!(gear.len(), 64, "Should have 64 gear items");
     }
 
     #[test]
     fn test_rarity_distribution() {
-        // Rarity distribution after GDD alignment
+        // Rarity distribution after revised balance alignment
         // Note: BASIC_PICKAXE (Common) is NOT in ITEMS array
         // Changes from GDD alignment:
         // - G-FR-02: Common -> Rare (Frostguard Buckler)
@@ -1842,9 +2026,9 @@ mod tests {
         let total = common.len() + rare.len() + heroic.len() + mythic.len();
         assert_eq!(total, 80, "Total should be 80 items");
         assert_eq!(common.len(), 25, "Should have 25 Common items");
-        assert_eq!(rare.len(), 34, "Should have 34 Rare items");
-        assert_eq!(heroic.len(), 18, "Should have 18 Heroic items");
-        assert_eq!(mythic.len(), 3, "Should have 3 Mythic items");
+        assert_eq!(rare.len(), 31, "Should have 31 Rare items");
+        assert_eq!(heroic.len(), 16, "Should have 16 Heroic items");
+        assert_eq!(mythic.len(), 8, "Should have 8 Mythic items");
     }
 
     #[test]
@@ -1857,13 +2041,82 @@ mod tests {
         assert!(rime_pike.is_some());
         let rp = rime_pike.unwrap();
         assert_eq!(rp.name, "Rime Pike");
-        assert_eq!(rp.effects.len(), 2);
+        assert_eq!(rp.effects.len(), 3);
 
         // Check effect values - Chill is flat 1 per GDD (not tier-scaling)
-        let on_hit_effect = rp.effects.iter().find(|e| e.trigger == TriggerType::OnHit);
+        let on_hit_effect = rp
+            .effects
+            .iter()
+            .find(|e| e.effect_type == EffectType::ApplyChill);
         assert!(on_hit_effect.is_some());
         let effect = on_hit_effect.unwrap();
         assert_eq!(effect.effect_type, EffectType::ApplyChill);
         assert_eq!(effect.values, [1, 1, 1]); // Flat 1 Chill per GDD
+    }
+
+    #[test]
+    fn test_item_index_consistency() {
+        let tags = [
+            ItemTag::Stone,
+            ItemTag::Scout,
+            ItemTag::Greed,
+            ItemTag::Blast,
+            ItemTag::Frost,
+            ItemTag::Rust,
+            ItemTag::Blood,
+            ItemTag::Tempo,
+        ];
+        let rarities = [Rarity::Common, Rarity::Rare, Rarity::Heroic, Rarity::Mythic];
+
+        for (ri, &rarity) in rarities.iter().enumerate() {
+            for (ti, &tag) in tags.iter().enumerate() {
+                // Verify gear index
+                let gear_indices = gear_by_rarity_tag(ri, ti);
+                for &idx in &gear_indices {
+                    let item = &ITEMS[idx];
+                    assert_eq!(
+                        item.item_type,
+                        ItemType::Gear,
+                        "Gear index {idx} has wrong type"
+                    );
+                    assert_eq!(item.rarity, rarity, "Gear index {idx} has wrong rarity");
+                    assert_eq!(item.tag, tag, "Gear index {idx} has wrong tag");
+                }
+
+                // Verify count matches brute-force
+                let brute_count = ITEMS
+                    .iter()
+                    .filter(|i| i.item_type == ItemType::Gear && i.rarity == rarity && i.tag == tag)
+                    .count();
+                assert_eq!(
+                    gear_indices.len(),
+                    brute_count,
+                    "Gear index count mismatch for rarity={ri} tag={ti}"
+                );
+
+                // Verify tool index
+                let tool_indices = tool_by_rarity_tag(ri, ti);
+                for &idx in &tool_indices {
+                    let item = &ITEMS[idx];
+                    assert_eq!(
+                        item.item_type,
+                        ItemType::Tool,
+                        "Tool index {idx} has wrong type"
+                    );
+                    assert_eq!(item.rarity, rarity, "Tool index {idx} has wrong rarity");
+                    assert_eq!(item.tag, tag, "Tool index {idx} has wrong tag");
+                }
+
+                let brute_count = ITEMS
+                    .iter()
+                    .filter(|i| i.item_type == ItemType::Tool && i.rarity == rarity && i.tag == tag)
+                    .count();
+                assert_eq!(
+                    tool_indices.len(),
+                    brute_count,
+                    "Tool index count mismatch for rarity={ri} tag={ti}"
+                );
+            }
+        }
     }
 }

@@ -58,6 +58,8 @@ pub enum Condition {
     EnemyHasStatus(StatusType) = 1,
     /// Enemy must have armor > 0
     EnemyHasArmor = 2,
+    /// Enemy must have armor <= 0
+    EnemyHasNoArmor = 9,
     /// Owner's DIG must be greater than enemy's DIG
     DigGreaterThanEnemyDig = 3,
     /// Owner's SPD must be greater than enemy's SPD
@@ -70,6 +72,16 @@ pub enum Condition {
     EnemyWounded = 7,
     /// Owner must have armor > 0
     OwnerHasArmor = 8,
+    /// Owner must have armor >= value
+    OwnerArmorAtLeast(u8) = 10,
+    /// Owner must have the specified status effect
+    OwnerHasStatus(StatusType) = 11,
+    /// Enemy must have at least N stacks of the specified status
+    EnemyHasStatusAtLeast(StatusType, u8) = 12,
+    /// Enemy must have no armor and at least N stacks of the specified status
+    EnemyHasNoArmorAndStatusAtLeast(StatusType, u8) = 13,
+    /// Enemy has the specified status OR has no armor (disjunctive)
+    EnemyHasStatusOrNoArmor(StatusType) = 14,
 }
 
 /// A single entry in the combat log.
@@ -194,10 +206,16 @@ pub enum TriggerType {
     OnApplyRust,
     /// Triggers when owner gains shrapnel
     OnGainShrapnel,
+    /// Triggers when owner successfully converts Gold to Armor
+    OnGoldArmorConverted,
     /// Triggers at start of each day (processed outside combat system)
     DayStart,
     /// Triggers once when owner first becomes wounded (HP drops below 50%)
     FirstTimeWounded,
+    /// Triggers once when owner first becomes exposed (ARM <= 0)
+    FirstTimeExposed,
+    /// Triggers once when owner first gains Shrapnel this battle
+    FirstTimeGainShrapnel,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace)]
@@ -207,6 +225,8 @@ pub enum EffectType {
     Heal,
     GainArmor,
     GainAtk,
+    /// ATK gained from gear sources. Used for multi-strike scaling rules.
+    GainGearAtk,
     GainSpd,
     GainDig,
     GainGold,
@@ -242,8 +262,16 @@ pub enum EffectType {
     ReduceAllCountdowns,
     /// Amplify all non-weapon damage by value
     AmplifyNonWeaponDamage,
+    /// Apply +damage to the next non-weapon damage instance only.
+    EmpowerNextNonWeaponDamage,
     /// Store damage each turn (released on Exposed trigger)
     StoreDamage,
+    /// Apply +damage to the next bomb trigger only.
+    EmpowerNextBombDamage,
+    /// Reduce self-damage on the next bomb trigger only.
+    ReduceNextBombSelfDamage,
+    /// For Pneumatic Drill: strikes beyond the 2nd use half gear ATK bonus.
+    HalfGearAtkAfterSecondStrike,
     /// Immune to self-inflicted blast damage
     BlastImmunity,
     /// Double the next bomb trigger effect
@@ -252,6 +280,10 @@ pub enum EffectType {
     DoubleOnHitEffects,
     /// Trigger all equipped shard effects
     TriggerAllShards,
+    /// Override shard cadence so `EveryOtherTurnFirstHit` effects can trigger every turn.
+    ShardsEveryTurn,
+    /// Keep up to `value` shrapnel stacks at end of turn.
+    PreserveShrapnel,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, InitSpace)]
@@ -274,71 +306,150 @@ pub enum ResolutionType {
     FailsafeEnemyWin,
 }
 
-pub(crate) struct CombatState {
-    pub turn: u8,
-    pub player_hp: i16,
-    pub player_max_hp: u16,
-    pub player_atk: i16,
-    pub player_arm: i16,
-    pub player_spd: i16,
-    pub player_dig: i16,
-    pub player_strikes: u8,
-    pub player_status: StatusEffects,
-    pub enemy_hp: i16,
-    pub enemy_max_hp: u16,
-    pub enemy_atk: i16,
-    pub enemy_arm: i16,
-    pub enemy_spd: i16,
-    pub enemy_dig: i16,
-    pub enemy_strikes: u8,
-    pub enemy_status: StatusEffects,
-    pub sudden_death_bonus: i16,
-    /// Net gold change during combat (positive = player gains, negative = player loses)
-    pub gold_change: i16,
-    /// Whether the player has already become wounded (HP < 50%) this battle.
-    /// Used for FirstTimeWounded trigger to fire only once.
-    pub player_has_become_wounded: bool,
-    /// Whether the enemy has already become wounded (HP < 50%) this battle.
-    /// Used for FirstTimeWounded trigger to fire only once.
-    pub enemy_has_become_wounded: bool,
+/// Per-combatant state during combat. Replaces the flat `player_*`/`enemy_*`
+/// fields that were previously duplicated on `CombatState`.
+pub(crate) struct Combatant {
+    pub hp: i16,
+    pub max_hp: u16,
+    pub atk: i16,
+    pub arm: i16,
+    pub spd: i16,
+    pub dig: i16,
+    pub strikes: u8,
+    pub armor_piercing: i16,
+    pub stored_damage: i16,
+    pub gear_atk_bonus: i16,
+    pub half_gear_atk_after_second_strike: bool,
+    pub next_bomb_damage_bonus: i16,
+    pub next_bomb_self_damage_reduction: i16,
+    pub active_bomb_self_damage_reduction: i16,
+    pub non_weapon_damage_bonus: i16,
+    pub next_non_weapon_damage_bonus: i16,
+    pub preserve_shrapnel_cap: u8,
+    pub shards_every_turn: bool,
+    pub status: StatusEffects,
+    /// Bitmask for first-time event flags (WOUNDED, EXPOSED, GAINED_SHRAPNEL).
+    pub first_time_flags: u8,
 }
 
-impl CombatState {
-    pub fn player_stats(&self) -> crate::triggers::CombatantStats {
+impl Combatant {
+    pub const WOUNDED: u8 = 1;
+    pub const EXPOSED: u8 = 2;
+    pub const GAINED_SHRAPNEL: u8 = 4;
+
+    pub fn has_flag(&self, flag: u8) -> bool {
+        self.first_time_flags & flag != 0
+    }
+
+    pub fn set_flag(&mut self, flag: u8) {
+        self.first_time_flags |= flag;
+    }
+
+    pub fn to_stats(&self) -> crate::triggers::CombatantStats {
         crate::triggers::CombatantStats {
-            hp: self.player_hp,
-            max_hp: self.player_max_hp,
-            atk: self.player_atk,
-            arm: self.player_arm,
-            spd: self.player_spd,
-            dig: self.player_dig,
+            hp: self.hp,
+            max_hp: self.max_hp,
+            atk: self.atk,
+            arm: self.arm,
+            spd: self.spd,
+            dig: self.dig,
+            armor_piercing: self.armor_piercing,
+            stored_damage: self.stored_damage,
+            gear_atk_bonus: self.gear_atk_bonus,
+            half_gear_atk_after_second_strike: self.half_gear_atk_after_second_strike,
+            next_bomb_damage_bonus: self.next_bomb_damage_bonus,
+            next_bomb_self_damage_reduction: self.next_bomb_self_damage_reduction,
+            active_bomb_self_damage_reduction: self.active_bomb_self_damage_reduction,
+            non_weapon_damage_bonus: self.non_weapon_damage_bonus,
+            next_non_weapon_damage_bonus: self.next_non_weapon_damage_bonus,
+            preserve_shrapnel_cap: self.preserve_shrapnel_cap,
+            shards_every_turn: self.shards_every_turn,
         }
     }
 
-    pub fn enemy_stats(&self) -> crate::triggers::CombatantStats {
-        crate::triggers::CombatantStats {
-            hp: self.enemy_hp,
-            max_hp: self.enemy_max_hp,
-            atk: self.enemy_atk,
-            arm: self.enemy_arm,
-            spd: self.enemy_spd,
-            dig: self.enemy_dig,
-        }
+    pub fn apply_stats(&mut self, stats: &crate::triggers::CombatantStats) {
+        self.hp = stats.hp;
+        self.max_hp = stats.max_hp;
+        self.atk = stats.atk;
+        self.arm = stats.arm;
+        self.spd = stats.spd;
+        self.dig = stats.dig;
+        self.armor_piercing = stats.armor_piercing;
+        self.stored_damage = stats.stored_damage;
+        self.gear_atk_bonus = stats.gear_atk_bonus;
+        self.half_gear_atk_after_second_strike = stats.half_gear_atk_after_second_strike;
+        self.next_bomb_damage_bonus = stats.next_bomb_damage_bonus;
+        self.next_bomb_self_damage_reduction = stats.next_bomb_self_damage_reduction;
+        self.active_bomb_self_damage_reduction = stats.active_bomb_self_damage_reduction;
+        self.non_weapon_damage_bonus = stats.non_weapon_damage_bonus;
+        self.next_non_weapon_damage_bonus = stats.next_non_weapon_damage_bonus;
+        self.preserve_shrapnel_cap = stats.preserve_shrapnel_cap;
+        self.shards_every_turn = stats.shards_every_turn;
     }
+}
 
-    pub fn set_player_stats(&mut self, stats: &crate::triggers::CombatantStats) {
-        self.player_hp = stats.hp;
-        self.player_atk = stats.atk;
-        self.player_arm = stats.arm;
-        self.player_spd = stats.spd;
-        self.player_dig = stats.dig;
-    }
+pub(crate) struct CombatState {
+    pub turn: u8,
+    pub player: Combatant,
+    pub enemy: Combatant,
+    pub sudden_death_bonus: i16,
+    pub player_gold: u16,
+    /// Net gold change during combat (positive = player gains, negative = player loses)
+    pub gold_change: i16,
+}
 
-    pub fn set_enemy_stats(&mut self, stats: &crate::triggers::CombatantStats) {
-        self.enemy_hp = stats.hp;
-        self.enemy_atk = stats.atk;
-        self.enemy_arm = stats.arm;
-        self.enemy_spd = stats.spd;
-        self.enemy_dig = stats.dig;
+#[cfg(test)]
+mod tests {
+    use super::{Combatant, StatusEffects};
+    use crate::triggers::CombatantStats;
+
+    #[test]
+    fn apply_stats_updates_max_hp() {
+        let mut combatant = Combatant {
+            hp: 10,
+            max_hp: 10,
+            atk: 1,
+            arm: 1,
+            spd: 1,
+            dig: 1,
+            strikes: 1,
+            armor_piercing: 0,
+            stored_damage: 0,
+            gear_atk_bonus: 0,
+            half_gear_atk_after_second_strike: false,
+            next_bomb_damage_bonus: 0,
+            next_bomb_self_damage_reduction: 0,
+            active_bomb_self_damage_reduction: 0,
+            non_weapon_damage_bonus: 0,
+            next_non_weapon_damage_bonus: 0,
+            preserve_shrapnel_cap: 0,
+            shards_every_turn: false,
+            status: StatusEffects::default(),
+            first_time_flags: 0,
+        };
+        let updated_stats = CombatantStats {
+            hp: 12,
+            max_hp: 12,
+            atk: 1,
+            arm: 1,
+            spd: 1,
+            dig: 1,
+            armor_piercing: 0,
+            stored_damage: 0,
+            gear_atk_bonus: 0,
+            half_gear_atk_after_second_strike: false,
+            next_bomb_damage_bonus: 0,
+            next_bomb_self_damage_reduction: 0,
+            active_bomb_self_damage_reduction: 0,
+            non_weapon_damage_bonus: 0,
+            next_non_weapon_damage_bonus: 0,
+            preserve_shrapnel_cap: 0,
+            shards_every_turn: false,
+        };
+
+        combatant.apply_stats(&updated_stats);
+
+        assert_eq!(combatant.hp, 12);
+        assert_eq!(combatant.max_hp, 12);
     }
 }

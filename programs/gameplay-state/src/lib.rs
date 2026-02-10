@@ -1,4 +1,6 @@
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
+use anchor_lang::solana_program::program::invoke;
 
 pub mod constants;
 pub mod errors;
@@ -6,8 +8,10 @@ pub mod movement;
 pub mod state;
 pub mod stats;
 
-use combat_system::state::{CombatantInput, Condition};
-use combat_system::{resolve_combat, CombatLogEntry, EffectType, ItemEffect};
+use combat_system::state::CombatantInput;
+#[cfg(test)]
+use combat_system::state::Condition;
+use combat_system::{resolve_combat_with_player_gold, CombatLogEntry, EffectType, ItemEffect};
 use constants::{
     BASE_ARM, BASE_ATK, BASE_HP, BASE_SPD, DAY_MOVES, GAME_STATE_SEED, INITIAL_GEAR_SLOTS,
     MAX_GEAR_SLOTS,
@@ -18,7 +22,7 @@ use errors::GameplayStateError;
 pub const GAMEPLAY_AUTHORITY_SEED: &[u8] = b"gameplay_authority";
 use movement::{
     calculate_move_cost, chebyshev_distance, get_boss_for_combat, get_boss_id, is_adjacent,
-    is_within_bounds,
+    is_within_bounds, should_process_night_enemy_movement, should_process_target_enemy_combat,
 };
 use player_inventory::effects::generate_combat_effects;
 use player_inventory::state::PlayerInventory;
@@ -39,6 +43,10 @@ pub const POI_SYSTEM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     77, 160, 63, 209, 182, 56, 149, 181, 2, 195, 173, 95, 65, 136, 88, 122, 235, 166, 235, 216,
     241, 107, 2, 35, 185, 14, 177, 21, 150, 103, 215, 77,
 ]);
+pub const NIGHT_VISION_RADIUS: u8 = 2;
+pub const DAY_VISION_RADIUS: u8 = 4;
+pub const DISCOVER_VISIBLE_WAYPOINTS_DISCRIMINATOR: [u8; 8] =
+    [0x3b, 0x26, 0x6a, 0x00, 0x3a, 0xb1, 0x50, 0xfc];
 
 /// Player inventory program ID for authorized HP modifications via CPI
 /// Derived from "5BtqiWegvVAgEnTRUofB9oUoQvPztYqSkMPwRpYQacP8"
@@ -292,9 +300,7 @@ pub mod gameplay_state {
         let old_hp = game_state.hp;
         let new_hp = old_hp
             .checked_add(hp_bonus)
-            .ok_or(GameplayStateError::ArithmeticOverflow)?;
-
-        require!(new_hp <= i16::MAX, GameplayStateError::StatOverflow);
+            .ok_or(GameplayStateError::StatOverflow)?;
 
         game_state.hp = new_hp;
 
@@ -379,6 +385,44 @@ pub mod gameplay_state {
         Ok(())
     }
 
+    /// Sets the player's position, authorized by poi-system.
+    ///
+    /// This instruction can only be called via CPI from poi-system using
+    /// the poi_authority PDA as signer. Used for fast travel between
+    /// discovered Rail Waypoints.
+    pub fn set_position_authorized(
+        ctx: Context<SetPositionAuthorized>,
+        target_x: u8,
+        target_y: u8,
+    ) -> Result<()> {
+        let game_state = &mut ctx.accounts.game_state;
+
+        require!(
+            is_within_bounds(
+                target_x,
+                target_y,
+                game_state.map_width,
+                game_state.map_height
+            ),
+            GameplayStateError::OutOfBounds
+        );
+
+        let from_x = game_state.position_x;
+        let from_y = game_state.position_y;
+        game_state.position_x = target_x;
+        game_state.position_y = target_y;
+
+        emit!(PositionSetAuthorized {
+            player: game_state.player,
+            from_x,
+            from_y,
+            to_x: target_x,
+            to_y: target_y,
+        });
+
+        Ok(())
+    }
+
     /// Moves the player to an adjacent tile with automatic combat resolution.
     ///
     /// This instruction handles:
@@ -395,7 +439,7 @@ pub mod gameplay_state {
         let generated_map = &ctx.accounts.generated_map;
         let inventory = &ctx.accounts.inventory;
         let inventory_info = &ctx.accounts.inventory.to_account_info();
-        let player = &ctx.accounts.player;
+        let _player = &ctx.accounts.player;
         let player_inventory_program = &ctx.accounts.player_inventory_program;
 
         require!(!game_state.is_dead, GameplayStateError::PlayerDead);
@@ -422,6 +466,12 @@ pub mod gameplay_state {
             GameplayStateError::NotAdjacent
         );
 
+        let is_night_move = game_state.phase.is_night();
+        let visibility_radius = if is_night_move {
+            NIGHT_VISION_RADIUS
+        } else {
+            DAY_VISION_RADIUS
+        };
         let is_wall = !generated_map.is_walkable(target_x, target_y);
         let player_stats = calculate_stats(inventory);
         let move_cost = calculate_move_cost(is_wall, player_stats.dig);
@@ -470,8 +520,12 @@ pub mod gameplay_state {
 
         let mut player_tile_blocked = false;
 
-        // Night phase: enemies within 3 tiles (Chebyshev distance) move toward player
-        if game_state.phase.is_night() {
+        let target_enemy_exists_before_move =
+            find_enemy_index(map_enemies, target_x, target_y).is_some();
+
+        // Night phase: enemies within 3 tiles (Chebyshev distance) move toward player.
+        // Skip enemy movement if player is directly engaging an enemy on target tile.
+        if should_process_night_enemy_movement(&game_state.phase, target_enemy_exists_before_move) {
             let player_x = game_state.position_x;
             let player_y = game_state.position_y;
             let mut enemy_idx = 0usize;
@@ -530,10 +584,7 @@ pub mod gameplay_state {
                             if !player_won {
                                 return Ok(());
                             }
-
-                            if enemy_idx < map_enemies.enemies.len() {
-                                continue;
-                            }
+                            break;
                         }
                     }
                 }
@@ -558,6 +609,13 @@ pub mod gameplay_state {
 
         game_state.position_x = target_x;
         game_state.position_y = target_y;
+        discover_visible_waypoints_cpi(
+            &ctx.accounts.map_pois,
+            &game_state.to_account_info(),
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.poi_system_program.to_account_info(),
+            visibility_radius,
+        )?;
 
         // Handle move cost consumption, potentially spanning phases
         if needs_phase_span {
@@ -594,17 +652,19 @@ pub mod gameplay_state {
 
         let target_enemy_idx = find_enemy_index(map_enemies, target_x, target_y);
 
-        if !is_last_move_of_week {
-            if let Some(enemy_idx) = target_enemy_idx {
-                combat_triggered = true;
-                let player_won =
-                    resolve_enemy_combat(game_state, inventory, map_enemies, enemy_idx)?;
-                if !player_won {
-                    return Ok(());
-                }
+        if should_process_target_enemy_combat(
+            combat_triggered,
+            is_last_move_of_week,
+            target_enemy_idx.is_some(),
+        ) {
+            let enemy_idx = target_enemy_idx.expect("checked is_some above");
+            combat_triggered = true;
+            let player_won = resolve_enemy_combat(game_state, inventory, map_enemies, enemy_idx)?;
+            if !player_won {
+                return Ok(());
             }
         } else {
-            combat_triggered = true;
+            combat_triggered = combat_triggered || is_last_move_of_week;
         }
 
         emit!(PlayerMoved {
@@ -674,7 +734,7 @@ pub mod gameplay_state {
         let map_enemies = &mut ctx.accounts.map_enemies;
         let inventory = &ctx.accounts.inventory;
         let inventory_info = &ctx.accounts.inventory.to_account_info();
-        let player = &ctx.accounts.player;
+        let _player = &ctx.accounts.player;
         let player_inventory_program = &ctx.accounts.player_inventory_program;
 
         require!(!game_state.is_dead, GameplayStateError::PlayerDead);
@@ -713,17 +773,13 @@ pub mod gameplay_state {
     /// This instruction is intended for testing purposes to avoid
     /// doing hundreds of move transactions to reach a specific phase.
     ///
-    /// WARNING: This should only be used in test environments.
-    #[allow(unused_variables)]
+    /// Disabled in production builds.
     pub fn set_phase_for_testing(
-        ctx: Context<SetPhaseForTesting>,
-        phase: Phase,
-        moves_remaining: u8,
+        _ctx: Context<SetPhaseForTesting>,
+        _phase: Phase,
+        _moves_remaining: u8,
     ) -> Result<()> {
-        let game_state = &mut ctx.accounts.game_state;
-        game_state.phase = phase;
-        game_state.moves_remaining = moves_remaining;
-        Ok(())
+        Err(GameplayStateError::TestOnlyInstructionDisabled.into())
     }
 }
 
@@ -866,7 +922,13 @@ fn resolve_enemy_combat(
         enemy_atk: enemy_input.atk,
     });
 
-    let result = resolve_combat(player_input, enemy_input, player_effects, enemy_effects)?;
+    let result = resolve_combat_with_player_gold(
+        player_input,
+        enemy_input,
+        player_effects,
+        enemy_effects,
+        game_state.gold,
+    )?;
 
     let tier_enum = field_enemies::state::EnemyTier::from_u8(enemy.tier);
     require!(tier_enum.is_some(), GameplayStateError::InvalidEnemyTier);
@@ -903,7 +965,7 @@ fn resolve_enemy_combat(
 
     if result.player_won {
         remove_enemy(map_enemies, enemy_index);
-        game_state.gold = game_state.gold.checked_add(gold_reward).unwrap_or(u16::MAX);
+        game_state.gold = game_state.gold.saturating_add(gold_reward);
 
         // Process Victory trigger effects (e.g., Lucky Coin, Blood Chalice)
         process_victory_effects(game_state, inventory, player_stats.max_hp);
@@ -951,7 +1013,13 @@ fn resolve_boss_fight<'info>(
         week: game_state.week,
     });
 
-    let result = resolve_combat(player_input, boss_input, player_effects, boss_effects)?;
+    let result = resolve_combat_with_player_gold(
+        player_input,
+        boss_input,
+        player_effects,
+        boss_effects,
+        game_state.gold,
+    )?;
 
     emit!(CombatEnded {
         player: game_state.player,
@@ -1089,6 +1157,41 @@ fn set_tile_floor_cpi<'info>(
     Ok(())
 }
 
+fn discover_visible_waypoints_cpi<'info>(
+    map_pois: &AccountInfo<'info>,
+    game_state: &AccountInfo<'info>,
+    player: &AccountInfo<'info>,
+    poi_system_program: &AccountInfo<'info>,
+    visibility_radius: u8,
+) -> Result<()> {
+    let mut data = [0u8; 9];
+    data[..8].copy_from_slice(&DISCOVER_VISIBLE_WAYPOINTS_DISCRIMINATOR);
+    data[8] = visibility_radius;
+
+    let instruction = Instruction {
+        program_id: POI_SYSTEM_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(map_pois.key(), false),
+            AccountMeta::new_readonly(game_state.key(), false),
+            AccountMeta::new_readonly(player.key(), true),
+        ],
+        data: data.to_vec(),
+    };
+
+    invoke(
+        &instruction,
+        &[
+            map_pois.clone(),
+            game_state.clone(),
+            player.clone(),
+            poi_system_program.clone(),
+        ],
+    )?;
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn select_enemy_step(
     enemy_x: u8,
     enemy_y: u8,
@@ -1257,6 +1360,9 @@ pub struct CloseGameStateViaBurner<'info> {
 pub struct CloseMapEnemies<'info> {
     #[account(
         mut,
+        seeds = [MapEnemies::SEED_PREFIX, game_state.session.as_ref()],
+        bump = map_enemies.bump,
+        constraint = map_enemies.session == game_state.session @ GameplayStateError::InvalidSession,
         close = player,
     )]
     pub map_enemies: Account<'info, MapEnemies>,
@@ -1386,6 +1492,22 @@ pub struct ModifyGoldAuthorized<'info> {
     pub poi_authority: Signer<'info>,
 }
 
+/// Context for authorized position updates via poi-system CPI.
+/// Requires poi_authority PDA from poi-system as signer.
+#[derive(Accounts)]
+pub struct SetPositionAuthorized<'info> {
+    #[account(mut)]
+    pub game_state: Account<'info, GameState>,
+
+    /// POI authority PDA from poi-system that must sign
+    #[account(
+        seeds = [b"poi_authority"],
+        bump,
+        seeds::program = POI_SYSTEM_PROGRAM_ID,
+    )]
+    pub poi_authority: Signer<'info>,
+}
+
 #[derive(Accounts)]
 pub struct Move<'info> {
     #[account(
@@ -1437,6 +1559,14 @@ pub struct Move<'info> {
 
     /// Map generator program for CPI (set tile floor on wall break)
     pub map_generator_program: Program<'info, map_generator::program::MapGenerator>,
+
+    /// CHECK: Validated by POI system during CPI discovery.
+    #[account(mut)]
+    pub map_pois: AccountInfo<'info>,
+
+    /// CHECK: Must be the poi-system program.
+    #[account(address = POI_SYSTEM_PROGRAM_ID)]
+    pub poi_system_program: AccountInfo<'info>,
 
     #[account(mut)]
     pub player: Signer<'info>,
@@ -1572,6 +1702,16 @@ pub struct GoldModifiedAuthorized {
     pub old_gold: u16,
     pub new_gold: u16,
     pub delta: i16,
+}
+
+/// Emitted when position is updated via authorized CPI from poi-system.
+#[event]
+pub struct PositionSetAuthorized {
+    pub player: Pubkey,
+    pub from_x: u8,
+    pub from_y: u8,
+    pub to_x: u8,
+    pub to_y: u8,
 }
 
 /// Emitted when combat starts (either player walked into enemy or enemy walked into player)

@@ -93,7 +93,7 @@ pub mod player_profile {
                     .ok_or(PlayerProfileError::ArithmeticOverflow)?;
             }
 
-            // Unlock a random item from the locked pool (indices 40-79)
+            // Unlock a random item from the locked pool (indices 40-92)
             if let Some(item_index) = bitmask::select_random_locked_item(
                 profile.unlocked_items,
                 &profile.owner,
@@ -215,7 +215,7 @@ pub mod player_profile {
                     .ok_or(PlayerProfileError::ArithmeticOverflow)?;
             }
 
-            // Unlock a random item from the locked pool (indices 40-79)
+            // Unlock a random item from the locked pool (indices 40-92)
             if let Some(item_index) = bitmask::select_random_locked_item(
                 profile.unlocked_items,
                 &profile.owner,
@@ -336,12 +336,10 @@ pub struct RecordRunResultCpi<'info> {
     #[account(mut)]
     pub player_profile: Account<'info, PlayerProfile>,
 
-    /// The session account - used to verify player and burner wallet ownership.
-    /// Manually verified in instruction:
+    /// CHECK: All three checks performed in record_run_result_cpi handler:
     /// 1. Account owner == session-manager program ID
     /// 2. session.player == player_profile.owner
     /// 3. session.burner_wallet == burner_wallet signer
-    /// CHECK: All three checks performed in record_run_result_cpi handler
     pub session: AccountInfo<'info>,
 
     /// Burner wallet signer - verified against session's stored burner_wallet field.

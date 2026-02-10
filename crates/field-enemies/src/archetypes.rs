@@ -157,24 +157,24 @@ pub static ENEMY_STATS: [[EnemyStats; 3]; ARCHETYPE_COUNT] = [
             dig: 2,
         },
     ],
-    // 2: Spore Slime - 8/1/2/0/1, 11/2/3/0/1, 14/3/4/0/2
+    // 2: Spore Slime - 7/1/2/0/1, 10/2/3/0/1, 13/3/4/0/2
     [
         EnemyStats {
-            hp: 8,
+            hp: 7,
             atk: 1,
             arm: 2,
             spd: 0,
             dig: 1,
         },
         EnemyStats {
-            hp: 11,
+            hp: 10,
             atk: 2,
             arm: 3,
             spd: 0,
             dig: 1,
         },
         EnemyStats {
-            hp: 14,
+            hp: 13,
             atk: 3,
             arm: 4,
             spd: 0,
@@ -205,97 +205,97 @@ pub static ENEMY_STATS: [[EnemyStats; 3]; ARCHETYPE_COUNT] = [
             dig: 3,
         },
     ],
-    // 4: Collapsed Miner - 10/2/0/1/3, 14/3/0/2/3, 18/4/1/3/4
+    // 4: Collapsed Miner - 7/1/0/1/3, 11/2/0/2/3, 15/3/1/3/4
     [
         EnemyStats {
-            hp: 10,
-            atk: 2,
+            hp: 7,
+            atk: 1,
             arm: 0,
             spd: 1,
             dig: 3,
         },
         EnemyStats {
-            hp: 14,
-            atk: 3,
+            hp: 11,
+            atk: 2,
             arm: 0,
             spd: 2,
             dig: 3,
         },
         EnemyStats {
-            hp: 18,
-            atk: 4,
+            hp: 15,
+            atk: 3,
             arm: 1,
             spd: 3,
             dig: 4,
         },
     ],
-    // 5: Shard Beetle - 9/1/3/1/2, 12/2/4/1/2, 15/3/5/2/3
+    // 5: Shard Beetle - 8/1/2/1/2, 11/2/3/1/2, 14/3/4/2/3
     [
         EnemyStats {
-            hp: 9,
+            hp: 8,
             atk: 1,
+            arm: 2,
+            spd: 1,
+            dig: 2,
+        },
+        EnemyStats {
+            hp: 11,
+            atk: 2,
             arm: 3,
             spd: 1,
             dig: 2,
         },
         EnemyStats {
-            hp: 12,
-            atk: 2,
-            arm: 4,
-            spd: 1,
-            dig: 2,
-        },
-        EnemyStats {
-            hp: 15,
+            hp: 14,
             atk: 3,
-            arm: 5,
+            arm: 4,
             spd: 2,
             dig: 3,
         },
     ],
-    // 6: Tunnel Warden - 8/2/4/2/2, 11/3/6/3/2, 14/4/8/4/3
+    // 6: Tunnel Warden - 8/2/2/2/2, 11/3/4/3/2, 14/4/6/4/3
     [
         EnemyStats {
             hp: 8,
             atk: 2,
-            arm: 4,
+            arm: 2,
             spd: 2,
             dig: 2,
         },
         EnemyStats {
             hp: 11,
             atk: 3,
-            arm: 6,
+            arm: 4,
             spd: 3,
             dig: 2,
         },
         EnemyStats {
             hp: 14,
             atk: 4,
-            arm: 8,
+            arm: 6,
             spd: 4,
             dig: 3,
         },
     ],
-    // 7: Burrow Ambusher - 6/3/0/4/2, 9/4/0/5/2, 12/5/0/6/3
+    // 7: Burrow Ambusher - 6/2/0/4/2, 9/3/0/5/2, 12/4/0/6/3
     [
         EnemyStats {
             hp: 6,
-            atk: 3,
+            atk: 2,
             arm: 0,
             spd: 4,
             dig: 2,
         },
         EnemyStats {
             hp: 9,
-            atk: 4,
+            atk: 3,
             arm: 0,
             spd: 5,
             dig: 2,
         },
         EnemyStats {
             hp: 12,
-            atk: 5,
+            atk: 4,
             arm: 0,
             spd: 6,
             dig: 3,
@@ -325,24 +325,24 @@ pub static ENEMY_STATS: [[EnemyStats; 3]; ARCHETYPE_COUNT] = [
             dig: 2,
         },
     ],
-    // 9: Powder Tick - 7/1/0/2/1, 10/2/0/3/1, 13/3/0/4/2
+    // 9: Powder Tick - 6/1/0/2/1, 9/2/0/3/1, 12/3/0/4/2
     [
         EnemyStats {
-            hp: 7,
+            hp: 6,
             atk: 1,
             arm: 0,
             spd: 2,
             dig: 1,
         },
         EnemyStats {
-            hp: 10,
+            hp: 9,
             atk: 2,
             arm: 0,
             spd: 3,
             dig: 1,
         },
         EnemyStats {
-            hp: 13,
+            hp: 12,
             atk: 3,
             arm: 0,
             spd: 4,
@@ -440,7 +440,7 @@ mod tests {
         let stats = get_enemy_stats(ids::TUNNEL_WARDEN, 2).unwrap();
         assert_eq!(stats.hp, 14);
         assert_eq!(stats.atk, 4);
-        assert_eq!(stats.arm, 8);
+        assert_eq!(stats.arm, 6);
         assert_eq!(stats.spd, 4);
         assert_eq!(stats.dig, 3);
     }

@@ -92,26 +92,48 @@ impl Cell {
 // POI Placement Configuration
 // ============================================================================
 
-const POI_COMMON_PERCENT: u16 = 8;
-const POI_UNCOMMON_PERCENT: u16 = 4;
-const POI_RARE_PERCENT: u16 = 2;
-
 const POI_MIN_SPACING: u8 = 10;
 
-const POI_COMMON_TYPES: [u8; 4] = [2, 4, 5, 6];
-const POI_UNCOMMON_TYPES: [u8; 7] = [3, 7, 8, 9, 10, 13, 14];
-const POI_RARE_TYPES: [u8; 2] = [11, 12];
+const BASELINE_L2_SUPPLY_CACHE: [u8; 4] = [10, 9, 8, 7];
+const BASELINE_L3_TOOL_CRATE: [u8; 4] = [2, 2, 2, 2];
+const BASELINE_L4_TOOL_OIL: [u8; 4] = [2, 1, 1, 1];
+const BASELINE_L6_SURVEY_BEACON: [u8; 4] = [1, 2, 1, 1];
+const BASELINE_L10_RUSTY_ANVIL: [u8; 4] = [1, 1, 1, 1];
+
+const GUARANTEED_L5_REST_ALCOVE: [u8; 4] = [2, 3, 1, 2];
+const GUARANTEED_L13_COUNTER_CACHE_BASE: [u8; 4] = [2, 2, 2, 2];
+const GUARANTEED_L13_WEEK3_CHANCE_PERCENT: [u8; 4] = [50, 100, 30, 20];
 
 // ==========================================================================
 // Enemy Placement Configuration
 // ==========================================================================
 
-const ENEMY_DENSITY_PERCENT: u16 = 5;
+const ACT_ENEMY_TARGETS: [u8; 4] = [36, 40, 44, 48];
 
+/// Minimum Chebyshev distance from spawn where enemies can be placed.
+/// Night phase chases enemies within 3 tiles, so 5 gives a safe buffer.
 const SPAWN_PROTECTION_RADIUS: u8 = 5;
-const MID_ZONE_RADIUS: u8 = 10;
 
-const ZONE_TIER_WEIGHTS: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [0.6, 0.4, 0.0], [0.3, 0.4, 0.3]];
+/// Difficulty pools for safe-start and ramping rules.
+const EASY_POOL: [u8; 5] = [0, 1, 8, 10, 11]; // Rat, Bat, Wisp, Coin Slug, Blood Mosquito
+const MEDIUM_POOL: [u8; 4] = [2, 3, 5, 9]; // Spore, Rust Mite, Shard Beetle, Powder Tick
+const HARD_POOL: [u8; 3] = [4, 6, 7]; // Collapsed Miner, Tunnel Warden, Burrow Ambusher
+
+/// Week-based enemy pool weights represented as [easy, medium, hard] percentages.
+/// We map near/mid/far distance bands to week 1/2/3 respectively.
+const DISTANCE_POOL_WEIGHTS: [[u8; 3]; 3] = [
+    [60, 30, 10], // Near spawn (week 1 profile)
+    [40, 40, 20], // Mid map (week 2 profile)
+    [30, 40, 30], // Far map (week 3 profile)
+];
+
+/// Tier distribution near spawn: 80% T1 / 15% T2 / 5% T3
+const NEAR_TIER_WEIGHTS: [u8; 3] = [80, 15, 5];
+/// Tier distribution far from spawn: 50% T1 / 35% T2 / 15% T3
+const FAR_TIER_WEIGHTS: [u8; 3] = [50, 35, 15];
+/// Mid-map act defaults by act 1-4 as [T1, T2, T3] percentages.
+const ACT_DEFAULT_TIER_WEIGHTS: [[u8; 3]; 4] =
+    [[70, 25, 5], [55, 35, 10], [45, 40, 15], [35, 45, 20]];
 
 // Biome weights for enemy archetypes from GDD:
 // Biome A emphasizes: Tunnel Rat, Collapsed Miner, Shard Beetle, Coin Slug
@@ -141,30 +163,168 @@ fn is_biome_a(campaign_level: u8) -> bool {
     act == 1 || act == 3
 }
 
-/// Select an enemy archetype using biome-weighted random selection
-fn select_weighted_archetype(rng: &mut SeededRNG, campaign_level: u8) -> u8 {
+#[inline]
+fn act_index_from_campaign_level(campaign_level: u8) -> usize {
+    ((campaign_level.saturating_sub(1)) / 10).clamp(0, 3) as usize
+}
+
+fn poi_target_counts_for_act(act_index: usize, rng: &mut SeededRNG) -> [u8; 15] {
+    let mut targets = [0u8; 15];
+
+    // Fixed/core utilities
+    targets[1] = 1; // L1 Mole Den
+    targets[5] = GUARANTEED_L5_REST_ALCOVE[act_index]; // L5 Rest Alcove
+    targets[7] = 1; // L7 Seismic Scanner
+    targets[8] = 2; // L8 Rail Waypoint
+    targets[9] = 1; // L9 Smuggler Hatch
+    targets[11] = 1; // L11 Rune Kiln
+    targets[12] = 1; // L12 Geode Vault
+    targets[14] = 1; // L14 Scrap Chute
+
+    // Baseline common/uncommon counts
+    targets[2] = BASELINE_L2_SUPPLY_CACHE[act_index];
+    targets[3] = BASELINE_L3_TOOL_CRATE[act_index];
+    targets[4] = BASELINE_L4_TOOL_OIL[act_index];
+    targets[6] = BASELINE_L6_SURVEY_BEACON[act_index];
+    targets[10] = BASELINE_L10_RUSTY_ANVIL[act_index];
+
+    // Counter Cache (L13): week 1 + week 2 guaranteed, week 3 chance by act
+    targets[13] = GUARANTEED_L13_COUNTER_CACHE_BASE[act_index];
+    let week3_roll = (rng.next_val() % 100) as u8;
+    if week3_roll < GUARANTEED_L13_WEEK3_CHANCE_PERCENT[act_index] {
+        targets[13] = targets[13].saturating_add(1);
+    }
+
+    targets
+}
+
+/// Select an enemy archetype from a specific pool using biome-weighted random selection.
+fn select_weighted_archetype_from_pool(rng: &mut SeededRNG, campaign_level: u8, pool: &[u8]) -> u8 {
     let biome_index = if is_biome_a(campaign_level) { 0 } else { 1 };
 
     // Calculate total weight
     let mut total_weight: u16 = 0;
-    for weights in ENEMY_BIOME_WEIGHTS.iter() {
-        total_weight += weights[biome_index] as u16;
+    for &archetype_id in pool {
+        total_weight += ENEMY_BIOME_WEIGHTS[archetype_id as usize][biome_index] as u16;
     }
 
     // Roll a random value in range [0, total_weight)
-    let roll = (rng.next() % total_weight as u64) as u16;
+    let roll = (rng.next_val() % total_weight as u64) as u16;
 
     // Select archetype based on cumulative weights
     let mut cumulative: u16 = 0;
-    for (id, weights) in ENEMY_BIOME_WEIGHTS.iter().enumerate() {
-        cumulative += weights[biome_index] as u16;
+    for &archetype_id in pool {
+        cumulative += ENEMY_BIOME_WEIGHTS[archetype_id as usize][biome_index] as u16;
         if roll < cumulative {
-            return id as u8;
+            return archetype_id;
         }
     }
 
-    // Fallback (should never happen)
-    0
+    // Fallback (should never happen).
+    pool[0]
+}
+
+#[inline]
+fn distance_percent_from_spawn(position: Position, spawn_position: Position) -> u8 {
+    // Max manhattan distance in 50x50 map = (49 + 49) = 98.
+    const MAX_DISTANCE: u16 = (MAP_WIDTH as u16 - 1) + (MAP_HEIGHT as u16 - 1);
+    let distance = manhattan_distance(position, spawn_position).min(MAX_DISTANCE);
+    ((distance * 100) / MAX_DISTANCE) as u8
+}
+
+#[inline]
+fn distance_band(distance_pct: u8) -> usize {
+    if distance_pct <= 33 {
+        0
+    } else if distance_pct <= 66 {
+        1
+    } else {
+        2
+    }
+}
+
+fn select_pool_for_distance(distance_pct: u8, rng: &mut SeededRNG) -> &'static [u8] {
+    let band = distance_band(distance_pct);
+    let weights = DISTANCE_POOL_WEIGHTS[band];
+    let roll = (rng.next_val() % 100) as u8;
+
+    if roll < weights[0] {
+        &EASY_POOL
+    } else if roll < weights[0] + weights[1] {
+        &MEDIUM_POOL
+    } else {
+        &HARD_POOL
+    }
+}
+
+fn select_tier_for_distance(distance_pct: u8, campaign_level: u8, rng: &mut SeededRNG) -> u8 {
+    let weights = match distance_band(distance_pct) {
+        0 => NEAR_TIER_WEIGHTS,
+        1 => {
+            let act = ((campaign_level.saturating_sub(1)) / 10).clamp(0, 3);
+            ACT_DEFAULT_TIER_WEIGHTS[act as usize]
+        }
+        _ => FAR_TIER_WEIGHTS,
+    };
+
+    let roll = (rng.next_val() % 100) as u8;
+    if roll < weights[0] {
+        1
+    } else if roll < weights[0] + weights[1] {
+        2
+    } else {
+        3
+    }
+}
+
+#[inline]
+fn is_easy_archetype(archetype_id: u8) -> bool {
+    EASY_POOL.contains(&archetype_id)
+}
+
+fn enforce_safe_start_easy_pool(map: &mut GeneratedMap, rng: &mut SeededRNG, campaign_level: u8) {
+    if map.enemy_count == 0 {
+        return;
+    }
+
+    let spawn_position = Position {
+        x: map.spawn_x,
+        y: map.spawn_y,
+    };
+
+    // Track three closest enemies to spawn.
+    let mut closest: [(u16, usize); 3] = [(u16::MAX, usize::MAX); 3];
+    for idx in 0..map.enemy_count as usize {
+        let enemy = map.enemies[idx];
+        let dist = manhattan_distance(
+            Position {
+                x: enemy.x,
+                y: enemy.y,
+            },
+            spawn_position,
+        );
+
+        for slot in 0..3 {
+            if dist < closest[slot].0 {
+                for shift in (slot + 1..3).rev() {
+                    closest[shift] = closest[shift - 1];
+                }
+                closest[slot] = (dist, idx);
+                break;
+            }
+        }
+    }
+
+    for (_, idx) in closest {
+        if idx == usize::MAX {
+            continue;
+        }
+        let enemy = &mut map.enemies[idx];
+        if !is_easy_archetype(enemy.archetype_id) {
+            enemy.archetype_id =
+                select_weighted_archetype_from_pool(rng, campaign_level, &EASY_POOL);
+        }
+    }
 }
 
 /// Maze generator state with fixed-size arrays (no heap allocations)
@@ -235,7 +395,7 @@ impl MazeGenerator {
         }
 
         // Pick random neighbor
-        let choice = (self.rng.next() % (count as u64)) as usize;
+        let choice = (self.rng.next_val() % (count as u64)) as usize;
         let dir = Direction::from_index(neighbors[choice]);
         let (dx, dy) = dir.delta();
 
@@ -245,8 +405,8 @@ impl MazeGenerator {
     /// Generate the maze using iterative recursive backtracker
     pub fn generate(&mut self) {
         // Start at random cell
-        let start_cx = (self.rng.next() % (CELL_GRID_WIDTH as u64)) as u8;
-        let start_cy = (self.rng.next() % (CELL_GRID_HEIGHT as u64)) as u8;
+        let start_cx = (self.rng.next_val() % (CELL_GRID_WIDTH as u64)) as u8;
+        let start_cy = (self.rng.next_val() % (CELL_GRID_HEIGHT as u64)) as u8;
 
         // Push start to stack
         self.stack[0] = Self::pack_coords(start_cx, start_cy);
@@ -286,9 +446,9 @@ impl MazeGenerator {
         // Using integer math: 144 * 15 / 100 = 21
         let extra_count = (CELL_GRID_SIZE * 15) / 100;
         for _ in 0..extra_count {
-            let cx = (self.rng.next() % (CELL_GRID_WIDTH as u64)) as u8;
-            let cy = (self.rng.next() % (CELL_GRID_HEIGHT as u64)) as u8;
-            let dir = Direction::from_index((self.rng.next() % 4) as u8);
+            let cx = (self.rng.next_val() % (CELL_GRID_WIDTH as u64)) as u8;
+            let cy = (self.rng.next_val() % (CELL_GRID_HEIGHT as u64)) as u8;
+            let dir = Direction::from_index((self.rng.next_val() % 4) as u8);
             let (dx, dy) = dir.delta();
 
             let nx = (cx as i8) + dx;
@@ -351,7 +511,8 @@ impl MazeGenerator {
                 if map.is_walkable(x, y) && !map.is_walkable(x, y - 1) {
                     count += 1;
                     // Reservoir sampling: keep with probability 1/count
-                    if self.rng.next() % (count as u64) == 0 {
+                    #[allow(clippy::manual_is_multiple_of)]
+                    if self.rng.next_val() % (count as u64) == 0 {
                         result = Some((x, y));
                     }
                 }
@@ -430,22 +591,49 @@ fn find_valid_poi_position(
     None
 }
 
-fn place_pois_for_rarity(
+fn find_reachable_counter_cache_position(
+    walkable_tiles: &mut [Position],
+    map: &GeneratedMap,
+    rng: &mut SeededRNG,
+) -> Option<Position> {
+    let spawn = Position {
+        x: map.spawn_x,
+        y: map.spawn_y,
+    };
+
+    rng.shuffle(walkable_tiles);
+
+    for &pos in walkable_tiles.iter() {
+        if is_position_used(map, pos) {
+            continue;
+        }
+
+        // Reachable within early budget using tile-distance approximation.
+        if manhattan_distance(pos, spawn) > 30 {
+            continue;
+        }
+
+        if !is_same_type_spacing_valid(map, pos, 13) {
+            continue;
+        }
+
+        return Some(pos);
+    }
+
+    None
+}
+
+fn place_poi_type_count(
     map: &mut GeneratedMap,
     rng: &mut SeededRNG,
     walkable_tiles: &mut [Position],
-    poi_types: &[u8],
+    poi_type: u8,
     count: usize,
 ) {
     for _ in 0..count {
         if map.poi_count as usize >= MAX_POIS {
             return;
         }
-
-        let poi_type = match rng.choose(poi_types) {
-            Some(&value) => value,
-            None => return,
-        };
 
         if let Some(position) = find_valid_poi_position(walkable_tiles, map, poi_type, rng) {
             let index = map.poi_count as usize;
@@ -460,7 +648,7 @@ fn place_pois_for_rarity(
     }
 }
 
-fn place_pois(map: &mut GeneratedMap, rng: &mut SeededRNG) {
+fn place_pois(map: &mut GeneratedMap, rng: &mut SeededRNG, campaign_level: u8) {
     map.poi_count = 0;
 
     let mut walkable_tiles: Vec<Position> = Vec::with_capacity(map.walkable_count as usize);
@@ -488,67 +676,40 @@ fn place_pois(map: &mut GeneratedMap, rng: &mut SeededRNG) {
         return;
     }
 
-    let total_walkable = walkable_tiles.len() as u16;
-    let common_count = (total_walkable * POI_COMMON_PERCENT) / 100;
-    let uncommon_count = (total_walkable * POI_UNCOMMON_PERCENT) / 100;
-    let rare_count = (total_walkable * POI_RARE_PERCENT) / 100;
+    let act_index = act_index_from_campaign_level(campaign_level);
+    let mut targets = poi_target_counts_for_act(act_index, rng);
+    if targets[1] > 0 {
+        targets[1] = targets[1].saturating_sub(1);
+    }
 
-    place_pois_for_rarity(
-        map,
-        rng,
-        &mut walkable_tiles,
-        &POI_COMMON_TYPES,
-        common_count as usize,
-    );
-    place_pois_for_rarity(
-        map,
-        rng,
-        &mut walkable_tiles,
-        &POI_UNCOMMON_TYPES,
-        uncommon_count as usize,
-    );
-    place_pois_for_rarity(
-        map,
-        rng,
-        &mut walkable_tiles,
-        &POI_RARE_TYPES,
-        rare_count as usize,
-    );
+    // Ensure one reachable Counter Cache first when available.
+    if targets[13] > 0 && (map.poi_count as usize) < MAX_POIS {
+        if let Some(position) = find_reachable_counter_cache_position(&mut walkable_tiles, map, rng)
+        {
+            let index = map.poi_count as usize;
+            map.pois[index] = PoiSpawn {
+                poi_type: 13,
+                is_used: false,
+                x: position.x,
+                y: position.y,
+            };
+            map.poi_count += 1;
+            targets[13] = targets[13].saturating_sub(1);
+        }
+    }
+
+    // Place specific POI types according to per-act targets.
+    // Order prioritizes mandatory utilities before high-volume baseline spawns.
+    const PLACEMENT_ORDER: [u8; 13] = [12, 11, 10, 9, 8, 7, 14, 13, 6, 5, 4, 3, 2];
+    for poi_type in PLACEMENT_ORDER {
+        let count = targets[poi_type as usize] as usize;
+        place_poi_type_count(map, rng, &mut walkable_tiles, poi_type, count);
+    }
 }
 
 // ============================================================================
 // Enemy Placement Helpers
 // ============================================================================
-
-fn get_spawn_zone(position: Position, spawn_position: Position) -> u8 {
-    let distance = manhattan_distance(position, spawn_position);
-
-    if distance <= SPAWN_PROTECTION_RADIUS as u16 {
-        return 0;
-    }
-
-    if distance <= MID_ZONE_RADIUS as u16 {
-        return 1;
-    }
-
-    2
-}
-
-fn select_tier_for_zone(zone: u8, rng: &mut SeededRNG) -> u8 {
-    let weights = ZONE_TIER_WEIGHTS[zone as usize];
-    let total_weight = weights[0] + weights[1] + weights[2];
-    let roll = rng.next_float() * total_weight;
-
-    if roll < weights[0] {
-        return 1;
-    }
-
-    if roll < weights[0] + weights[1] {
-        return 2;
-    }
-
-    3
-}
 
 fn place_enemies(map: &mut GeneratedMap, rng: &mut SeededRNG, campaign_level: u8) {
     map.enemy_count = 0;
@@ -590,12 +751,7 @@ fn place_enemies(map: &mut GeneratedMap, rng: &mut SeededRNG, campaign_level: u8
         mark_occupied(Position { x: poi.x, y: poi.y });
     }
 
-    let total_walkable = walkable_tiles.len() as u16;
-    let mut target_count = (total_walkable * ENEMY_DENSITY_PERCENT) / 100;
-    if target_count == 0 {
-        return;
-    }
-
+    let mut target_count = ACT_ENEMY_TARGETS[act_index_from_campaign_level(campaign_level)] as u16;
     if target_count as usize > MAX_ENEMIES {
         target_count = MAX_ENEMIES as u16;
     }
@@ -603,8 +759,8 @@ fn place_enemies(map: &mut GeneratedMap, rng: &mut SeededRNG, campaign_level: u8
     rng.shuffle(&mut walkable_tiles);
 
     let spawn_position = Position {
-        x: map.mole_den_x,
-        y: map.mole_den_y,
+        x: map.spawn_x,
+        y: map.spawn_y,
     };
 
     for pos in walkable_tiles {
@@ -612,16 +768,25 @@ fn place_enemies(map: &mut GeneratedMap, rng: &mut SeededRNG, campaign_level: u8
             break;
         }
 
+        // Keep a safe zone around spawn — no enemies within SPAWN_PROTECTION_RADIUS
+        let chebyshev = pos
+            .x
+            .abs_diff(spawn_position.x)
+            .max(pos.y.abs_diff(spawn_position.y));
+        if chebyshev <= SPAWN_PROTECTION_RADIUS {
+            continue;
+        }
+
         let index = (pos.y as usize) * (MAP_WIDTH as usize) + (pos.x as usize);
         if occupied[index] {
             continue;
         }
 
-        let zone = get_spawn_zone(pos, spawn_position);
-        let tier = select_tier_for_zone(zone, rng);
+        let distance_pct = distance_percent_from_spawn(pos, spawn_position);
+        let tier = select_tier_for_distance(distance_pct, campaign_level, rng);
         let tier_index = tier.saturating_sub(1);
-        // Use biome-weighted archetype selection based on campaign level
-        let archetype_id = select_weighted_archetype(rng, campaign_level);
+        let pool = select_pool_for_distance(distance_pct, rng);
+        let archetype_id = select_weighted_archetype_from_pool(rng, campaign_level, pool);
 
         let enemy_index = map.enemy_count as usize;
         map.enemies[enemy_index] = EnemySpawn {
@@ -633,6 +798,8 @@ fn place_enemies(map: &mut GeneratedMap, rng: &mut SeededRNG, campaign_level: u8
         map.enemy_count += 1;
         occupied[index] = true;
     }
+
+    enforce_safe_start_easy_pool(map, rng, campaign_level);
 }
 
 /// Generate a complete map with the given seed and campaign level
@@ -682,7 +849,7 @@ pub fn generate_map(map: &mut GeneratedMap, seed: u64, campaign_level: u8) -> bo
         }
     }
 
-    place_pois(map, &mut generator.rng);
+    place_pois(map, &mut generator.rng, campaign_level);
 
     place_enemies(map, &mut generator.rng, campaign_level);
 
@@ -713,6 +880,12 @@ mod tests {
             pois: [crate::state::PoiSpawn::default(); 50],
             bump: 0,
         }
+    }
+
+    fn count_pois_by_type(map: &GeneratedMap, poi_type: u8) -> usize {
+        (0..map.poi_count as usize)
+            .filter(|&idx| map.pois[idx].poi_type == poi_type)
+            .count()
     }
 
     #[test]
@@ -953,6 +1126,146 @@ mod tests {
             assert_eq!(enemy_a.x, enemy_b.x);
             assert_eq!(enemy_a.y, enemy_b.y);
         }
+    }
+
+    #[test]
+    fn test_enemy_targets_match_gdd_per_act() {
+        let expected = [(1u8, 36u8), (11u8, 40u8), (21u8, 44u8), (31u8, 48u8)];
+
+        for (campaign_level, expected_count) in expected {
+            let mut map = create_test_map();
+            assert!(generate_map(
+                &mut map,
+                9000 + campaign_level as u64,
+                campaign_level
+            ));
+            assert_eq!(
+                map.enemy_count, expected_count,
+                "Enemy count mismatch for campaign level {}",
+                campaign_level
+            );
+        }
+    }
+
+    #[test]
+    fn test_poi_targets_match_gdd_per_act() {
+        let levels = [1u8, 11u8, 21u8, 31u8];
+        let expected_l2 = [10usize, 9, 8, 7];
+        let expected_l4 = [2usize, 1, 1, 1];
+        let expected_l5 = [2usize, 3, 1, 2];
+        let expected_l6 = [1usize, 2, 1, 1];
+
+        for (act_idx, campaign_level) in levels.iter().copied().enumerate() {
+            let mut map = create_test_map();
+            assert!(generate_map(
+                &mut map,
+                12000 + campaign_level as u64,
+                campaign_level
+            ));
+
+            assert_eq!(count_pois_by_type(&map, 1), 1, "L1 count mismatch");
+            assert_eq!(
+                count_pois_by_type(&map, 2),
+                expected_l2[act_idx],
+                "L2 count mismatch"
+            );
+            assert_eq!(count_pois_by_type(&map, 3), 2, "L3 count mismatch");
+            assert_eq!(
+                count_pois_by_type(&map, 4),
+                expected_l4[act_idx],
+                "L4 count mismatch"
+            );
+            assert_eq!(
+                count_pois_by_type(&map, 5),
+                expected_l5[act_idx],
+                "L5 count mismatch"
+            );
+            assert_eq!(
+                count_pois_by_type(&map, 6),
+                expected_l6[act_idx],
+                "L6 count mismatch"
+            );
+            assert_eq!(count_pois_by_type(&map, 7), 1, "L7 count mismatch");
+            assert_eq!(count_pois_by_type(&map, 8), 2, "L8 count mismatch");
+            assert_eq!(count_pois_by_type(&map, 9), 1, "L9 count mismatch");
+            assert_eq!(count_pois_by_type(&map, 10), 1, "L10 count mismatch");
+            assert_eq!(count_pois_by_type(&map, 11), 1, "L11 count mismatch");
+            assert_eq!(count_pois_by_type(&map, 12), 1, "L12 count mismatch");
+            assert_eq!(count_pois_by_type(&map, 14), 1, "L14 count mismatch");
+
+            let l13_count = count_pois_by_type(&map, 13);
+            if act_idx == 1 {
+                assert_eq!(l13_count, 3, "Act 2 must guarantee 3 Counter Caches");
+            } else {
+                assert!(
+                    l13_count == 2 || l13_count == 3,
+                    "Counter Cache count should be 2 or 3, got {}",
+                    l13_count
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_safe_start_first_three_enemies_are_easy_pool() {
+        let mut map = create_test_map();
+        assert!(generate_map(&mut map, 2222, 1));
+
+        let spawn = Position {
+            x: map.spawn_x,
+            y: map.spawn_y,
+        };
+        let mut enemies: Vec<(u16, u8)> = (0..map.enemy_count as usize)
+            .map(|idx| {
+                let enemy = map.enemies[idx];
+                (
+                    manhattan_distance(
+                        Position {
+                            x: enemy.x,
+                            y: enemy.y,
+                        },
+                        spawn,
+                    ),
+                    enemy.archetype_id,
+                )
+            })
+            .collect();
+
+        enemies.sort_by_key(|(dist, _)| *dist);
+        for (_, archetype_id) in enemies.into_iter().take(3) {
+            assert!(
+                EASY_POOL.contains(&archetype_id),
+                "Expected easy-pool archetype in first three encounters, got {}",
+                archetype_id
+            );
+        }
+    }
+
+    #[test]
+    fn test_counter_cache_reachable_within_30_moves() {
+        let mut map = create_test_map();
+        assert!(generate_map(&mut map, 3333, 1));
+
+        let spawn = Position {
+            x: map.spawn_x,
+            y: map.spawn_y,
+        };
+        let has_reachable_counter_cache = (0..map.poi_count as usize).any(|idx| {
+            let poi = map.pois[idx];
+            poi.poi_type == 13
+                && manhattan_distance(
+                    Position { x: poi.x, y: poi.y },
+                    Position {
+                        x: spawn.x,
+                        y: spawn.y,
+                    },
+                ) <= 30
+        });
+
+        assert!(
+            has_reachable_counter_cache,
+            "Expected at least one Counter Cache (type 13) within 30 moves"
+        );
     }
 
     #[test]

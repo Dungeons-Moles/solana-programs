@@ -62,4 +62,7 @@ pub enum GameplayStateError {
 
     #[msg("Invalid HP bonus value")]
     InvalidHpBonus,
+
+    #[msg("Test-only instruction is disabled in production builds")]
+    TestOnlyInstructionDisabled,
 }

@@ -115,23 +115,34 @@ pub mod map_generator {
     /// Authorization: Reads session account to verify burner_wallet matches signer,
     /// then returns rent to session.player.
     pub fn close_generated_map(ctx: Context<CloseGeneratedMap>) -> Result<()> {
-        // Verify burner_wallet by reading from session account
-        // Session layout:
-        //   8 (discriminator) + 32 (player) + 8 (session_id) + 1 (campaign_level) +
-        //   8 (started_at) + 8 (last_activity) + 1 (is_delegated) + 1 (bump) +
-        //   10 (active_item_pool) + 32 (burner_wallet) + 32 (state_hash)
-        // Player at offset 8..40, burner_wallet at offset 77..109
-        let session_data = ctx.accounts.session.try_borrow_data()?;
-        require!(session_data.len() >= 109, MapGeneratorError::InvalidSession);
+        /// Byte offset of `player` in GameSession account data.
+        /// Must match session_manager::state::GameSession layout.
+        const SESSION_PLAYER_OFFSET: usize = 8;
+        /// Byte offset of `burner_wallet` in GameSession account data.
+        /// Keep in sync with session_manager::state::GameSession::BURNER_WALLET_OFFSET.
+        const SESSION_BURNER_WALLET_OFFSET: usize = 77;
 
-        let stored_burner = Pubkey::from(<[u8; 32]>::try_from(&session_data[77..109]).unwrap());
+        let session_data = ctx.accounts.session.try_borrow_data()?;
+        require!(
+            session_data.len() >= SESSION_BURNER_WALLET_OFFSET + 32,
+            MapGeneratorError::InvalidSession
+        );
+
+        let stored_burner = Pubkey::from(
+            <[u8; 32]>::try_from(
+                &session_data[SESSION_BURNER_WALLET_OFFSET..SESSION_BURNER_WALLET_OFFSET + 32],
+            )
+            .unwrap(),
+        );
         require!(
             stored_burner == ctx.accounts.burner_wallet.key(),
             MapGeneratorError::Unauthorized
         );
 
-        // Verify player matches session.player
-        let stored_player = Pubkey::from(<[u8; 32]>::try_from(&session_data[8..40]).unwrap());
+        let stored_player = Pubkey::from(
+            <[u8; 32]>::try_from(&session_data[SESSION_PLAYER_OFFSET..SESSION_PLAYER_OFFSET + 32])
+                .unwrap(),
+        );
         require!(
             stored_player == ctx.accounts.player.key(),
             MapGeneratorError::Unauthorized

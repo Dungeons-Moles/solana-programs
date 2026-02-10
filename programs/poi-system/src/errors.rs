@@ -68,15 +68,14 @@ pub enum PoiSystemError {
     #[msg("Shop already active")]
     ShopAlreadyActive,
 
+    #[msg("Shop reroll limit reached for this visit")]
+    ShopRerollLimitReached,
+
     #[msg("Invalid interaction for this POI type")]
     InvalidInteraction,
 
-    // New offer generation errors
     #[msg("No POI interaction is currently active")]
     NoActiveInteraction,
-
-    #[msg("No active shop to reroll")]
-    NoActiveShop,
 
     #[msg("No items available for the selected tag and rarity")]
     NoItemsAvailable,
@@ -104,4 +103,10 @@ pub enum PoiSystemError {
 
     #[msg("Selected oil is not in the generated offer")]
     InvalidOilSelection,
+
+    #[msg("Item is not currently equipped in inventory")]
+    ItemNotInInventory,
+
+    #[msg("Invalid vision radius for current phase/state")]
+    InvalidVisionRadius,
 }

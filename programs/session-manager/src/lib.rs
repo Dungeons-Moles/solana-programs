@@ -52,6 +52,8 @@ pub const CONSUME_RUN_DISCRIMINATOR: [u8; 8] = [0x6b, 0x65, 0x36, 0x52, 0x84, 0x
 /// (circular dependency). If poi-system's initialize_map_pois instruction changes, this must be updated.
 pub const INITIALIZE_MAP_POIS_DISCRIMINATOR: [u8; 8] =
     [0xa8, 0xec, 0xff, 0x37, 0xee, 0xd2, 0x19, 0xfb];
+pub const DISCOVER_VISIBLE_WAYPOINTS_DISCRIMINATOR: [u8; 8] =
+    [0x3b, 0x26, 0x6a, 0x00, 0x3a, 0xb1, 0x50, 0xfc];
 
 #[program]
 pub mod session_manager {
@@ -84,7 +86,7 @@ pub mod session_manager {
 
         // Validate campaign level is within range
         require!(
-            campaign_level >= 1 && campaign_level <= 40,
+            (1..=40).contains(&campaign_level),
             SessionManagerError::InvalidCampaignLevel
         );
 
@@ -224,6 +226,15 @@ pub mod session_manager {
             act,
             week,
             poi_seed,
+        )?;
+
+        // Apply spawn-time waypoint discovery using radius 6 around initial position.
+        discover_visible_waypoints_cpi(
+            &ctx.accounts.poi_system_program,
+            &ctx.accounts.map_pois,
+            &ctx.accounts.game_state.to_account_info(),
+            &ctx.accounts.burner_wallet.to_account_info(),
+            6,
         )?;
 
         emit!(SessionStarted {
@@ -806,52 +817,74 @@ pub struct SessionEnded {
 /// 2. Update gameplay-state's END_SESSION_DISCRIMINATOR constant
 pub const END_SESSION_DISCRIMINATOR: [u8; 8] = [0x0b, 0xf4, 0x3d, 0x9a, 0xd4, 0xf9, 0x0f, 0x42];
 
-/// Manual CPI to player_profile::consume_run.
-///
-/// This uses manual instruction construction because session-manager already
-/// has a manual PlayerProfile struct (avoiding full CPI dependency).
-/// The discriminator is validated by `test_consume_run_discriminator`.
-fn consume_run_cpi<'info>(
-    player_profile_program: &AccountInfo<'info>,
-    player_profile: &AccountInfo<'info>,
-    owner: &AccountInfo<'info>,
+// ============================================================================
+// Manual CPI Helper
+// ============================================================================
+
+/// Generic manual CPI invocation. Each account tuple is `(info, is_writable, is_signer)`.
+fn invoke_manual_cpi<'info>(
+    program: &AccountInfo<'info>,
+    program_id: Pubkey,
+    discriminator: &[u8; 8],
+    extra_data: &[u8],
+    accounts: &[(&AccountInfo<'info>, bool, bool)],
 ) -> Result<()> {
     use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
     use anchor_lang::solana_program::program::invoke;
 
-    let data = CONSUME_RUN_DISCRIMINATOR.to_vec();
+    let mut data = Vec::with_capacity(8 + extra_data.len());
+    data.extend_from_slice(discriminator);
+    data.extend_from_slice(extra_data);
 
-    let accounts = vec![
-        AccountMeta::new(player_profile.key(), false),
-        AccountMeta::new_readonly(owner.key(), true),
-    ];
+    let metas: Vec<AccountMeta> = accounts
+        .iter()
+        .map(|(info, writable, signer)| {
+            if *writable {
+                AccountMeta::new(info.key(), *signer)
+            } else {
+                AccountMeta::new_readonly(info.key(), *signer)
+            }
+        })
+        .collect();
 
-    let instruction = Instruction {
-        program_id: PLAYER_PROFILE_PROGRAM_ID,
-        accounts,
-        data,
-    };
+    let mut invoke_infos: Vec<AccountInfo<'info>> = accounts
+        .iter()
+        .map(|(info, _, _)| (*info).clone())
+        .collect();
+    invoke_infos.push(program.clone());
 
     invoke(
-        &instruction,
-        &[
-            player_profile.clone(),
-            owner.clone(),
-            player_profile_program.clone(),
-        ],
+        &Instruction {
+            program_id,
+            accounts: metas,
+            data,
+        },
+        &invoke_infos,
     )?;
-
     Ok(())
 }
 
-/// Manual CPI to poi_system::initialize_map_pois.
-///
-/// This uses manual instruction construction because session-manager cannot depend
-/// on poi-system (would create circular dependency). The discriminator is validated
-/// by `test_initialize_map_pois_discriminator`.
+// ============================================================================
+// CPI Functions
+// ============================================================================
+
+fn consume_run_cpi<'info>(
+    program: &AccountInfo<'info>,
+    player_profile: &AccountInfo<'info>,
+    owner: &AccountInfo<'info>,
+) -> Result<()> {
+    invoke_manual_cpi(
+        program,
+        PLAYER_PROFILE_PROGRAM_ID,
+        &CONSUME_RUN_DISCRIMINATOR,
+        &[],
+        &[(player_profile, true, false), (owner, false, true)],
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn initialize_map_pois_cpi<'info>(
-    poi_system_program: &AccountInfo<'info>,
+    program: &AccountInfo<'info>,
     map_pois: &AccountInfo<'info>,
     session: &AccountInfo<'info>,
     generated_map: &AccountInfo<'info>,
@@ -861,267 +894,159 @@ fn initialize_map_pois_cpi<'info>(
     week: u8,
     seed: u64,
 ) -> Result<()> {
-    use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
-    use anchor_lang::solana_program::program::invoke;
-
-    let mut data = Vec::with_capacity(8 + 1 + 1 + 8);
-    data.extend_from_slice(&INITIALIZE_MAP_POIS_DISCRIMINATOR);
-    data.push(act);
-    data.push(week);
-    data.extend_from_slice(&seed.to_le_bytes());
-
-    let accounts = vec![
-        AccountMeta::new(map_pois.key(), false),
-        AccountMeta::new_readonly(session.key(), false),
-        AccountMeta::new_readonly(generated_map.key(), false),
-        AccountMeta::new(payer.key(), true),
-        AccountMeta::new_readonly(system_program.key(), false),
-    ];
-
-    let instruction = Instruction {
-        program_id: POI_SYSTEM_PROGRAM_ID,
-        accounts,
-        data,
-    };
-
-    invoke(
-        &instruction,
+    let mut extra = Vec::with_capacity(10);
+    extra.push(act);
+    extra.push(week);
+    extra.extend_from_slice(&seed.to_le_bytes());
+    invoke_manual_cpi(
+        program,
+        POI_SYSTEM_PROGRAM_ID,
+        &INITIALIZE_MAP_POIS_DISCRIMINATOR,
+        &extra,
         &[
-            map_pois.clone(),
-            session.clone(),
-            generated_map.clone(),
-            payer.clone(),
-            system_program.clone(),
-            poi_system_program.clone(),
+            (map_pois, true, false),
+            (session, false, false),
+            (generated_map, false, false),
+            (payer, true, true),
+            (system_program, false, false),
         ],
-    )?;
-
-    Ok(())
+    )
 }
 
-/// Discriminator for player_profile::record_run_result_cpi instruction.
-/// Computed as sha256("global:record_run_result_cpi")[..8].
-/// This constant is validated by the test below.
+fn discover_visible_waypoints_cpi<'info>(
+    program: &AccountInfo<'info>,
+    map_pois: &AccountInfo<'info>,
+    game_state: &AccountInfo<'info>,
+    burner_wallet: &AccountInfo<'info>,
+    visibility_radius: u8,
+) -> Result<()> {
+    invoke_manual_cpi(
+        program,
+        POI_SYSTEM_PROGRAM_ID,
+        &DISCOVER_VISIBLE_WAYPOINTS_DISCRIMINATOR,
+        &[visibility_radius],
+        &[
+            (map_pois, true, false),
+            (game_state, false, false),
+            (burner_wallet, false, true),
+        ],
+    )
+}
+
 pub const RECORD_RUN_RESULT_CPI_DISCRIMINATOR: [u8; 8] =
     [0x09, 0xaf, 0xf6, 0x09, 0x1f, 0x62, 0x79, 0x45];
 
-/// Manual CPI to player_profile::record_run_result_cpi.
-///
-/// This records the run result (victory/defeat) and updates the player profile.
-/// Uses session account for authorization instead of requiring player signature.
 fn record_run_result_cpi<'info>(
-    player_profile_program: &AccountInfo<'info>,
+    program: &AccountInfo<'info>,
     player_profile: &AccountInfo<'info>,
     session: &AccountInfo<'info>,
     burner_wallet: &AccountInfo<'info>,
     level_completed: u8,
     victory: bool,
 ) -> Result<()> {
-    use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
-    use anchor_lang::solana_program::program::invoke;
-
-    // Build instruction data: discriminator + level_completed + victory
-    let mut data = Vec::with_capacity(8 + 1 + 1);
-    data.extend_from_slice(&RECORD_RUN_RESULT_CPI_DISCRIMINATOR);
-    data.push(level_completed);
-    data.push(if victory { 1 } else { 0 });
-
-    let accounts = vec![
-        AccountMeta::new(player_profile.key(), false),
-        AccountMeta::new_readonly(session.key(), false),
-        AccountMeta::new_readonly(burner_wallet.key(), true),
-    ];
-
-    let instruction = Instruction {
-        program_id: PLAYER_PROFILE_PROGRAM_ID,
-        accounts,
-        data,
-    };
-
-    invoke(
-        &instruction,
+    let extra = [level_completed, if victory { 1 } else { 0 }];
+    invoke_manual_cpi(
+        program,
+        PLAYER_PROFILE_PROGRAM_ID,
+        &RECORD_RUN_RESULT_CPI_DISCRIMINATOR,
+        &extra,
         &[
-            player_profile.clone(),
-            session.clone(),
-            burner_wallet.clone(),
-            player_profile_program.clone(),
+            (player_profile, true, false),
+            (session, false, false),
+            (burner_wallet, false, true),
         ],
-    )?;
-
-    Ok(())
+    )
 }
 
 // ============================================================================
 // Close CPI Functions for end_session
 // ============================================================================
 
-/// Discriminator for gameplay_state::close_game_state_via_burner
 pub const CLOSE_GAME_STATE_VIA_BURNER_DISCRIMINATOR: [u8; 8] = [71, 137, 243, 70, 95, 193, 114, 51];
-
-/// Discriminator for gameplay_state::close_map_enemies
 pub const CLOSE_MAP_ENEMIES_DISCRIMINATOR: [u8; 8] = [192, 111, 190, 66, 236, 132, 252, 88];
-
-/// Discriminator for map_generator::close_generated_map
 pub const CLOSE_GENERATED_MAP_DISCRIMINATOR: [u8; 8] = [249, 208, 241, 231, 57, 214, 174, 103];
-
-/// Discriminator for poi_system::close_map_pois_via_burner
 pub const CLOSE_MAP_POIS_VIA_BURNER_DISCRIMINATOR: [u8; 8] = [96, 5, 252, 241, 226, 138, 10, 215];
 
-/// CPI to gameplay_state::close_game_state_via_burner
 fn close_game_state_via_burner_cpi<'info>(
-    gameplay_state_program: &AccountInfo<'info>,
+    program: &AccountInfo<'info>,
     game_state: &AccountInfo<'info>,
     player: &AccountInfo<'info>,
     burner_wallet: &AccountInfo<'info>,
 ) -> Result<()> {
-    use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
-    use anchor_lang::solana_program::program::invoke;
-
-    let data = CLOSE_GAME_STATE_VIA_BURNER_DISCRIMINATOR.to_vec();
-
-    let accounts = vec![
-        AccountMeta::new(game_state.key(), false),
-        AccountMeta::new(player.key(), false),
-        AccountMeta::new_readonly(burner_wallet.key(), true),
-    ];
-
-    let instruction = Instruction {
-        program_id: gameplay_state::ID,
-        accounts,
-        data,
-    };
-
-    invoke(
-        &instruction,
+    invoke_manual_cpi(
+        program,
+        gameplay_state::ID,
+        &CLOSE_GAME_STATE_VIA_BURNER_DISCRIMINATOR,
+        &[],
         &[
-            game_state.clone(),
-            player.clone(),
-            burner_wallet.clone(),
-            gameplay_state_program.clone(),
+            (game_state, true, false),
+            (player, true, false),
+            (burner_wallet, false, true),
         ],
-    )?;
-
-    Ok(())
+    )
 }
 
-/// CPI to gameplay_state::close_map_enemies
 fn close_map_enemies_cpi<'info>(
-    gameplay_state_program: &AccountInfo<'info>,
+    program: &AccountInfo<'info>,
     map_enemies: &AccountInfo<'info>,
     game_state: &AccountInfo<'info>,
     player: &AccountInfo<'info>,
     burner_wallet: &AccountInfo<'info>,
 ) -> Result<()> {
-    use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
-    use anchor_lang::solana_program::program::invoke;
-
-    let data = CLOSE_MAP_ENEMIES_DISCRIMINATOR.to_vec();
-
-    let accounts = vec![
-        AccountMeta::new(map_enemies.key(), false),
-        AccountMeta::new_readonly(game_state.key(), false),
-        AccountMeta::new(player.key(), false),
-        AccountMeta::new_readonly(burner_wallet.key(), true),
-    ];
-
-    let instruction = Instruction {
-        program_id: gameplay_state::ID,
-        accounts,
-        data,
-    };
-
-    invoke(
-        &instruction,
+    invoke_manual_cpi(
+        program,
+        gameplay_state::ID,
+        &CLOSE_MAP_ENEMIES_DISCRIMINATOR,
+        &[],
         &[
-            map_enemies.clone(),
-            game_state.clone(),
-            player.clone(),
-            burner_wallet.clone(),
-            gameplay_state_program.clone(),
+            (map_enemies, true, false),
+            (game_state, false, false),
+            (player, true, false),
+            (burner_wallet, false, true),
         ],
-    )?;
-
-    Ok(())
+    )
 }
 
-/// CPI to map_generator::close_generated_map
 fn close_generated_map_cpi<'info>(
-    map_generator_program: &AccountInfo<'info>,
+    program: &AccountInfo<'info>,
     generated_map: &AccountInfo<'info>,
     session: &AccountInfo<'info>,
     player: &AccountInfo<'info>,
     burner_wallet: &AccountInfo<'info>,
 ) -> Result<()> {
-    use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
-    use anchor_lang::solana_program::program::invoke;
-
-    let data = CLOSE_GENERATED_MAP_DISCRIMINATOR.to_vec();
-
-    let accounts = vec![
-        AccountMeta::new(generated_map.key(), false),
-        AccountMeta::new_readonly(session.key(), false),
-        AccountMeta::new(player.key(), false),
-        AccountMeta::new_readonly(burner_wallet.key(), true),
-    ];
-
-    let instruction = Instruction {
-        program_id: MAP_GENERATOR_PROGRAM_ID,
-        accounts,
-        data,
-    };
-
-    invoke(
-        &instruction,
+    invoke_manual_cpi(
+        program,
+        MAP_GENERATOR_PROGRAM_ID,
+        &CLOSE_GENERATED_MAP_DISCRIMINATOR,
+        &[],
         &[
-            generated_map.clone(),
-            session.clone(),
-            player.clone(),
-            burner_wallet.clone(),
-            map_generator_program.clone(),
+            (generated_map, true, false),
+            (session, false, false),
+            (player, true, false),
+            (burner_wallet, false, true),
         ],
-    )?;
-
-    Ok(())
+    )
 }
 
-/// CPI to poi_system::close_map_pois_via_burner
 fn close_map_pois_via_burner_cpi<'info>(
-    poi_system_program: &AccountInfo<'info>,
+    program: &AccountInfo<'info>,
     map_pois: &AccountInfo<'info>,
     session: &AccountInfo<'info>,
     player: &AccountInfo<'info>,
     burner_wallet: &AccountInfo<'info>,
 ) -> Result<()> {
-    use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
-    use anchor_lang::solana_program::program::invoke;
-
-    let data = CLOSE_MAP_POIS_VIA_BURNER_DISCRIMINATOR.to_vec();
-
-    let accounts = vec![
-        AccountMeta::new(map_pois.key(), false),
-        AccountMeta::new_readonly(session.key(), false),
-        AccountMeta::new(player.key(), false),
-        AccountMeta::new_readonly(burner_wallet.key(), true),
-    ];
-
-    let instruction = Instruction {
-        program_id: POI_SYSTEM_PROGRAM_ID,
-        accounts,
-        data,
-    };
-
-    invoke(
-        &instruction,
+    invoke_manual_cpi(
+        program,
+        POI_SYSTEM_PROGRAM_ID,
+        &CLOSE_MAP_POIS_VIA_BURNER_DISCRIMINATOR,
+        &[],
         &[
-            map_pois.clone(),
-            session.clone(),
-            player.clone(),
-            burner_wallet.clone(),
-            poi_system_program.clone(),
+            (map_pois, true, false),
+            (session, false, false),
+            (player, true, false),
+            (burner_wallet, false, true),
         ],
-    )?;
-
-    Ok(())
+    )
 }
 
 #[cfg(test)]

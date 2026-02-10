@@ -7,12 +7,13 @@ pub mod errors;
 pub mod state;
 pub mod triggers;
 
-use constants::{MAX_TURNS, MIN_STRIKES, SUDDEN_DEATH_TURN};
+use constants::{MAX_STRIKES, MAX_TURNS, MIN_STRIKES, SUDDEN_DEATH_TURN};
 use effects::{
-    apply_chill_to_strikes, decay_status_effects, process_bleed_damage, process_rust_decay,
+    apply_chill_to_strikes, decay_status_effects, process_bleed_damage_with_chill,
+    process_rust_decay,
 };
 use errors::CombatSystemError;
-use state::{CombatState, CombatantInput, StatusEffects};
+use state::{CombatState, Combatant, CombatantInput, StatusEffects};
 use triggers::{check_wounded, process_triggers_for_phase, reset_once_per_turn_flags};
 
 // Re-export common types for use by other programs
@@ -37,8 +38,18 @@ pub struct CombatOutcome {
 pub fn resolve_combat(
     player_stats: CombatantInput,
     enemy_stats: CombatantInput,
+    player_effects: Vec<ItemEffect>,
+    enemy_effects: Vec<ItemEffect>,
+) -> Result<CombatOutcome> {
+    resolve_combat_with_player_gold(player_stats, enemy_stats, player_effects, enemy_effects, 0)
+}
+
+pub fn resolve_combat_with_player_gold(
+    player_stats: CombatantInput,
+    enemy_stats: CombatantInput,
     mut player_effects: Vec<ItemEffect>,
     mut enemy_effects: Vec<ItemEffect>,
+    player_start_gold: u16,
 ) -> Result<CombatOutcome> {
     validate_combatant(&player_stats)?;
     validate_combatant(&enemy_stats)?;
@@ -48,26 +59,53 @@ pub fn resolve_combat(
 
     let mut combat_state = CombatState {
         turn: 1,
-        player_hp: player_stats.hp,
-        player_max_hp: player_stats.max_hp,
-        player_atk: player_stats.atk,
-        player_arm: player_stats.arm,
-        player_spd: player_stats.spd,
-        player_dig: player_stats.dig,
-        player_strikes: player_stats.strikes.max(MIN_STRIKES),
-        player_status: StatusEffects::default(),
-        enemy_hp: enemy_stats.hp,
-        enemy_max_hp: enemy_stats.max_hp,
-        enemy_atk: enemy_stats.atk,
-        enemy_arm: enemy_stats.arm,
-        enemy_spd: enemy_stats.spd,
-        enemy_dig: enemy_stats.dig,
-        enemy_strikes: enemy_stats.strikes.max(MIN_STRIKES),
-        enemy_status: StatusEffects::default(),
+        player: Combatant {
+            hp: player_stats.hp,
+            max_hp: player_stats.max_hp,
+            atk: player_stats.atk,
+            arm: player_stats.arm,
+            spd: player_stats.spd,
+            dig: player_stats.dig,
+            strikes: player_stats.strikes.clamp(MIN_STRIKES, MAX_STRIKES),
+            armor_piercing: 0,
+            stored_damage: 0,
+            gear_atk_bonus: 0,
+            half_gear_atk_after_second_strike: false,
+            next_bomb_damage_bonus: 0,
+            next_bomb_self_damage_reduction: 0,
+            active_bomb_self_damage_reduction: 0,
+            non_weapon_damage_bonus: 0,
+            next_non_weapon_damage_bonus: 0,
+            preserve_shrapnel_cap: 0,
+            shards_every_turn: false,
+            status: StatusEffects::default(),
+            first_time_flags: 0,
+        },
+        enemy: Combatant {
+            hp: enemy_stats.hp,
+            max_hp: enemy_stats.max_hp,
+            atk: enemy_stats.atk,
+            arm: enemy_stats.arm,
+            spd: enemy_stats.spd,
+            dig: enemy_stats.dig,
+            strikes: enemy_stats.strikes.clamp(MIN_STRIKES, MAX_STRIKES),
+            armor_piercing: 0,
+            stored_damage: 0,
+            gear_atk_bonus: 0,
+            half_gear_atk_after_second_strike: false,
+            next_bomb_damage_bonus: 0,
+            next_bomb_self_damage_reduction: 0,
+            active_bomb_self_damage_reduction: 0,
+            non_weapon_damage_bonus: 0,
+            next_non_weapon_damage_bonus: 0,
+            preserve_shrapnel_cap: 0,
+            shards_every_turn: false,
+            status: StatusEffects::default(),
+            first_time_flags: 0,
+        },
         sudden_death_bonus: 0,
+        player_gold: player_start_gold,
         gold_change: 0,
-        player_has_become_wounded: false,
-        enemy_has_become_wounded: false,
     };
 
     let mut player_triggered = vec![false; player_effects.len()];
@@ -133,6 +171,25 @@ pub fn resolve_combat(
             &mut log,
         )?;
 
+        apply_status_effects(
+            &mut player_effects,
+            &mut enemy_effects,
+            &mut combat_state,
+            TriggerType::Wounded,
+            &mut player_triggered,
+            &mut enemy_triggered,
+            &mut log,
+        );
+        apply_status_effects(
+            &mut player_effects,
+            &mut enemy_effects,
+            &mut combat_state,
+            TriggerType::Exposed,
+            &mut player_triggered,
+            &mut enemy_triggered,
+            &mut log,
+        );
+
         apply_end_of_turn_effects(
             &mut combat_state,
             &mut player_effects,
@@ -152,11 +209,14 @@ pub fn resolve_combat(
             &mut log,
         );
 
+        log_status_stacks(&combat_state, &mut log);
+
         if let Some((player_won, resolution_type)) = resolve_if_ended(&combat_state, turn) {
+            release_stored_damage_on_battle_end(&mut combat_state, &mut log);
             return Ok(CombatOutcome {
                 player_won,
-                final_player_hp: combat_state.player_hp,
-                final_enemy_hp: combat_state.enemy_hp,
+                final_player_hp: combat_state.player.hp,
+                final_enemy_hp: combat_state.enemy.hp,
                 turns_taken: turn,
                 resolution_type,
                 log,
@@ -166,10 +226,10 @@ pub fn resolve_combat(
 
         if let Some(player_won) = engine::check_failsafe(
             turn,
-            combat_state.player_hp,
-            combat_state.player_max_hp,
-            combat_state.enemy_hp,
-            combat_state.enemy_max_hp,
+            combat_state.player.hp,
+            combat_state.player.max_hp,
+            combat_state.enemy.hp,
+            combat_state.enemy.max_hp,
         ) {
             let resolution_type = if player_won {
                 ResolutionType::FailsafePlayerWin
@@ -177,10 +237,11 @@ pub fn resolve_combat(
                 ResolutionType::FailsafeEnemyWin
             };
 
+            release_stored_damage_on_battle_end(&mut combat_state, &mut log);
             return Ok(CombatOutcome {
                 player_won,
-                final_player_hp: combat_state.player_hp,
-                final_enemy_hp: combat_state.enemy_hp,
+                final_player_hp: combat_state.player.hp,
+                final_enemy_hp: combat_state.enemy.hp,
                 turns_taken: turn,
                 resolution_type,
                 log,
@@ -222,19 +283,21 @@ fn execute_turn(
     apply_sudden_death(combat_state, turn)?;
 
     let (player_first, _) =
-        engine::determine_turn_order(combat_state.player_spd, combat_state.enemy_spd);
+        engine::determine_turn_order(combat_state.player.spd, combat_state.enemy.spd);
 
     let player_strikes = apply_chill_to_strikes(
-        combat_state.player_strikes,
-        combat_state.player_status.chill,
+        combat_state.player.strikes.min(MAX_STRIKES),
+        combat_state.player.status.chill,
     );
-    let enemy_strikes =
-        apply_chill_to_strikes(combat_state.enemy_strikes, combat_state.enemy_status.chill);
+    let enemy_strikes = apply_chill_to_strikes(
+        combat_state.enemy.strikes.min(MAX_STRIKES),
+        combat_state.enemy.status.chill,
+    );
 
-    let mut player_stats = combat_state.player_stats();
-    let mut enemy_stats = combat_state.enemy_stats();
-    let mut player_status = combat_state.player_status;
-    let mut enemy_status = combat_state.enemy_status;
+    let mut player_stats = combat_state.player.to_stats();
+    let mut enemy_stats = combat_state.enemy.to_stats();
+    let mut player_status = combat_state.player.status;
+    let mut enemy_status = combat_state.enemy.status;
 
     let mut player_damage_dealt = 0;
     let mut enemy_damage_dealt = 0;
@@ -252,6 +315,7 @@ fn execute_turn(
             enemy_triggered,
             turn,
             true, // is_player attacking
+            &mut combat_state.player_gold,
             &mut combat_state.gold_change,
             log,
         );
@@ -271,6 +335,7 @@ fn execute_turn(
                 player_triggered,
                 turn,
                 false, // enemy attacking
+                &mut combat_state.player_gold,
                 &mut combat_state.gold_change,
                 log,
             );
@@ -290,6 +355,7 @@ fn execute_turn(
             player_triggered,
             turn,
             false, // enemy attacking
+            &mut combat_state.player_gold,
             &mut combat_state.gold_change,
             log,
         );
@@ -309,6 +375,7 @@ fn execute_turn(
                 enemy_triggered,
                 turn,
                 true, // is_player attacking
+                &mut combat_state.player_gold,
                 &mut combat_state.gold_change,
                 log,
             );
@@ -317,16 +384,23 @@ fn execute_turn(
         }
     }
 
-    combat_state.player_hp = player_stats.hp;
-    combat_state.enemy_hp = enemy_stats.hp;
-    // ARM changes during combat must be synced (from weapon damage and effects like RemoveArmor)
-    combat_state.player_arm = player_stats.arm;
-    combat_state.enemy_arm = enemy_stats.arm;
-    combat_state.player_status = player_status;
-    combat_state.enemy_status = enemy_status;
+    combat_state.player.hp = player_stats.hp;
+    combat_state.enemy.hp = enemy_stats.hp;
+    combat_state.player.arm = player_stats.arm;
+    combat_state.enemy.arm = enemy_stats.arm;
+    combat_state.player.status = player_status;
+    combat_state.enemy.status = enemy_status;
 
     // Check for first-time wounded transitions and fire FirstTimeWounded triggers
     check_first_time_wounded(
+        combat_state,
+        player_effects,
+        enemy_effects,
+        player_triggered,
+        enemy_triggered,
+        log,
+    );
+    check_first_time_exposed(
         combat_state,
         player_effects,
         enemy_effects,
@@ -351,19 +425,17 @@ fn check_first_time_wounded(
 ) {
     let turn = combat_state.turn;
     let (player_acts_first, _) =
-        engine::determine_turn_order(combat_state.player_spd, combat_state.enemy_spd);
+        engine::determine_turn_order(combat_state.player.spd, combat_state.enemy.spd);
 
-    // Check if player became wounded for the first time
-    if !combat_state.player_has_become_wounded
-        && check_wounded(combat_state.player_hp, combat_state.player_max_hp)
+    if !combat_state.player.has_flag(Combatant::WOUNDED)
+        && check_wounded(combat_state.player.hp, combat_state.player.max_hp)
     {
-        combat_state.player_has_become_wounded = true;
+        combat_state.player.set_flag(Combatant::WOUNDED);
 
-        // Fire FirstTimeWounded effects for player
-        let mut player_stats = combat_state.player_stats();
-        let mut player_status = combat_state.player_status;
-        let mut enemy_stats = combat_state.enemy_stats();
-        let mut enemy_status = combat_state.enemy_status;
+        let mut player_stats = combat_state.player.to_stats();
+        let mut player_status = combat_state.player.status;
+        let mut enemy_stats = combat_state.enemy.to_stats();
+        let mut enemy_status = combat_state.enemy.status;
 
         process_triggers_for_phase(
             player_effects,
@@ -374,29 +446,28 @@ fn check_first_time_wounded(
             &mut enemy_stats,
             &mut enemy_status,
             player_triggered,
-            true, // is_owner_player
+            true,
             player_acts_first,
+            &mut combat_state.player_gold,
             &mut combat_state.gold_change,
             log,
         );
 
-        combat_state.set_player_stats(&player_stats);
-        combat_state.player_status = player_status;
-        combat_state.set_enemy_stats(&enemy_stats);
-        combat_state.enemy_status = enemy_status;
+        combat_state.player.apply_stats(&player_stats);
+        combat_state.player.status = player_status;
+        combat_state.enemy.apply_stats(&enemy_stats);
+        combat_state.enemy.status = enemy_status;
     }
 
-    // Check if enemy became wounded for the first time
-    if !combat_state.enemy_has_become_wounded
-        && check_wounded(combat_state.enemy_hp, combat_state.enemy_max_hp)
+    if !combat_state.enemy.has_flag(Combatant::WOUNDED)
+        && check_wounded(combat_state.enemy.hp, combat_state.enemy.max_hp)
     {
-        combat_state.enemy_has_become_wounded = true;
+        combat_state.enemy.set_flag(Combatant::WOUNDED);
 
-        // Fire FirstTimeWounded effects for enemy
-        let mut enemy_stats = combat_state.enemy_stats();
-        let mut enemy_status = combat_state.enemy_status;
-        let mut player_stats = combat_state.player_stats();
-        let mut player_status = combat_state.player_status;
+        let mut enemy_stats = combat_state.enemy.to_stats();
+        let mut enemy_status = combat_state.enemy.status;
+        let mut player_stats = combat_state.player.to_stats();
+        let mut player_status = combat_state.player.status;
 
         process_triggers_for_phase(
             enemy_effects,
@@ -407,16 +478,106 @@ fn check_first_time_wounded(
             &mut player_stats,
             &mut player_status,
             enemy_triggered,
-            false, // is_owner_player (enemy is owner)
+            false,
             !player_acts_first,
+            &mut combat_state.player_gold,
             &mut combat_state.gold_change,
             log,
         );
 
-        combat_state.set_enemy_stats(&enemy_stats);
-        combat_state.enemy_status = enemy_status;
-        combat_state.set_player_stats(&player_stats);
-        combat_state.player_status = player_status;
+        combat_state.enemy.apply_stats(&enemy_stats);
+        combat_state.enemy.status = enemy_status;
+        combat_state.player.apply_stats(&player_stats);
+        combat_state.player.status = player_status;
+    }
+}
+
+/// Check if either combatant became exposed (ARM <= 0) for the first time this battle and fire
+/// the FirstTimeExposed trigger. Also releases any stored damage on first exposure.
+fn check_first_time_exposed(
+    combat_state: &mut CombatState,
+    player_effects: &mut [ItemEffect],
+    enemy_effects: &mut [ItemEffect],
+    player_triggered: &mut [bool],
+    enemy_triggered: &mut [bool],
+    log: &mut Vec<CombatLogEntry>,
+) {
+    let turn = combat_state.turn;
+    let (player_acts_first, _) =
+        engine::determine_turn_order(combat_state.player.spd, combat_state.enemy.spd);
+
+    if !combat_state.player.has_flag(Combatant::EXPOSED) && combat_state.player.arm <= 0 {
+        combat_state.player.set_flag(Combatant::EXPOSED);
+
+        let mut player_stats = combat_state.player.to_stats();
+        let mut player_status = combat_state.player.status;
+        let mut enemy_stats = combat_state.enemy.to_stats();
+        let mut enemy_status = combat_state.enemy.status;
+
+        process_triggers_for_phase(
+            player_effects,
+            TriggerType::FirstTimeExposed,
+            turn,
+            &mut player_stats,
+            &mut player_status,
+            &mut enemy_stats,
+            &mut enemy_status,
+            player_triggered,
+            true,
+            player_acts_first,
+            &mut combat_state.player_gold,
+            &mut combat_state.gold_change,
+            log,
+        );
+
+        if player_stats.stored_damage > 0 && enemy_stats.hp > 0 {
+            let damage = player_stats.stored_damage;
+            enemy_stats.hp = enemy_stats.hp.saturating_sub(damage);
+            log.push(CombatLogEntry::non_weapon_damage(turn, false, damage));
+            player_stats.stored_damage = 0;
+        }
+
+        combat_state.player.apply_stats(&player_stats);
+        combat_state.player.status = player_status;
+        combat_state.enemy.apply_stats(&enemy_stats);
+        combat_state.enemy.status = enemy_status;
+    }
+
+    if !combat_state.enemy.has_flag(Combatant::EXPOSED) && combat_state.enemy.arm <= 0 {
+        combat_state.enemy.set_flag(Combatant::EXPOSED);
+
+        let mut enemy_stats = combat_state.enemy.to_stats();
+        let mut enemy_status = combat_state.enemy.status;
+        let mut player_stats = combat_state.player.to_stats();
+        let mut player_status = combat_state.player.status;
+
+        process_triggers_for_phase(
+            enemy_effects,
+            TriggerType::FirstTimeExposed,
+            turn,
+            &mut enemy_stats,
+            &mut enemy_status,
+            &mut player_stats,
+            &mut player_status,
+            enemy_triggered,
+            false,
+            !player_acts_first,
+            &mut combat_state.player_gold,
+            &mut combat_state.gold_change,
+            log,
+        );
+
+        if enemy_stats.stored_damage > 0 && player_stats.hp > 0 {
+            let damage = enemy_stats.stored_damage;
+            player_stats.hp = player_stats.hp.saturating_sub(damage);
+            log.push(CombatLogEntry::non_weapon_damage(turn, true, damage));
+            enemy_stats.stored_damage = 0;
+        }
+
+        combat_state.enemy.apply_stats(&enemy_stats);
+        combat_state.enemy.status = enemy_status;
+        combat_state.player.apply_stats(&player_stats);
+        combat_state.player.status = player_status;
     }
 }
 
@@ -426,12 +587,14 @@ fn apply_sudden_death(combat_state: &mut CombatState, turn: u8) -> Result<()> {
         let delta = bonus
             .checked_sub(combat_state.sudden_death_bonus)
             .ok_or(CombatSystemError::ArithmeticOverflow)?;
-        combat_state.player_atk = combat_state
-            .player_atk
+        combat_state.player.atk = combat_state
+            .player
+            .atk
             .checked_add(delta)
             .ok_or(CombatSystemError::ArithmeticOverflow)?;
-        combat_state.enemy_atk = combat_state
-            .enemy_atk
+        combat_state.enemy.atk = combat_state
+            .enemy
+            .atk
             .checked_add(delta)
             .ok_or(CombatSystemError::ArithmeticOverflow)?;
         combat_state.sudden_death_bonus = bonus;
@@ -454,54 +617,45 @@ fn apply_end_of_turn_effects(
     log: &mut Vec<CombatLogEntry>,
 ) -> Result<()> {
     let turn = combat_state.turn;
+    let player_shrapnel_before_decay = combat_state.player.status.shrapnel;
+    let enemy_shrapnel_before_decay = combat_state.enemy.status.shrapnel;
     let (player_acts_first, _) =
-        engine::determine_turn_order(combat_state.player_spd, combat_state.enemy_spd);
+        engine::determine_turn_order(combat_state.player.spd, combat_state.enemy.spd);
 
-    // Process Rust (armor decay)
-    if combat_state.player_status.rust > 0 {
-        let old_arm = combat_state.player_arm;
-        combat_state.player_arm =
-            process_rust_decay(combat_state.player_status.rust, combat_state.player_arm);
-        let arm_lost = old_arm - combat_state.player_arm;
+    if combat_state.player.status.rust > 0 {
+        let old_arm = combat_state.player.arm;
+        combat_state.player.arm =
+            process_rust_decay(combat_state.player.status.rust, combat_state.player.arm);
+        let arm_lost = old_arm - combat_state.player.arm;
         if arm_lost > 0 {
-            log.push(CombatLogEntry::armor_change(
-                combat_state.turn,
-                true,
-                -arm_lost,
-            ));
+            log.push(CombatLogEntry::armor_change(turn, true, -arm_lost));
         }
     }
-    if combat_state.enemy_status.rust > 0 {
-        let old_arm = combat_state.enemy_arm;
-        combat_state.enemy_arm =
-            process_rust_decay(combat_state.enemy_status.rust, combat_state.enemy_arm);
-        let arm_lost = old_arm - combat_state.enemy_arm;
+    if combat_state.enemy.status.rust > 0 {
+        let old_arm = combat_state.enemy.arm;
+        combat_state.enemy.arm =
+            process_rust_decay(combat_state.enemy.status.rust, combat_state.enemy.arm);
+        let arm_lost = old_arm - combat_state.enemy.arm;
         if arm_lost > 0 {
-            log.push(CombatLogEntry::armor_change(
-                combat_state.turn,
-                false,
-                -arm_lost,
-            ));
+            log.push(CombatLogEntry::armor_change(turn, false, -arm_lost));
         }
     }
 
-    // Process Bleed (damage over time)
-    if combat_state.player_status.bleed > 0 {
-        let old_hp = combat_state.player_hp;
-        combat_state.player_hp =
-            process_bleed_damage(combat_state.player_status.bleed, combat_state.player_hp);
-        let damage = old_hp - combat_state.player_hp;
+    if combat_state.player.status.bleed > 0 {
+        let old_hp = combat_state.player.hp;
+        combat_state.player.hp = process_bleed_damage_with_chill(
+            combat_state.player.status.bleed,
+            combat_state.player.status.chill,
+            combat_state.player.hp,
+        );
+        let damage = old_hp - combat_state.player.hp;
         if damage > 0 {
-            log.push(CombatLogEntry::status_damage(
-                combat_state.turn,
-                true,
-                damage,
-            ));
-            // Fire enemy's OnEnemyBleedDamage triggers (player is enemy's enemy)
-            let mut enemy_stats = combat_state.enemy_stats();
-            let mut enemy_status = combat_state.enemy_status;
-            let mut player_stats = combat_state.player_stats();
-            let mut player_status = combat_state.player_status;
+            log.push(CombatLogEntry::status_damage(turn, true, damage));
+
+            let mut enemy_stats = combat_state.enemy.to_stats();
+            let mut enemy_status = combat_state.enemy.status;
+            let mut player_stats = combat_state.player.to_stats();
+            let mut player_status = combat_state.player.status;
 
             process_triggers_for_phase(
                 enemy_effects,
@@ -512,34 +666,34 @@ fn apply_end_of_turn_effects(
                 &mut player_stats,
                 &mut player_status,
                 enemy_triggered,
-                false, // is_owner_player (enemy is owner)
+                false,
                 !player_acts_first,
+                &mut combat_state.player_gold,
                 &mut combat_state.gold_change,
                 log,
             );
 
-            combat_state.set_enemy_stats(&enemy_stats);
-            combat_state.enemy_status = enemy_status;
-            combat_state.set_player_stats(&player_stats);
-            combat_state.player_status = player_status;
+            combat_state.enemy.apply_stats(&enemy_stats);
+            combat_state.enemy.status = enemy_status;
+            combat_state.player.apply_stats(&player_stats);
+            combat_state.player.status = player_status;
         }
     }
-    if combat_state.enemy_status.bleed > 0 {
-        let old_hp = combat_state.enemy_hp;
-        combat_state.enemy_hp =
-            process_bleed_damage(combat_state.enemy_status.bleed, combat_state.enemy_hp);
-        let damage = old_hp - combat_state.enemy_hp;
+    if combat_state.enemy.status.bleed > 0 {
+        let old_hp = combat_state.enemy.hp;
+        combat_state.enemy.hp = process_bleed_damage_with_chill(
+            combat_state.enemy.status.bleed,
+            combat_state.enemy.status.chill,
+            combat_state.enemy.hp,
+        );
+        let damage = old_hp - combat_state.enemy.hp;
         if damage > 0 {
-            log.push(CombatLogEntry::status_damage(
-                combat_state.turn,
-                false,
-                damage,
-            ));
-            // Fire player's OnEnemyBleedDamage triggers (enemy took bleed damage)
-            let mut player_stats = combat_state.player_stats();
-            let mut player_status = combat_state.player_status;
-            let mut enemy_stats = combat_state.enemy_stats();
-            let mut enemy_status = combat_state.enemy_status;
+            log.push(CombatLogEntry::status_damage(turn, false, damage));
+
+            let mut player_stats = combat_state.player.to_stats();
+            let mut player_status = combat_state.player.status;
+            let mut enemy_stats = combat_state.enemy.to_stats();
+            let mut enemy_status = combat_state.enemy.status;
 
             process_triggers_for_phase(
                 player_effects,
@@ -550,27 +704,37 @@ fn apply_end_of_turn_effects(
                 &mut enemy_stats,
                 &mut enemy_status,
                 player_triggered,
-                true, // is_owner_player
+                true,
                 player_acts_first,
+                &mut combat_state.player_gold,
                 &mut combat_state.gold_change,
                 log,
             );
 
-            combat_state.set_player_stats(&player_stats);
-            combat_state.player_status = player_status;
-            combat_state.set_enemy_stats(&enemy_stats);
-            combat_state.enemy_status = enemy_status;
+            combat_state.player.apply_stats(&player_stats);
+            combat_state.player.status = player_status;
+            combat_state.enemy.apply_stats(&enemy_stats);
+            combat_state.enemy.status = enemy_status;
         }
     }
 
-    decay_status_effects(&mut combat_state.player_status);
-    decay_status_effects(&mut combat_state.enemy_status);
+    decay_status_effects(&mut combat_state.player.status);
+    decay_status_effects(&mut combat_state.enemy.status);
+
+    if combat_state.player.preserve_shrapnel_cap > 0 {
+        let keep = player_shrapnel_before_decay.min(combat_state.player.preserve_shrapnel_cap);
+        combat_state.player.status.shrapnel = combat_state.player.status.shrapnel.max(keep);
+    }
+    if combat_state.enemy.preserve_shrapnel_cap > 0 {
+        let keep = enemy_shrapnel_before_decay.min(combat_state.enemy.preserve_shrapnel_cap);
+        combat_state.enemy.status.shrapnel = combat_state.enemy.status.shrapnel.max(keep);
+    }
 
     Ok(())
 }
 
 fn resolve_if_ended(combat_state: &CombatState, turn: u8) -> Option<(bool, ResolutionType)> {
-    if combat_state.player_hp <= 0 {
+    if combat_state.player.hp <= 0 {
         let resolution_type = if turn >= SUDDEN_DEATH_TURN {
             ResolutionType::SuddenDeathEnemyWin
         } else {
@@ -579,7 +743,7 @@ fn resolve_if_ended(combat_state: &CombatState, turn: u8) -> Option<(bool, Resol
         return Some((false, resolution_type));
     }
 
-    if combat_state.enemy_hp <= 0 {
+    if combat_state.enemy.hp <= 0 {
         let resolution_type = if turn >= SUDDEN_DEATH_TURN {
             ResolutionType::SuddenDeathPlayerWin
         } else {
@@ -589,6 +753,27 @@ fn resolve_if_ended(combat_state: &CombatState, turn: u8) -> Option<(bool, Resol
     }
 
     None
+}
+
+fn release_stored_damage_on_battle_end(
+    combat_state: &mut CombatState,
+    log: &mut Vec<CombatLogEntry>,
+) {
+    let turn = combat_state.turn;
+
+    if combat_state.player.stored_damage > 0 && combat_state.enemy.hp > 0 {
+        let damage = combat_state.player.stored_damage;
+        combat_state.enemy.hp = combat_state.enemy.hp.saturating_sub(damage);
+        combat_state.player.stored_damage = 0;
+        log.push(CombatLogEntry::non_weapon_damage(turn, false, damage));
+    }
+
+    if combat_state.enemy.stored_damage > 0 && combat_state.player.hp > 0 {
+        let damage = combat_state.enemy.stored_damage;
+        combat_state.player.hp = combat_state.player.hp.saturating_sub(damage);
+        combat_state.enemy.stored_damage = 0;
+        log.push(CombatLogEntry::non_weapon_damage(turn, true, damage));
+    }
 }
 
 fn apply_status_effects(
@@ -603,9 +788,8 @@ fn apply_status_effects(
     let mut player_applied = StatusEffects::default();
     let mut enemy_applied = StatusEffects::default();
 
-    // Determine who acts first for FirstTurnIfFaster/FirstTurnIfSlower triggers
     let (player_acts_first, _) =
-        engine::determine_turn_order(combat_state.player_spd, combat_state.enemy_spd);
+        engine::determine_turn_order(combat_state.player.spd, combat_state.enemy.spd);
 
     process_phase_effects(
         player_effects,
@@ -631,6 +815,60 @@ fn apply_status_effects(
     );
 }
 
+fn log_status_stacks(combat_state: &CombatState, log: &mut Vec<CombatLogEntry>) {
+    let turn = combat_state.turn;
+
+    if combat_state.player.status.chill > 0 {
+        log.push(CombatLogEntry::apply_status(
+            turn,
+            true,
+            STATUS_CHILL,
+            i16::from(combat_state.player.status.chill),
+        ));
+    }
+    if combat_state.player.status.rust > 0 {
+        log.push(CombatLogEntry::apply_status(
+            turn,
+            true,
+            STATUS_RUST,
+            i16::from(combat_state.player.status.rust),
+        ));
+    }
+    if combat_state.player.status.bleed > 0 {
+        log.push(CombatLogEntry::apply_status(
+            turn,
+            true,
+            STATUS_BLEED,
+            i16::from(combat_state.player.status.bleed),
+        ));
+    }
+
+    if combat_state.enemy.status.chill > 0 {
+        log.push(CombatLogEntry::apply_status(
+            turn,
+            false,
+            STATUS_CHILL,
+            i16::from(combat_state.enemy.status.chill),
+        ));
+    }
+    if combat_state.enemy.status.rust > 0 {
+        log.push(CombatLogEntry::apply_status(
+            turn,
+            false,
+            STATUS_RUST,
+            i16::from(combat_state.enemy.status.rust),
+        ));
+    }
+    if combat_state.enemy.status.bleed > 0 {
+        log.push(CombatLogEntry::apply_status(
+            turn,
+            false,
+            STATUS_BLEED,
+            i16::from(combat_state.enemy.status.bleed),
+        ));
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn process_phase_effects(
     effects: &mut [ItemEffect],
@@ -646,17 +884,17 @@ fn process_phase_effects(
     let (mut working_stats, mut working_status, mut opponent_stats, mut opponent_status) =
         if is_player {
             (
-                combat_state.player_stats(),
-                combat_state.player_status,
-                combat_state.enemy_stats(),
-                combat_state.enemy_status,
+                combat_state.player.to_stats(),
+                combat_state.player.status,
+                combat_state.enemy.to_stats(),
+                combat_state.enemy.status,
             )
         } else {
             (
-                combat_state.enemy_stats(),
-                combat_state.enemy_status,
-                combat_state.player_stats(),
-                combat_state.player_status,
+                combat_state.enemy.to_stats(),
+                combat_state.enemy.status,
+                combat_state.player.to_stats(),
+                combat_state.player.status,
             )
         };
 
@@ -674,6 +912,7 @@ fn process_phase_effects(
         triggered_flags,
         is_player,
         owner_acts_first,
+        &mut combat_state.player_gold,
         &mut combat_state.gold_change,
         log,
     );
@@ -696,6 +935,7 @@ fn process_phase_effects(
             triggered_flags,
             is_player,
             owner_acts_first,
+            &mut combat_state.player_gold,
             &mut combat_state.gold_change,
             log,
         );
@@ -714,21 +954,52 @@ fn process_phase_effects(
             triggered_flags,
             is_player,
             owner_acts_first,
+            &mut combat_state.player_gold,
             &mut combat_state.gold_change,
             log,
         );
+
+        let combatant = if is_player {
+            &mut combat_state.player
+        } else {
+            &mut combat_state.enemy
+        };
+        let first_time_shrapnel_gain = if combatant.has_flag(Combatant::GAINED_SHRAPNEL) {
+            false
+        } else {
+            combatant.set_flag(Combatant::GAINED_SHRAPNEL);
+            true
+        };
+
+        if first_time_shrapnel_gain {
+            process_triggers_for_phase(
+                effects,
+                TriggerType::FirstTimeGainShrapnel,
+                combat_state.turn,
+                &mut working_stats,
+                &mut working_status,
+                &mut opponent_stats,
+                &mut opponent_status,
+                triggered_flags,
+                is_player,
+                owner_acts_first,
+                &mut combat_state.player_gold,
+                &mut combat_state.gold_change,
+                log,
+            );
+        }
     }
 
     if is_player {
-        combat_state.set_enemy_stats(&opponent_stats);
-        combat_state.enemy_status = opponent_status;
-        combat_state.set_player_stats(&working_stats);
-        combat_state.player_status = working_status;
+        combat_state.enemy.apply_stats(&opponent_stats);
+        combat_state.enemy.status = opponent_status;
+        combat_state.player.apply_stats(&working_stats);
+        combat_state.player.status = working_status;
     } else {
-        combat_state.set_player_stats(&opponent_stats);
-        combat_state.player_status = opponent_status;
-        combat_state.set_enemy_stats(&working_stats);
-        combat_state.enemy_status = working_status;
+        combat_state.player.apply_stats(&opponent_stats);
+        combat_state.player.status = opponent_status;
+        combat_state.enemy.apply_stats(&working_stats);
+        combat_state.enemy.status = working_status;
     }
 
     update_status_applied(
@@ -1875,7 +2146,7 @@ mod tests {
         );
     }
 
-    /// Test that OnStruck fires when only armor is damaged (no HP damage).
+    /// Test that OnStruck fires when armor is damaged.
     /// This confirms that "when struck" means any damage dealt, not just HP damage.
     /// Rime Cloak's own ARM bonus should not work against its triggered effect.
     #[test]
@@ -1884,15 +2155,15 @@ mod tests {
             hp: 50,
             max_hp: 50,
             atk: 3,
-            arm: 20, // High armor absorbs all damage
-            spd: 1,  // Player acts second
+            arm: 20,
+            spd: 1, // Player acts second
             dig: 0,
             strikes: 1,
         };
         let enemy = CombatantInput {
             hp: 50,
             max_hp: 50,
-            atk: 5, // Less than player's ARM, only armor damage
+            atk: 5,
             arm: 0,
             spd: 2, // Enemy acts first
             dig: 0,
@@ -1911,21 +2182,7 @@ mod tests {
 
         let outcome = resolve_combat(player, enemy, player_effects, enemy_effects).unwrap();
 
-        // On turn 1, enemy (ATK 5) hits player (ARM 20). All damage goes to armor.
-        // Attack log with is_player=false means the enemy dealt HP damage through armor.
-        // There should be NO such entry on turn 1 (armor absorbs everything).
-        let enemy_hp_damage_turn_1 = outcome.log.iter().any(|entry| {
-            matches!(entry.action, LogAction::Attack)
-                && !entry.is_player // enemy is the attacker
-                && entry.turn == 1
-        });
-        assert!(
-            !enemy_hp_damage_turn_1,
-            "Enemy should not deal HP damage on turn 1 (armor absorbs all). Log: {:?}",
-            outcome.log
-        );
-
-        // Confirm armor WAS damaged on turn 1 (the hit landed, just on armor)
+        // Confirm armor is damaged on turn 1.
         let armor_hit_turn_1 = outcome.log.iter().any(|entry| {
             matches!(entry.action, LogAction::ArmorChange)
                 && entry.is_player // player's armor
@@ -1937,7 +2194,7 @@ mod tests {
             outcome.log
         );
 
-        // OnStruck should fire on turn 1 despite only armor damage
+        // OnStruck should fire on turn 1 when struck.
         let chill_on_turn_1 = outcome.log.iter().any(|entry| {
             matches!(entry.action, LogAction::ApplyStatus)
                 && !entry.is_player // applied to enemy

@@ -39,6 +39,22 @@ pub fn should_trigger_boss(phase: &Phase, moves_remaining: u8) -> bool {
     moves_remaining == 0 && phase.is_night3()
 }
 
+/// Returns true when night enemy movement should run for this move action.
+/// If the player is moving onto an occupied enemy tile, direct combat takes precedence.
+pub fn should_process_night_enemy_movement(phase: &Phase, target_has_enemy: bool) -> bool {
+    phase.is_night() && !target_has_enemy
+}
+
+/// Returns true when a target-tile enemy combat should be resolved after movement.
+/// Ensures at most one combat is resolved during a single move transaction.
+pub fn should_process_target_enemy_combat(
+    combat_already_triggered: bool,
+    is_last_move_of_week: bool,
+    target_enemy_exists: bool,
+) -> bool {
+    !combat_already_triggered && !is_last_move_of_week && target_enemy_exists
+}
+
 /// Convert boss week enum (1, 2, 3) to boss_system::Week
 /// Returns error for invalid week values instead of silently defaulting
 pub fn to_boss_week(week: u8) -> Result<boss_system::Week> {
@@ -135,5 +151,20 @@ mod tests {
         assert!(!is_within_bounds(10, 0, 10, 10));
         assert!(!is_within_bounds(0, 10, 10, 10));
         assert!(!is_within_bounds(10, 10, 10, 10));
+    }
+
+    #[test]
+    fn test_should_process_night_enemy_movement() {
+        assert!(should_process_night_enemy_movement(&Phase::Night1, false));
+        assert!(!should_process_night_enemy_movement(&Phase::Night2, true));
+        assert!(!should_process_night_enemy_movement(&Phase::Day1, false));
+    }
+
+    #[test]
+    fn test_should_process_target_enemy_combat() {
+        assert!(should_process_target_enemy_combat(false, false, true));
+        assert!(!should_process_target_enemy_combat(true, false, true));
+        assert!(!should_process_target_enemy_combat(false, true, true));
+        assert!(!should_process_target_enemy_combat(false, false, false));
     }
 }

@@ -15,7 +15,7 @@ impl SeededRNG {
     }
 
     /// Returns the next random u64 using XorShift algorithm.
-    pub fn next(&mut self) -> u64 {
+    pub fn next_val(&mut self) -> u64 {
         let mut x = self.state;
         x ^= x << 13;
         x ^= x >> 7;
@@ -30,12 +30,12 @@ impl SeededRNG {
             return min;
         }
         let range = max.saturating_sub(min).saturating_add(1);
-        min.saturating_add(self.next() % range)
+        min.saturating_add(self.next_val() % range)
     }
 
     /// Returns a random f64 in the range [0.0, 1.0).
     pub fn next_float(&mut self) -> f64 {
-        (self.next() as f64) / (u64::MAX as f64)
+        (self.next_val() as f64) / (u64::MAX as f64)
     }
 
     /// Returns true with the given probability (0.0 to 1.0).
@@ -77,7 +77,7 @@ mod tests {
         let mut rng2 = SeededRNG::new(12345);
 
         for _ in 0..100 {
-            assert_eq!(rng1.next(), rng2.next());
+            assert_eq!(rng1.next_val(), rng2.next_val());
         }
     }
 
@@ -88,14 +88,14 @@ mod tests {
         let mut rng2 = SeededRNG::new(54321);
 
         // Very unlikely to be equal
-        assert_ne!(rng1.next(), rng2.next());
+        assert_ne!(rng1.next_val(), rng2.next_val());
     }
 
     #[test]
     fn test_rng_zero_seed() {
         // Zero seed should be converted to 1
         let mut rng = SeededRNG::new(0);
-        assert!(rng.next() > 0);
+        assert!(rng.next_val() > 0);
     }
 
     #[test]
@@ -159,9 +159,9 @@ mod tests {
         let mut rng = SeededRNG::new(1);
 
         // First few values from XorShift with seed=1
-        let first = rng.next();
-        let second = rng.next();
-        let third = rng.next();
+        let first = rng.next_val();
+        let second = rng.next_val();
+        let third = rng.next_val();
 
         // The exact values for the 13-7-17 XorShift variant
         // TypeScript implementation should produce these same values

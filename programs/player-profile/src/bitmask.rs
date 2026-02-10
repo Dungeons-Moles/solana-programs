@@ -3,7 +3,11 @@
 //! Provides utilities for managing 80-bit bitmasks used for `unlocked_items`
 //! and `active_item_pool` in PlayerProfile.
 
+use crate::constants::{ITEM_BITMASK_SIZE, TOTAL_ITEMS};
 use anchor_lang::prelude::*;
+
+/// Number of currently unlockable item indices.
+const UNLOCKABLE_ITEMS: u8 = 80;
 
 /// Starter items bitmask: 40 specific items across all 8 tags.
 ///
@@ -20,7 +24,7 @@ use anchor_lang::prelude::*;
 /// - Rust: G-RU-01..04 (40-43), T-RU-01 (74)
 /// - Blood: G-BO-01..04 (48-51), T-BO-01 (76)
 /// - Tempo: G-TE-01..04 (56-59), T-TE-01 (78)
-pub const STARTER_ITEMS_BITMASK: [u8; 10] = [
+pub const STARTER_ITEMS_BITMASK: [u8; ITEM_BITMASK_SIZE] = [
     0x0F, // byte 0: bits 0-3 (Stone gear 01-04)
     0x0F, // byte 1: bits 8-11 (Scout gear 01-04)
     0x17, // byte 2: bits 16-18,20 (Greed gear 01-03,05)
@@ -41,8 +45,8 @@ pub const STARTER_ITEMS_BITMASK: [u8; 10] = [
 ///
 /// # Returns
 /// `true` if the bit at `index` is set, `false` otherwise or if index is out of range
-pub fn is_bit_set(mask: [u8; 10], index: u8) -> bool {
-    if index >= 80 {
+pub fn is_bit_set(mask: [u8; ITEM_BITMASK_SIZE], index: u8) -> bool {
+    if index >= TOTAL_ITEMS {
         return false;
     }
     let byte_idx = (index / 8) as usize;
@@ -58,8 +62,8 @@ pub fn is_bit_set(mask: [u8; 10], index: u8) -> bool {
 ///
 /// # Returns
 /// `true` if the bit was successfully set, `false` if index is out of range
-pub fn set_bit(mask: &mut [u8; 10], index: u8) -> bool {
-    if index >= 80 {
+pub fn set_bit(mask: &mut [u8; ITEM_BITMASK_SIZE], index: u8) -> bool {
+    if index >= TOTAL_ITEMS {
         return false;
     }
     let byte_idx = (index / 8) as usize;
@@ -76,8 +80,8 @@ pub fn set_bit(mask: &mut [u8; 10], index: u8) -> bool {
 ///
 /// # Returns
 /// `true` if the bit was successfully cleared, `false` if index is out of range
-pub fn clear_bit(mask: &mut [u8; 10], index: u8) -> bool {
-    if index >= 80 {
+pub fn clear_bit(mask: &mut [u8; ITEM_BITMASK_SIZE], index: u8) -> bool {
+    if index >= TOTAL_ITEMS {
         return false;
     }
     let byte_idx = (index / 8) as usize;
@@ -92,8 +96,8 @@ pub fn clear_bit(mask: &mut [u8; 10], index: u8) -> bool {
 /// * `mask` - The 80-bit bitmask
 ///
 /// # Returns
-/// Number of bits that are set (0-80)
-pub fn count_bits(mask: [u8; 10]) -> u8 {
+/// Number of bits that are set
+pub fn count_bits(mask: [u8; ITEM_BITMASK_SIZE]) -> u8 {
     mask.iter().map(|b| b.count_ones() as u8).sum()
 }
 
@@ -106,8 +110,8 @@ pub fn count_bits(mask: [u8; 10]) -> u8 {
 ///
 /// # Returns
 /// `true` if every item in pool is also in unlocked
-pub fn is_subset(pool: [u8; 10], unlocked: [u8; 10]) -> bool {
-    for i in 0..10 {
+pub fn is_subset(pool: [u8; ITEM_BITMASK_SIZE], unlocked: [u8; ITEM_BITMASK_SIZE]) -> bool {
+    for i in 0..ITEM_BITMASK_SIZE {
         // If pool has any bit set that unlocked doesn't have, it's not a subset
         if pool[i] & !unlocked[i] != 0 {
             return false;
@@ -116,7 +120,7 @@ pub fn is_subset(pool: [u8; 10], unlocked: [u8; 10]) -> bool {
     true
 }
 
-/// Select a random locked item from all 80 indices (0-79).
+/// Select a random locked item from currently unlockable indices.
 /// Uses deterministic PRNG based on player, level, and slot.
 ///
 /// # Arguments
@@ -128,16 +132,16 @@ pub fn is_subset(pool: [u8; 10], unlocked: [u8; 10]) -> bool {
 /// # Returns
 /// `Some(index)` of a randomly selected locked item, or `None` if all items are unlocked
 pub fn select_random_locked_item(
-    unlocked_items: [u8; 10],
+    unlocked_items: [u8; ITEM_BITMASK_SIZE],
     player: &Pubkey,
     level: u8,
     slot: u64,
 ) -> Option<u8> {
-    // Find all locked items in range 0-79
-    let mut locked_items: [u8; 80] = [0; 80];
+    // Find all locked items in the current unlockable range.
+    let mut locked_items: [u8; UNLOCKABLE_ITEMS as usize] = [0; UNLOCKABLE_ITEMS as usize];
     let mut locked_count: usize = 0;
 
-    for index in 0..80u8 {
+    for index in 0..UNLOCKABLE_ITEMS {
         if !is_bit_set(unlocked_items, index) {
             locked_items[locked_count] = index;
             locked_count += 1;
@@ -169,27 +173,27 @@ mod tests {
 
     #[test]
     fn test_is_bit_set_returns_correct_values() {
-        let mask: [u8; 10] = [0b00000001, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let mask: [u8; ITEM_BITMASK_SIZE] = [0b00000001, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         assert!(is_bit_set(mask, 0));
         assert!(!is_bit_set(mask, 1));
         assert!(!is_bit_set(mask, 8));
 
-        let mask2: [u8; 10] = [0, 0b10000000, 0, 0, 0, 0, 0, 0, 0, 0];
+        let mask2: [u8; ITEM_BITMASK_SIZE] = [0, 0b10000000, 0, 0, 0, 0, 0, 0, 0, 0];
         assert!(is_bit_set(mask2, 15)); // 8th bit of 2nd byte = index 15
         assert!(!is_bit_set(mask2, 14));
     }
 
     #[test]
     fn test_is_bit_set_out_of_range() {
-        let mask: [u8; 10] = [0xFF; 10];
-        assert!(!is_bit_set(mask, 80));
+        let mask: [u8; ITEM_BITMASK_SIZE] = [0xFF; ITEM_BITMASK_SIZE];
+        assert!(!is_bit_set(mask, TOTAL_ITEMS));
         assert!(!is_bit_set(mask, 100));
         assert!(!is_bit_set(mask, 255));
     }
 
     #[test]
     fn test_set_bit_correctly_sets_bits() {
-        let mut mask: [u8; 10] = [0; 10];
+        let mut mask: [u8; ITEM_BITMASK_SIZE] = [0; ITEM_BITMASK_SIZE];
 
         assert!(set_bit(&mut mask, 0));
         assert_eq!(mask[0], 0b00000001);
@@ -206,24 +210,24 @@ mod tests {
 
     #[test]
     fn test_set_bit_out_of_range() {
-        let mut mask: [u8; 10] = [0; 10];
-        assert!(!set_bit(&mut mask, 80));
+        let mut mask: [u8; ITEM_BITMASK_SIZE] = [0; ITEM_BITMASK_SIZE];
+        assert!(!set_bit(&mut mask, TOTAL_ITEMS));
         assert!(!set_bit(&mut mask, 255));
-        assert_eq!(mask, [0; 10]); // No change
+        assert_eq!(mask, [0; ITEM_BITMASK_SIZE]); // No change
     }
 
     #[test]
     fn test_count_bits_returns_correct_count() {
-        let empty: [u8; 10] = [0; 10];
+        let empty: [u8; ITEM_BITMASK_SIZE] = [0; ITEM_BITMASK_SIZE];
         assert_eq!(count_bits(empty), 0);
 
-        let full: [u8; 10] = [0xFF; 10];
-        assert_eq!(count_bits(full), 80);
+        let full: [u8; ITEM_BITMASK_SIZE] = [0xFF; ITEM_BITMASK_SIZE];
+        assert_eq!(count_bits(full), TOTAL_ITEMS);
 
         let starter = STARTER_ITEMS_BITMASK;
         assert_eq!(count_bits(starter), 40);
 
-        let one_bit: [u8; 10] = [0b00000001, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let one_bit: [u8; ITEM_BITMASK_SIZE] = [0b00000001, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         assert_eq!(count_bits(one_bit), 1);
     }
 
@@ -236,15 +240,15 @@ mod tests {
         assert!(is_subset(pool, unlocked));
 
         // Empty pool is always a valid subset
-        let empty: [u8; 10] = [0; 10];
+        let empty: [u8; ITEM_BITMASK_SIZE] = [0; ITEM_BITMASK_SIZE];
         assert!(is_subset(empty, unlocked));
 
         // Subset with fewer items (only Stone gear 01-04)
-        let subset: [u8; 10] = [0x0F, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let subset: [u8; ITEM_BITMASK_SIZE] = [0x0F, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         assert!(is_subset(subset, unlocked));
 
         // Pool with item not in unlocked is invalid (bit 19 = G-GR-04 is NOT in starter)
-        let invalid: [u8; 10] = [0x0F, 0x0F, 0x1F, 0, 0, 0, 0, 0, 0, 0]; // 0x1F sets bit 19
+        let invalid: [u8; ITEM_BITMASK_SIZE] = [0x0F, 0x0F, 0x1F, 0, 0, 0, 0, 0, 0, 0]; // 0x1F sets bit 19
         assert!(!is_subset(invalid, unlocked));
     }
 
@@ -278,7 +282,7 @@ mod tests {
         }
 
         // Verify non-starter bits are NOT set
-        for i in 0..80u8 {
+        for i in 0..TOTAL_ITEMS {
             if !expected_set.contains(&i) {
                 assert!(
                     !is_bit_set(STARTER_ITEMS_BITMASK, i),
@@ -300,7 +304,12 @@ mod tests {
         assert!(result.is_some());
 
         let index = result.unwrap();
-        assert!(index < 80, "Index {} should be in range 0-79", index);
+        assert!(
+            index < UNLOCKABLE_ITEMS,
+            "Index {} should be in range 0-{}",
+            index,
+            UNLOCKABLE_ITEMS.saturating_sub(1)
+        );
         assert!(
             !is_bit_set(unlocked, index),
             "Selected item at index {} should be locked",
@@ -310,7 +319,11 @@ mod tests {
 
     #[test]
     fn test_select_random_locked_item_returns_none_when_all_unlocked() {
-        let all_unlocked: [u8; 10] = [0xFF; 10];
+        let mut all_unlocked: [u8; ITEM_BITMASK_SIZE] = [0xFF; ITEM_BITMASK_SIZE];
+        // Reserve non-unlockable indices as "unlocked" to avoid being considered by selection.
+        for i in UNLOCKABLE_ITEMS..TOTAL_ITEMS {
+            set_bit(&mut all_unlocked, i);
+        }
         let player = Pubkey::new_unique();
         let level = 5u8;
         let slot = 12345u64;
@@ -353,7 +366,7 @@ mod tests {
 
     #[test]
     fn test_clear_bit() {
-        let mut mask: [u8; 10] = [0xFF; 10];
+        let mut mask: [u8; ITEM_BITMASK_SIZE] = [0xFF; ITEM_BITMASK_SIZE];
 
         assert!(clear_bit(&mut mask, 0));
         assert_eq!(mask[0], 0b11111110);
@@ -361,6 +374,6 @@ mod tests {
         assert!(clear_bit(&mut mask, 79));
         assert_eq!(mask[9], 0b01111111);
 
-        assert!(!clear_bit(&mut mask, 80)); // Out of range
+        assert!(!clear_bit(&mut mask, TOTAL_ITEMS)); // Out of range
     }
 }

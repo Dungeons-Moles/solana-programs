@@ -1,7 +1,7 @@
 //! Player Inventory Program for Dungeons & Moles
 //!
 //! This program manages player item inventories, including:
-//! - Item registry (80 items with effects)
+//! - Item registry (93 items with effects)
 //! - Inventory management (1 Tool + up to 8 Gear)
 //! - Item tier upgrades via fusion
 //! - Itemset bonus detection (12 itemsets)
@@ -239,6 +239,37 @@ pub mod player_inventory {
             player: ctx.accounts.player.key(),
             item_id,
             old_tier,
+            new_tier,
+        });
+
+        Ok(())
+    }
+
+    /// Upgrades the equipped tool to the next tier while preserving Tool Oil flags.
+    ///
+    /// Used by poi-system Rusty Anvil interaction for atomic tier upgrades.
+    pub fn upgrade_tool_tier(
+        ctx: Context<UpgradeToolTier>,
+        item_id: [u8; 8],
+        current_tier: Tier,
+    ) -> Result<()> {
+        let inventory = &mut ctx.accounts.inventory;
+
+        let tool = inventory
+            .tool
+            .as_mut()
+            .ok_or(InventoryError::NoToolEquipped)?;
+
+        require!(tool.item_id == item_id, InventoryError::InvalidItemId);
+        require!(tool.tier == current_tier, InventoryError::FusionMismatch);
+
+        let new_tier = current_tier.next().ok_or(InventoryError::AlreadyMaxTier)?;
+        tool.tier = new_tier;
+
+        emit!(ToolTierUpgraded {
+            player: ctx.accounts.player.key(),
+            item_id,
+            old_tier: current_tier,
             new_tier,
         });
 
@@ -662,6 +693,19 @@ pub struct EquipGear<'info> {
 }
 
 #[derive(Accounts)]
+pub struct UpgradeToolTier<'info> {
+    #[account(
+        mut,
+        seeds = [b"inventory", inventory.session.as_ref()],
+        bump = inventory.bump,
+        has_one = player @ InventoryError::Unauthorized
+    )]
+    pub inventory: Account<'info, PlayerInventory>,
+
+    pub player: Signer<'info>,
+}
+
+#[derive(Accounts)]
 pub struct UnequipGear<'info> {
     #[account(
         mut,
@@ -906,6 +950,14 @@ pub struct GearSlotsExpanded {
 pub struct ToolOilApplied {
     pub player: Pubkey,
     pub modification: ToolOilModification,
+}
+
+#[event]
+pub struct ToolTierUpgraded {
+    pub player: Pubkey,
+    pub item_id: [u8; 8],
+    pub old_tier: Tier,
+    pub new_tier: Tier,
 }
 
 #[event]

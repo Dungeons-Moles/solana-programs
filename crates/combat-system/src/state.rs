@@ -80,6 +80,8 @@ pub enum Condition {
     EnemyHasStatusAtLeast(StatusType, u8) = 12,
     /// Enemy must have no armor and at least N stacks of the specified status
     EnemyHasNoArmorAndStatusAtLeast(StatusType, u8) = 13,
+    /// Enemy has the specified status OR has no armor (disjunctive)
+    EnemyHasStatusOrNoArmor(StatusType) = 14,
 }
 
 /// A single entry in the combat log.
@@ -367,6 +369,7 @@ impl Combatant {
 
     pub fn apply_stats(&mut self, stats: &crate::triggers::CombatantStats) {
         self.hp = stats.hp;
+        self.max_hp = stats.max_hp;
         self.atk = stats.atk;
         self.arm = stats.arm;
         self.spd = stats.spd;
@@ -393,4 +396,60 @@ pub(crate) struct CombatState {
     pub player_gold: u16,
     /// Net gold change during combat (positive = player gains, negative = player loses)
     pub gold_change: i16,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Combatant, StatusEffects};
+    use crate::triggers::CombatantStats;
+
+    #[test]
+    fn apply_stats_updates_max_hp() {
+        let mut combatant = Combatant {
+            hp: 10,
+            max_hp: 10,
+            atk: 1,
+            arm: 1,
+            spd: 1,
+            dig: 1,
+            strikes: 1,
+            armor_piercing: 0,
+            stored_damage: 0,
+            gear_atk_bonus: 0,
+            half_gear_atk_after_second_strike: false,
+            next_bomb_damage_bonus: 0,
+            next_bomb_self_damage_reduction: 0,
+            active_bomb_self_damage_reduction: 0,
+            non_weapon_damage_bonus: 0,
+            next_non_weapon_damage_bonus: 0,
+            preserve_shrapnel_cap: 0,
+            shards_every_turn: false,
+            status: StatusEffects::default(),
+            first_time_flags: 0,
+        };
+        let updated_stats = CombatantStats {
+            hp: 12,
+            max_hp: 12,
+            atk: 1,
+            arm: 1,
+            spd: 1,
+            dig: 1,
+            armor_piercing: 0,
+            stored_damage: 0,
+            gear_atk_bonus: 0,
+            half_gear_atk_after_second_strike: false,
+            next_bomb_damage_bonus: 0,
+            next_bomb_self_damage_reduction: 0,
+            active_bomb_self_damage_reduction: 0,
+            non_weapon_damage_bonus: 0,
+            next_non_weapon_damage_bonus: 0,
+            preserve_shrapnel_cap: 0,
+            shards_every_turn: false,
+        };
+
+        combatant.apply_stats(&updated_stats);
+
+        assert_eq!(combatant.hp, 12);
+        assert_eq!(combatant.max_hp, 12);
+    }
 }

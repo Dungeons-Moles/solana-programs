@@ -205,6 +205,64 @@ fn equip_tool_authorized_cpi<'info>(
     Ok(())
 }
 
+fn offer_tier_to_inventory_tier(tier: u8) -> player_inventory::state::Tier {
+    match tier {
+        0 => player_inventory::state::Tier::I,
+        1 => player_inventory::state::Tier::II,
+        2 => player_inventory::state::Tier::III,
+        _ => player_inventory::state::Tier::I,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn equip_item_authorized_cpi<'info>(
+    inventory: &AccountInfo<'info>,
+    game_state: &AccountInfo<'info>,
+    inventory_authority: &AccountInfo<'info>,
+    poi_authority: &AccountInfo<'info>,
+    player_inventory_program: &AccountInfo<'info>,
+    gameplay_state_program: &AccountInfo<'info>,
+    poi_authority_bump: u8,
+    item_id: [u8; 8],
+    item_tier: u8,
+) -> Result<()> {
+    let tier = offer_tier_to_inventory_tier(item_tier);
+    if item_id[0] == b'T' {
+        equip_tool_authorized_cpi(
+            inventory,
+            game_state,
+            inventory_authority,
+            poi_authority,
+            player_inventory_program,
+            gameplay_state_program,
+            poi_authority_bump,
+            item_id,
+            tier,
+        )
+    } else {
+        equip_gear_authorized_cpi(
+            inventory,
+            game_state,
+            inventory_authority,
+            poi_authority,
+            player_inventory_program,
+            gameplay_state_program,
+            poi_authority_bump,
+            item_id,
+            tier,
+        )
+    }
+}
+
+fn copy_shop_offers(shop_state: &mut ShopState, filtered: &[state::ItemOffer], reset_first: bool) {
+    if reset_first {
+        shop_state.offers = [state::ItemOffer::default(); state::SHOP_OFFER_COUNT];
+    }
+    for (dst, src) in shop_state.offers.iter_mut().zip(filtered.iter()) {
+        *dst = *src;
+    }
+}
+
 #[program]
 pub mod poi_system {
     use super::*;
@@ -596,41 +654,17 @@ pub mod poi_system {
         let result =
             interactions::execute_pick_item_interaction(poi, &offers, choice_index, is_night)?;
 
-        // Equip the item via CPI to player-inventory
-        // Determine if gear or tool by checking item_id prefix ("G-" = gear, "T-" = tool)
-        let is_tool = result.item.item_id[0] == b'T';
-        let tier = match result.item.tier {
-            0 => player_inventory::state::Tier::I,
-            1 => player_inventory::state::Tier::II,
-            2 => player_inventory::state::Tier::III,
-            _ => player_inventory::state::Tier::I, // Default to Tier I for invalid values
-        };
-
-        if is_tool {
-            equip_tool_authorized_cpi(
-                &ctx.accounts.inventory.to_account_info(),
-                &ctx.accounts.game_state.to_account_info(),
-                &ctx.accounts.inventory_authority,
-                &ctx.accounts.poi_authority,
-                &ctx.accounts.player_inventory_program.to_account_info(),
-                &ctx.accounts.gameplay_state_program.to_account_info(),
-                ctx.bumps.poi_authority,
-                result.item.item_id,
-                tier,
-            )?;
-        } else {
-            equip_gear_authorized_cpi(
-                &ctx.accounts.inventory.to_account_info(),
-                &ctx.accounts.game_state.to_account_info(),
-                &ctx.accounts.inventory_authority,
-                &ctx.accounts.poi_authority,
-                &ctx.accounts.player_inventory_program.to_account_info(),
-                &ctx.accounts.gameplay_state_program.to_account_info(),
-                ctx.bumps.poi_authority,
-                result.item.item_id,
-                tier,
-            )?;
-        }
+        equip_item_authorized_cpi(
+            &ctx.accounts.inventory.to_account_info(),
+            &ctx.accounts.game_state.to_account_info(),
+            &ctx.accounts.inventory_authority,
+            &ctx.accounts.poi_authority,
+            &ctx.accounts.player_inventory_program.to_account_info(),
+            &ctx.accounts.gameplay_state_program.to_account_info(),
+            ctx.bumps.poi_authority,
+            result.item.item_id,
+            result.item.tier,
+        )?;
 
         // Mark POI as used
         if result.mark_used {
@@ -854,12 +888,7 @@ pub mod poi_system {
         map_pois.shop_state.poi_index = poi_index;
         map_pois.shop_state.reroll_count = 0;
 
-        // Copy filtered offers to shop state
-        for (i, offer) in filtered.iter().enumerate() {
-            if i < state::SHOP_OFFER_COUNT {
-                map_pois.shop_state.offers[i] = *offer;
-            }
-        }
+        copy_shop_offers(&mut map_pois.shop_state, &filtered, false);
 
         emit!(ShopEntered {
             session: map_pois.session,
@@ -902,41 +931,17 @@ pub mod poi_system {
             -(price as i16),
         )?;
 
-        // Equip the item via CPI to player-inventory
-        // Determine if gear or tool by checking item_id prefix ("G-" = gear, "T-" = tool)
-        let is_tool = offer.item_id[0] == b'T';
-        let tier = match offer.tier {
-            0 => player_inventory::state::Tier::I,
-            1 => player_inventory::state::Tier::II,
-            2 => player_inventory::state::Tier::III,
-            _ => player_inventory::state::Tier::I,
-        };
-
-        if is_tool {
-            equip_tool_authorized_cpi(
-                &ctx.accounts.inventory.to_account_info(),
-                &ctx.accounts.game_state.to_account_info(),
-                &ctx.accounts.inventory_authority,
-                &ctx.accounts.poi_authority,
-                &ctx.accounts.player_inventory_program.to_account_info(),
-                &ctx.accounts.gameplay_state_program.to_account_info(),
-                ctx.bumps.poi_authority,
-                offer.item_id,
-                tier,
-            )?;
-        } else {
-            equip_gear_authorized_cpi(
-                &ctx.accounts.inventory.to_account_info(),
-                &ctx.accounts.game_state.to_account_info(),
-                &ctx.accounts.inventory_authority,
-                &ctx.accounts.poi_authority,
-                &ctx.accounts.player_inventory_program.to_account_info(),
-                &ctx.accounts.gameplay_state_program.to_account_info(),
-                ctx.bumps.poi_authority,
-                offer.item_id,
-                tier,
-            )?;
-        }
+        equip_item_authorized_cpi(
+            &ctx.accounts.inventory.to_account_info(),
+            &ctx.accounts.game_state.to_account_info(),
+            &ctx.accounts.inventory_authority,
+            &ctx.accounts.poi_authority,
+            &ctx.accounts.player_inventory_program.to_account_info(),
+            &ctx.accounts.gameplay_state_program.to_account_info(),
+            ctx.bumps.poi_authority,
+            offer.item_id,
+            offer.tier,
+        )?;
 
         emit!(ItemPurchased {
             session: map_pois.session,
@@ -1013,14 +1018,7 @@ pub mod poi_system {
             &ctx.accounts.game_session.active_item_pool,
         );
 
-        // Replace offers with filtered results
-        // Reset all slots first, then fill with filtered offers
-        map_pois.shop_state.offers = [state::ItemOffer::default(); state::SHOP_OFFER_COUNT];
-        for (i, offer) in filtered.iter().enumerate() {
-            if i < state::SHOP_OFFER_COUNT {
-                map_pois.shop_state.offers[i] = *offer;
-            }
-        }
+        copy_shop_offers(&mut map_pois.shop_state, &filtered, true);
 
         emit!(ShopRerolled {
             session: map_pois.session,

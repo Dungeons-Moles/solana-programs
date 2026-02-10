@@ -110,6 +110,9 @@ pub fn check_condition(
             }
             status_stacks(opponent_status, status_type) >= min_stacks
         }
+        Condition::EnemyHasStatusOrNoArmor(status_type) => {
+            status_stacks(opponent_status, status_type) > 0 || opponent_stats.arm <= 0
+        }
     }
 }
 

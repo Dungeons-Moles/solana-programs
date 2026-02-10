@@ -1316,21 +1316,13 @@ pub const G_RU_06: ItemDefinition = ItemDefinition {
     tag: ItemTag::Rust,
     rarity: Rarity::Heroic,
     effects: &[
-        // Turn Start: if enemy has Rust, deal 1/2/3 non-weapon damage
+        // Turn Start: if enemy has Rust OR no Armor, deal 1/2/3 non-weapon damage
         EffectDefinition::with_condition(
             TriggerType::TurnStart,
             EffectType::DealNonWeaponDamage,
             false,
             [1, 2, 3],
-            Condition::EnemyHasStatus(StatusType::Rust),
-        ),
-        // Turn Start: if enemy has no Armor, deal 1/2/3 non-weapon damage
-        EffectDefinition::with_condition(
-            TriggerType::TurnStart,
-            EffectType::DealNonWeaponDamage,
-            false,
-            [1, 2, 3],
-            Condition::EnemyHasNoArmor,
+            Condition::EnemyHasStatusOrNoArmor(StatusType::Rust),
         ),
     ],
 };

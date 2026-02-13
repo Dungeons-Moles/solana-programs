@@ -361,7 +361,7 @@ mod tests {
             session: Pubkey::default(),
             player: Pubkey::default(),
             tool: None,
-            gear: [None; 8],
+            gear: [None; 12],
             gear_slot_capacity: 4,
             bump: 0,
         };
@@ -380,7 +380,7 @@ mod tests {
             session: Pubkey::default(),
             player: Pubkey::default(),
             tool: None,
-            gear: [None; 8],
+            gear: [None; 12],
             gear_slot_capacity: 4,
             bump: 0,
         };
@@ -399,7 +399,7 @@ mod tests {
             session: Pubkey::default(),
             player: Pubkey::default(),
             tool: None,
-            gear: [None; 8],
+            gear: [None; 12],
             gear_slot_capacity: 4,
             bump: 0,
         };

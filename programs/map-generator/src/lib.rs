@@ -68,6 +68,28 @@ pub mod map_generator {
         Ok(())
     }
 
+    /// Generates a map for a game session using an explicit seed.
+    /// Used by Duels so seed selection is decoupled from campaign progression.
+    pub fn generate_map_with_seed(
+        ctx: Context<GenerateMap>,
+        campaign_level: u8,
+        seed: u64,
+    ) -> Result<()> {
+        require!(
+            campaign_level > 0 && campaign_level <= MAX_LEVEL,
+            MapGeneratorError::InvalidLevel
+        );
+
+        let generated_map = &mut ctx.accounts.generated_map;
+        generated_map.session = ctx.accounts.session.key();
+        generated_map.bump = ctx.bumps.generated_map;
+
+        let success = maze::generate_map(generated_map, seed, campaign_level);
+        require!(success, MapGeneratorError::MapGenerationFailed);
+
+        Ok(())
+    }
+
     /// Marks a POI as used on the generated map.
     pub fn mark_poi_used(ctx: Context<MarkPoiUsed>, poi_index: u8) -> Result<()> {
         require_keys_eq!(

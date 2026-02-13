@@ -20,9 +20,10 @@ idl-build = ["anchor-lang/idl-build"]
 sha2 = "0.10"
 
 [dependencies]
-anchor-lang = "0.32.0"
+anchor-lang = { version = "0.32.0", features = ["init-if-needed"] }
 combat-system = { path = "../../crates/combat-system" }
 map-generator = { path = "../map-generator", features = ["cpi"] }
 field-enemies = { path = "../../crates/field-enemies" }
 boss-system = { path = "../../crates/boss-system" }
 player-inventory = { path = "../player-inventory", features = ["cpi"] }
+player-profile = { path = "../player-profile", features = ["cpi"] }

@@ -2,7 +2,7 @@ use super::{build_player_combatant, preprocess_enemy_effects};
 use crate::stats::calculate_stats;
 use anchor_lang::prelude::Pubkey;
 use combat_system::{
-    resolve_combat, CombatLogEntry, CombatOutcome, LogAction, STATUS_BLEED, STATUS_CHILL,
+    resolve_combat_with_player_gold, CombatLogEntry, CombatOutcome, LogAction, STATUS_BLEED, STATUS_CHILL,
     STATUS_RUST, STATUS_SHRAPNEL,
 };
 use field_enemies::archetypes::{get_enemy_combatant_input, ids};
@@ -15,7 +15,7 @@ fn make_inventory() -> PlayerInventory {
         session: Pubkey::default(),
         player: Pubkey::default(),
         tool: None,
-        gear: [None; 8],
+        gear: [None; 12],
         gear_slot_capacity: 4,
         bump: 0,
     }
@@ -101,8 +101,14 @@ fn run_combat(
         .expect("enemy combatant input missing");
     let enemy_effects = preprocess_enemy_effects(enemy_archetype, player_gold);
 
-    resolve_combat(player_input, enemy_input, player_effects, enemy_effects)
-        .expect("combat resolution failed")
+    resolve_combat_with_player_gold(
+        player_input,
+        enemy_input,
+        player_effects,
+        enemy_effects,
+        player_gold,
+    )
+    .expect("combat resolution failed")
 }
 
 fn resolve_scenario(scenario: &Scenario) -> CombatOutcome {
@@ -374,7 +380,7 @@ fn test_tunnel_rat_t1_basic_pickaxe() {
         gear: vec![],
         enemy_archetype: ids::TUNNEL_RAT,
         enemy_tier: 0,
-        player_gold: 0,
+        player_gold: 10,
         expected_player_won: true,
         expected_final_player_hp: ExpectedHp::Exact(5),
         expected_final_enemy_hp: ExpectedHp::Exact(0),
@@ -392,7 +398,7 @@ fn test_tunnel_rat_t1_atk_oil() {
         gear: vec![],
         enemy_archetype: ids::TUNNEL_RAT,
         enemy_tier: 0,
-        player_gold: 0,
+        player_gold: 10,
         expected_player_won: true,
         expected_final_player_hp: ExpectedHp::Exact(7),
         expected_final_enemy_hp: ExpectedHp::NonPositive,
@@ -504,7 +510,7 @@ fn test_tunnel_rat_steals_gold_log() {
         vec![],
         ids::TUNNEL_RAT,
         0,
-        0,
+        10,
     );
 
     assert_log_contains(&outcome.log, "tunnel_rat_steals_gold_log", |entry| {

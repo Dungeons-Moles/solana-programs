@@ -232,6 +232,47 @@ describe("session-manager", () => {
     };
   };
 
+  const startDuelSession = async (params: {
+    user: Keypair;
+    burnerWallet: Keypair;
+    playerProfilePDA: anchor.web3.PublicKey;
+    forcedSeed: anchor.BN;
+  }) => {
+    const { user, burnerWallet, playerProfilePDA, forcedSeed } = params;
+    await ensureMapConfigExists();
+
+    const duelCampaignLevel = 20;
+    const [sessionPDA] = getSessionPDA(user.publicKey, duelCampaignLevel);
+    const [generatedMapPDA] = getGeneratedMapPDA(sessionPDA);
+    const [gameStatePDA] = getGameStatePDA(sessionPDA);
+    const [mapEnemiesPDA] = getMapEnemiesPDA(sessionPDA);
+    const [mapPoisPDA] = getMapPoisPDA(sessionPDA);
+    const [inventoryPDA] = getInventoryPDA(sessionPDA);
+
+    await (program.methods as any)
+      .startDuelSession(forcedSeed)
+      .accounts({
+        gameSession: sessionPDA,
+        sessionCounter: counterPDA,
+        playerProfile: playerProfilePDA,
+        mapConfig: mapConfigPDA,
+        generatedMap: generatedMapPDA,
+        mapGeneratorProgram: mapGeneratorProgram.programId,
+        player: user.publicKey,
+        burnerWallet: burnerWallet.publicKey,
+        gameState: gameStatePDA,
+        mapEnemies: mapEnemiesPDA,
+        mapPois: mapPoisPDA,
+        inventory: inventoryPDA,
+        gameplayStateProgram: gameplayProgram.programId,
+        poiSystemProgram: poiSystemProgram.programId,
+        playerInventoryProgram: playerInventoryProgram.programId,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .signers([user, burnerWallet])
+      .rpc();
+  };
+
   describe("Initialize Session Counter", () => {
     it("initializes session counter", async () => {
       const admin = provider.wallet;
@@ -483,6 +524,27 @@ describe("session-manager", () => {
         } as any)
         .signers([user, burnerWallet])
         .rpc();
+    });
+  });
+
+  describe("Duel Seed Security", () => {
+    it("rejects externally provided forced seed", async () => {
+      await ensureCounterExists();
+
+      const { user, burnerWallet, playerProfilePDA } =
+        await createUserWithProfile("DuelSeedReject");
+
+      try {
+        await startDuelSession({
+          user,
+          burnerWallet,
+          playerProfilePDA,
+          forcedSeed: new anchor.BN(123456),
+        });
+        expect.fail("Expected forced duel seed to be rejected");
+      } catch (error: any) {
+        expect(error.toString()).to.include("ExternalDuelSeedNotAllowed");
+      }
     });
   });
 

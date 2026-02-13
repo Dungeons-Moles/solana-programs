@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 pub mod constants;
 pub mod errors;
 pub mod state;
+use constants::{DUEL_CAMPAIGN_LEVEL, GAUNTLET_CAMPAIGN_LEVEL};
 
 use errors::SessionManagerError;
 use gameplay_state::program::GameplayState;
@@ -221,6 +222,7 @@ pub mod session_manager {
             &ctx.accounts.map_pois,
             &ctx.accounts.game_session.to_account_info(),
             &ctx.accounts.generated_map.to_account_info(),
+            &ctx.accounts.game_state.to_account_info(),
             &ctx.accounts.player.to_account_info(),
             &ctx.accounts.system_program.to_account_info(),
             act,
@@ -229,6 +231,302 @@ pub mod session_manager {
         )?;
 
         // Apply spawn-time waypoint discovery using radius 6 around initial position.
+        discover_visible_waypoints_cpi(
+            &ctx.accounts.poi_system_program,
+            &ctx.accounts.map_pois,
+            &ctx.accounts.game_state.to_account_info(),
+            &ctx.accounts.burner_wallet.to_account_info(),
+            6,
+        )?;
+
+        emit!(SessionStarted {
+            player: session_player,
+            session_id: counter.count,
+            campaign_level,
+            burner_wallet: burner_wallet_key,
+            timestamp: clock.unix_timestamp,
+        });
+
+        Ok(())
+    }
+
+    /// Starts a duel session with fixed mid difficulty.
+    ///
+    /// This path is intentionally decoupled from campaign unlock progression:
+    /// - Uses a fixed campaign level (DUEL_CAMPAIGN_LEVEL) for balance.
+    /// - Derives duel seed on-chain by default.
+    /// - If `forced_seed != 0`, uses the provided seed (for async duel opponent matching).
+    /// - Does not consume campaign runs.
+    pub fn start_duel_session(ctx: Context<StartDuelSession>, forced_seed: u64) -> Result<()> {
+        let player_profile = &ctx.accounts.player_profile;
+        let campaign_level = DUEL_CAMPAIGN_LEVEL;
+        require!(
+            forced_seed == 0,
+            SessionManagerError::ExternalDuelSeedNotAllowed
+        );
+
+        let counter = &mut ctx.accounts.session_counter;
+        let clock = Clock::get()?;
+        let session_player = ctx.accounts.player.key();
+        let burner_wallet_key = ctx.accounts.burner_wallet.key();
+
+        counter.count = counter
+            .count
+            .checked_add(1)
+            .ok_or(SessionManagerError::ArithmeticOverflow)?;
+
+        let duel_seed = derive_pvp_seed(
+            b"duel_seed",
+            &clock,
+            counter.count,
+            &session_player,
+            &burner_wallet_key,
+        );
+
+        {
+            let session = &mut ctx.accounts.game_session;
+            session.player = session_player;
+            session.session_id = counter.count;
+            session.campaign_level = campaign_level;
+            session.started_at = clock.unix_timestamp;
+            session.last_activity = clock.unix_timestamp;
+            session.is_delegated = false;
+            session.state_hash = EMPTY_STATE_HASH;
+            session.bump = ctx.bumps.game_session;
+            session.active_item_pool = player_profile.active_item_pool;
+            session.burner_wallet = burner_wallet_key;
+        }
+
+        map_generator::cpi::generate_map_with_seed(
+            CpiContext::new(
+                ctx.accounts.map_generator_program.to_account_info(),
+                map_generator::cpi::accounts::GenerateMap {
+                    payer: ctx.accounts.player.to_account_info(),
+                    session: ctx.accounts.game_session.to_account_info(),
+                    map_config: ctx.accounts.map_config.to_account_info(),
+                    generated_map: ctx.accounts.generated_map.to_account_info(),
+                    system_program: ctx.accounts.system_program.to_account_info(),
+                },
+            ),
+            campaign_level,
+            duel_seed,
+        )?;
+
+        let map_info = ctx.accounts.generated_map.to_account_info();
+        let map_data = map_info.try_borrow_data()?;
+        let mut map_slice: &[u8] = &map_data;
+        if map_slice.len() < 8 {
+            return Err(ProgramError::InvalidAccountData.into());
+        }
+        let generated_map = GeneratedMap::try_deserialize(&mut map_slice)?;
+
+        let width = generated_map.width;
+        let height = generated_map.height;
+        let start_x = generated_map.spawn_x;
+        let start_y = generated_map.spawn_y;
+        drop(map_data);
+
+        gameplay_state::cpi::initialize_game_state(
+            CpiContext::new(
+                ctx.accounts.gameplay_state_program.to_account_info(),
+                gameplay_state::cpi::accounts::InitializeGameState {
+                    game_state: ctx.accounts.game_state.to_account_info(),
+                    game_session: ctx.accounts.game_session.to_account_info(),
+                    generated_map: ctx.accounts.generated_map.to_account_info(),
+                    map_enemies: ctx.accounts.map_enemies.to_account_info(),
+                    player: ctx.accounts.player.to_account_info(),
+                    burner_wallet: ctx.accounts.burner_wallet.to_account_info(),
+                    system_program: ctx.accounts.system_program.to_account_info(),
+                },
+            ),
+            campaign_level,
+            width,
+            height,
+            start_x,
+            start_y,
+        )?;
+
+        gameplay_state::cpi::configure_run_mode(
+            CpiContext::new(
+                ctx.accounts.gameplay_state_program.to_account_info(),
+                gameplay_state::cpi::accounts::ConfigureRunMode {
+                    game_state: ctx.accounts.game_state.to_account_info(),
+                    player: ctx.accounts.player.to_account_info(),
+                },
+            ),
+            gameplay_state::state::RunMode::Duel,
+            3,
+        )?;
+
+        player_inventory::cpi::initialize_inventory(CpiContext::new(
+            ctx.accounts.player_inventory_program.to_account_info(),
+            player_inventory::cpi::accounts::InitializeInventory {
+                inventory: ctx.accounts.inventory.to_account_info(),
+                session: ctx.accounts.game_session.to_account_info(),
+                player: ctx.accounts.burner_wallet.to_account_info(),
+                system_program: ctx.accounts.system_program.to_account_info(),
+            },
+        ))?;
+
+        let act = (campaign_level - 1) / 10 + 1;
+        let week = 1u8;
+        let poi_seed = duel_seed;
+
+        initialize_map_pois_cpi(
+            &ctx.accounts.poi_system_program,
+            &ctx.accounts.map_pois,
+            &ctx.accounts.game_session.to_account_info(),
+            &ctx.accounts.generated_map.to_account_info(),
+            &ctx.accounts.game_state.to_account_info(),
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+            act,
+            week,
+            poi_seed,
+        )?;
+        discover_visible_waypoints_cpi(
+            &ctx.accounts.poi_system_program,
+            &ctx.accounts.map_pois,
+            &ctx.accounts.game_state.to_account_info(),
+            &ctx.accounts.burner_wallet.to_account_info(),
+            6,
+        )?;
+
+        emit!(SessionStarted {
+            player: session_player,
+            session_id: counter.count,
+            campaign_level,
+            burner_wallet: burner_wallet_key,
+            timestamp: clock.unix_timestamp,
+        });
+
+        Ok(())
+    }
+
+    /// Starts a gauntlet session using the same fixed difficulty profile as Duels.
+    pub fn start_gauntlet_session(ctx: Context<StartGauntletSession>) -> Result<()> {
+        let player_profile = &ctx.accounts.player_profile;
+        let campaign_level = GAUNTLET_CAMPAIGN_LEVEL;
+
+        let counter = &mut ctx.accounts.session_counter;
+        let clock = Clock::get()?;
+        let session_player = ctx.accounts.player.key();
+        let burner_wallet_key = ctx.accounts.burner_wallet.key();
+
+        counter.count = counter
+            .count
+            .checked_add(1)
+            .ok_or(SessionManagerError::ArithmeticOverflow)?;
+
+        let gauntlet_seed = derive_pvp_seed(
+            b"gauntlet_seed",
+            &clock,
+            counter.count,
+            &session_player,
+            &burner_wallet_key,
+        );
+
+        {
+            let session = &mut ctx.accounts.game_session;
+            session.player = session_player;
+            session.session_id = counter.count;
+            session.campaign_level = campaign_level;
+            session.started_at = clock.unix_timestamp;
+            session.last_activity = clock.unix_timestamp;
+            session.is_delegated = false;
+            session.state_hash = EMPTY_STATE_HASH;
+            session.bump = ctx.bumps.game_session;
+            session.active_item_pool = player_profile.active_item_pool;
+            session.burner_wallet = burner_wallet_key;
+        }
+
+        map_generator::cpi::generate_map_with_seed(
+            CpiContext::new(
+                ctx.accounts.map_generator_program.to_account_info(),
+                map_generator::cpi::accounts::GenerateMap {
+                    payer: ctx.accounts.player.to_account_info(),
+                    session: ctx.accounts.game_session.to_account_info(),
+                    map_config: ctx.accounts.map_config.to_account_info(),
+                    generated_map: ctx.accounts.generated_map.to_account_info(),
+                    system_program: ctx.accounts.system_program.to_account_info(),
+                },
+            ),
+            campaign_level,
+            gauntlet_seed,
+        )?;
+
+        let map_info = ctx.accounts.generated_map.to_account_info();
+        let map_data = map_info.try_borrow_data()?;
+        let mut map_slice: &[u8] = &map_data;
+        if map_slice.len() < 8 {
+            return Err(ProgramError::InvalidAccountData.into());
+        }
+        let generated_map = GeneratedMap::try_deserialize(&mut map_slice)?;
+
+        let width = generated_map.width;
+        let height = generated_map.height;
+        let start_x = generated_map.spawn_x;
+        let start_y = generated_map.spawn_y;
+        drop(map_data);
+
+        gameplay_state::cpi::initialize_game_state(
+            CpiContext::new(
+                ctx.accounts.gameplay_state_program.to_account_info(),
+                gameplay_state::cpi::accounts::InitializeGameState {
+                    game_state: ctx.accounts.game_state.to_account_info(),
+                    game_session: ctx.accounts.game_session.to_account_info(),
+                    generated_map: ctx.accounts.generated_map.to_account_info(),
+                    map_enemies: ctx.accounts.map_enemies.to_account_info(),
+                    player: ctx.accounts.player.to_account_info(),
+                    burner_wallet: ctx.accounts.burner_wallet.to_account_info(),
+                    system_program: ctx.accounts.system_program.to_account_info(),
+                },
+            ),
+            campaign_level,
+            width,
+            height,
+            start_x,
+            start_y,
+        )?;
+
+        gameplay_state::cpi::configure_run_mode(
+            CpiContext::new(
+                ctx.accounts.gameplay_state_program.to_account_info(),
+                gameplay_state::cpi::accounts::ConfigureRunMode {
+                    game_state: ctx.accounts.game_state.to_account_info(),
+                    player: ctx.accounts.player.to_account_info(),
+                },
+            ),
+            gameplay_state::state::RunMode::Gauntlet,
+            5,
+        )?;
+
+        player_inventory::cpi::initialize_inventory(CpiContext::new(
+            ctx.accounts.player_inventory_program.to_account_info(),
+            player_inventory::cpi::accounts::InitializeInventory {
+                inventory: ctx.accounts.inventory.to_account_info(),
+                session: ctx.accounts.game_session.to_account_info(),
+                player: ctx.accounts.burner_wallet.to_account_info(),
+                system_program: ctx.accounts.system_program.to_account_info(),
+            },
+        ))?;
+
+        let act = (campaign_level - 1) / 10 + 1;
+        let week = 1u8;
+        let poi_seed = gauntlet_seed;
+
+        initialize_map_pois_cpi(
+            &ctx.accounts.poi_system_program,
+            &ctx.accounts.map_pois,
+            &ctx.accounts.game_session.to_account_info(),
+            &ctx.accounts.generated_map.to_account_info(),
+            &ctx.accounts.game_state.to_account_info(),
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+            act,
+            week,
+            poi_seed,
+        )?;
         discover_visible_waypoints_cpi(
             &ctx.accounts.poi_system_program,
             &ctx.accounts.map_pois,
@@ -610,6 +908,132 @@ pub struct StartSession<'info> {
 }
 
 #[derive(Accounts)]
+pub struct StartDuelSession<'info> {
+    #[account(
+        init,
+        payer = player,
+        space = 8 + GameSession::INIT_SPACE,
+        seeds = [GameSession::SEED_PREFIX, player.key().as_ref(), &[DUEL_CAMPAIGN_LEVEL]],
+        bump
+    )]
+    pub game_session: Account<'info, GameSession>,
+
+    #[account(
+        mut,
+        seeds = [SessionCounter::SEED_PREFIX],
+        bump = session_counter.bump
+    )]
+    pub session_counter: Account<'info, SessionCounter>,
+
+    #[account(
+        seeds = [b"player", player.key().as_ref()],
+        bump,
+        seeds::program = PlayerProfileRef::id()
+    )]
+    pub player_profile: Account<'info, PlayerProfile>,
+
+    #[account(mut)]
+    pub player: Signer<'info>,
+
+    #[account(mut)]
+    pub burner_wallet: Signer<'info>,
+
+    pub map_config: Account<'info, MapConfigAccount>,
+
+    #[account(mut)]
+    /// CHECK: PDA created by map-generator CPI
+    pub generated_map: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    /// CHECK: Initialized by gameplay-state CPI
+    pub game_state: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    /// CHECK: Initialized by gameplay-state CPI
+    pub map_enemies: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    /// CHECK: Initialized by poi-system CPI
+    pub map_pois: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    /// CHECK: Initialized by player-inventory CPI
+    pub inventory: UncheckedAccount<'info>,
+
+    pub map_generator_program: Program<'info, MapGenerator>,
+    pub gameplay_state_program: Program<'info, GameplayState>,
+    #[account(address = POI_SYSTEM_PROGRAM_ID)]
+    /// CHECK: POI system program for manual CPI, validated by address constraint
+    pub poi_system_program: UncheckedAccount<'info>,
+    pub player_inventory_program: Program<'info, PlayerInventory>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct StartGauntletSession<'info> {
+    #[account(
+        init,
+        payer = player,
+        space = 8 + GameSession::INIT_SPACE,
+        seeds = [GameSession::SEED_PREFIX, player.key().as_ref(), &[GAUNTLET_CAMPAIGN_LEVEL]],
+        bump
+    )]
+    pub game_session: Account<'info, GameSession>,
+
+    #[account(
+        mut,
+        seeds = [SessionCounter::SEED_PREFIX],
+        bump = session_counter.bump
+    )]
+    pub session_counter: Account<'info, SessionCounter>,
+
+    #[account(
+        seeds = [b"player", player.key().as_ref()],
+        bump,
+        seeds::program = PlayerProfileRef::id()
+    )]
+    pub player_profile: Account<'info, PlayerProfile>,
+
+    #[account(mut)]
+    pub player: Signer<'info>,
+
+    #[account(mut)]
+    pub burner_wallet: Signer<'info>,
+
+    pub map_config: Account<'info, MapConfigAccount>,
+
+    #[account(mut)]
+    /// CHECK: PDA created by map-generator CPI
+    pub generated_map: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    /// CHECK: Initialized by gameplay-state CPI
+    pub game_state: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    /// CHECK: Initialized by gameplay-state CPI
+    pub map_enemies: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    /// CHECK: Initialized by poi-system CPI
+    pub map_pois: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    /// CHECK: Initialized by player-inventory CPI
+    pub inventory: UncheckedAccount<'info>,
+
+    pub map_generator_program: Program<'info, MapGenerator>,
+    pub gameplay_state_program: Program<'info, GameplayState>,
+    #[account(address = POI_SYSTEM_PROGRAM_ID)]
+    /// CHECK: POI system program for manual CPI, validated by address constraint
+    pub poi_system_program: UncheckedAccount<'info>,
+    pub player_inventory_program: Program<'info, PlayerInventory>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 #[instruction(campaign_level: u8)]
 pub struct DelegateSession<'info> {
     #[account(
@@ -817,6 +1241,37 @@ pub struct SessionEnded {
 /// 2. Update gameplay-state's END_SESSION_DISCRIMINATOR constant
 pub const END_SESSION_DISCRIMINATOR: [u8; 8] = [0x0b, 0xf4, 0x3d, 0x9a, 0xd4, 0xf9, 0x0f, 0x42];
 
+fn derive_pvp_seed(
+    domain: &[u8],
+    clock: &Clock,
+    session_counter: u64,
+    player: &Pubkey,
+    burner_wallet: &Pubkey,
+) -> u64 {
+    let mut acc = session_counter
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(clock.slot)
+        .wrapping_add(clock.unix_timestamp as u64);
+
+    for byte in domain {
+        acc = acc
+            .wrapping_mul(0x100_0000_01B3)
+            .wrapping_add(*byte as u64);
+    }
+    for byte in player.as_ref() {
+        acc = acc
+            .wrapping_mul(0x100_0000_01B3)
+            .wrapping_add(*byte as u64);
+    }
+    for byte in burner_wallet.as_ref() {
+        acc = acc
+            .wrapping_mul(0x100_0000_01B3)
+            .wrapping_add(*byte as u64);
+    }
+
+    acc
+}
+
 // ============================================================================
 // Manual CPI Helper
 // ============================================================================
@@ -888,6 +1343,7 @@ fn initialize_map_pois_cpi<'info>(
     map_pois: &AccountInfo<'info>,
     session: &AccountInfo<'info>,
     generated_map: &AccountInfo<'info>,
+    game_state: &AccountInfo<'info>,
     payer: &AccountInfo<'info>,
     system_program: &AccountInfo<'info>,
     act: u8,
@@ -907,6 +1363,7 @@ fn initialize_map_pois_cpi<'info>(
             (map_pois, true, false),
             (session, false, false),
             (generated_map, false, false),
+            (game_state, false, false),
             (payer, true, true),
             (system_program, false, false),
         ],

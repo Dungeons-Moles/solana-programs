@@ -237,9 +237,9 @@ pub struct PlayerInventory {
     pub player: Pubkey,
     /// Equipped tool (0 or 1)
     pub tool: Option<ItemInstance>,
-    /// Equipped gear (0-8)
-    pub gear: [Option<ItemInstance>; 8],
-    /// Current gear limit (4, 6, or 8)
+    /// Equipped gear (0-12)
+    pub gear: [Option<ItemInstance>; 12],
+    /// Current gear limit (4, 6, 8, 10, or 12)
     pub gear_slot_capacity: u8,
     /// PDA bump seed
     pub bump: u8,
@@ -247,15 +247,15 @@ pub struct PlayerInventory {
 
 impl PlayerInventory {
     /// Account space calculation
-    /// 8 (discriminator) + 32 (session) + 32 (player) + 1 + 10 (tool option) + 8 * (1 + 10) (gear array) + 1 + 1
-    pub const LEN: usize = 8 + 32 + 32 + 1 + 10 + (8 * 11) + 1 + 1;
+    /// 8 (discriminator) + 32 (session) + 32 (player) + 1 + 10 (tool option) + 12 * (1 + 10) (gear array) + 1 + 1
+    pub const LEN: usize = 8 + 32 + 32 + 1 + 10 + (12 * 11) + 1 + 1;
 
     /// Initialize a new PlayerInventory
     pub fn init(&mut self, session: Pubkey, player: Pubkey, bump: u8) {
         self.session = session;
         self.player = player;
         self.tool = None;
-        self.gear = [None; 8];
+        self.gear = [None; 12];
         self.gear_slot_capacity = INITIAL_GEAR_SLOTS;
         self.bump = bump;
     }
@@ -291,7 +291,9 @@ impl PlayerInventory {
     pub fn expand_slots(&mut self) -> Result<u8> {
         let new_capacity = match self.gear_slot_capacity {
             4 => 6,
-            6 => MAX_GEAR_SLOTS,
+            6 => 8,
+            8 => 10,
+            10 => MAX_GEAR_SLOTS,
             _ => return Err(crate::errors::InventoryError::AlreadyMaxSlots.into()),
         };
         let old_capacity = self.gear_slot_capacity;

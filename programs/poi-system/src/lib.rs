@@ -9,7 +9,7 @@ pub mod state;
 
 use anchor_lang::context::CpiContext;
 use errors::PoiSystemError;
-use gameplay_state::state::GameState;
+use gameplay_state::state::{GameState, RunMode};
 pub use pois::PoiDefinition;
 use state::{ActiveCondition, MapPois, ShopState, UseType, MAP_POIS_SEED};
 
@@ -315,6 +315,9 @@ pub mod poi_system {
         map_pois.seed = seed;
         map_pois.shop_state = ShopState::default();
 
+        // Counter Cache (L13) is boss-prep content and must not appear in PvP run modes.
+        let exclude_counter_cache = matches!(ctx.accounts.game_state.run_mode, RunMode::Duel | RunMode::Gauntlet);
+
         // Copy POIs from generated map to MapPois
         let mut pois = Vec::with_capacity(poi_count);
         for i in 0..poi_count {
@@ -324,6 +327,9 @@ pub mod poi_system {
             }
 
             let poi_type = generated_map_data[poi_start];
+            if exclude_counter_cache && poi_type == 13 {
+                continue;
+            }
             let is_used = generated_map_data[poi_start + 1] != 0;
             let x = generated_map_data[poi_start + 2];
             let y = generated_map_data[poi_start + 3];
@@ -482,6 +488,7 @@ pub mod poi_system {
             gameplay_state::cpi::accounts::SkipToDay {
                 game_state: ctx.accounts.game_state.to_account_info(),
                 inventory: ctx.accounts.inventory.to_account_info(),
+                generated_map: ctx.accounts.generated_map.to_account_info(),
                 poi_authority: ctx.accounts.poi_authority.to_account_info(),
                 gameplay_authority: ctx.accounts.gameplay_authority.to_account_info(),
                 player_inventory_program: ctx.accounts.player_inventory_program.to_account_info(),
@@ -1487,6 +1494,11 @@ pub struct InitializeMapPois<'info> {
     )]
     pub generated_map: AccountInfo<'info>,
 
+    #[account(
+        constraint = game_state.session == session.key() @ PoiSystemError::InvalidSession
+    )]
+    pub game_state: Account<'info, GameState>,
+
     #[account(mut)]
     pub payer: Signer<'info>,
 
@@ -1577,6 +1589,15 @@ pub struct InteractRest<'info> {
         seeds::program = player_inventory::ID,
     )]
     pub inventory: Account<'info, player_inventory::state::PlayerInventory>,
+
+    /// Generated map account (provides seed for duel week 1/2 boss selection in skip_to_day).
+    #[account(
+        seeds = [b"generated_map", game_state.session.as_ref()],
+        bump,
+        seeds::program = MAP_GENERATOR_PROGRAM_ID,
+    )]
+    /// CHECK: PDA validated by seeds against map-generator program.
+    pub generated_map: AccountInfo<'info>,
 
     /// POI authority PDA for signing CPI calls
     /// CHECK: PDA derived from this program, used as signer in CPI

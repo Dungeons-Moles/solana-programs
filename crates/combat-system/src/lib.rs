@@ -41,15 +41,40 @@ pub fn resolve_combat(
     player_effects: Vec<ItemEffect>,
     enemy_effects: Vec<ItemEffect>,
 ) -> Result<CombatOutcome> {
-    resolve_combat_with_player_gold(player_stats, enemy_stats, player_effects, enemy_effects, 0)
+    resolve_combat_with_both_gold(
+        player_stats,
+        enemy_stats,
+        player_effects,
+        enemy_effects,
+        0,
+        0,
+    )
 }
 
 pub fn resolve_combat_with_player_gold(
     player_stats: CombatantInput,
     enemy_stats: CombatantInput,
+    player_effects: Vec<ItemEffect>,
+    enemy_effects: Vec<ItemEffect>,
+    player_start_gold: u16,
+) -> Result<CombatOutcome> {
+    resolve_combat_with_both_gold(
+        player_stats,
+        enemy_stats,
+        player_effects,
+        enemy_effects,
+        player_start_gold,
+        0,
+    )
+}
+
+pub fn resolve_combat_with_both_gold(
+    player_stats: CombatantInput,
+    enemy_stats: CombatantInput,
     mut player_effects: Vec<ItemEffect>,
     mut enemy_effects: Vec<ItemEffect>,
     player_start_gold: u16,
+    enemy_start_gold: u16,
 ) -> Result<CombatOutcome> {
     validate_combatant(&player_stats)?;
     validate_combatant(&enemy_stats)?;
@@ -105,6 +130,7 @@ pub fn resolve_combat_with_player_gold(
         },
         sudden_death_bonus: 0,
         player_gold: player_start_gold,
+        enemy_gold: enemy_start_gold,
         gold_change: 0,
     };
 
@@ -149,7 +175,7 @@ pub fn resolve_combat_with_player_gold(
             &mut enemy_triggered,
             &mut log,
         );
-        if turn % 2 == 0 {
+        if (turn & 1) == 0 {
             apply_status_effects(
                 &mut player_effects,
                 &mut enemy_effects,
@@ -316,6 +342,7 @@ fn execute_turn(
             turn,
             true, // is_player attacking
             &mut combat_state.player_gold,
+            &mut combat_state.enemy_gold,
             &mut combat_state.gold_change,
             log,
         );
@@ -336,6 +363,7 @@ fn execute_turn(
                 turn,
                 false, // enemy attacking
                 &mut combat_state.player_gold,
+                &mut combat_state.enemy_gold,
                 &mut combat_state.gold_change,
                 log,
             );
@@ -356,6 +384,7 @@ fn execute_turn(
             turn,
             false, // enemy attacking
             &mut combat_state.player_gold,
+            &mut combat_state.enemy_gold,
             &mut combat_state.gold_change,
             log,
         );
@@ -376,6 +405,7 @@ fn execute_turn(
                 turn,
                 true, // is_player attacking
                 &mut combat_state.player_gold,
+                &mut combat_state.enemy_gold,
                 &mut combat_state.gold_change,
                 log,
             );
@@ -449,6 +479,7 @@ fn check_first_time_wounded(
             true,
             player_acts_first,
             &mut combat_state.player_gold,
+            &mut combat_state.enemy_gold,
             &mut combat_state.gold_change,
             log,
         );
@@ -481,6 +512,7 @@ fn check_first_time_wounded(
             false,
             !player_acts_first,
             &mut combat_state.player_gold,
+            &mut combat_state.enemy_gold,
             &mut combat_state.gold_change,
             log,
         );
@@ -526,6 +558,7 @@ fn check_first_time_exposed(
             true,
             player_acts_first,
             &mut combat_state.player_gold,
+            &mut combat_state.enemy_gold,
             &mut combat_state.gold_change,
             log,
         );
@@ -563,6 +596,7 @@ fn check_first_time_exposed(
             false,
             !player_acts_first,
             &mut combat_state.player_gold,
+            &mut combat_state.enemy_gold,
             &mut combat_state.gold_change,
             log,
         );
@@ -669,6 +703,7 @@ fn apply_end_of_turn_effects(
                 false,
                 !player_acts_first,
                 &mut combat_state.player_gold,
+                &mut combat_state.enemy_gold,
                 &mut combat_state.gold_change,
                 log,
             );
@@ -707,6 +742,7 @@ fn apply_end_of_turn_effects(
                 true,
                 player_acts_first,
                 &mut combat_state.player_gold,
+                &mut combat_state.enemy_gold,
                 &mut combat_state.gold_change,
                 log,
             );
@@ -913,6 +949,7 @@ fn process_phase_effects(
         is_player,
         owner_acts_first,
         &mut combat_state.player_gold,
+        &mut combat_state.enemy_gold,
         &mut combat_state.gold_change,
         log,
     );
@@ -936,6 +973,7 @@ fn process_phase_effects(
             is_player,
             owner_acts_first,
             &mut combat_state.player_gold,
+            &mut combat_state.enemy_gold,
             &mut combat_state.gold_change,
             log,
         );
@@ -955,6 +993,7 @@ fn process_phase_effects(
             is_player,
             owner_acts_first,
             &mut combat_state.player_gold,
+            &mut combat_state.enemy_gold,
             &mut combat_state.gold_change,
             log,
         );
@@ -984,6 +1023,7 @@ fn process_phase_effects(
                 is_player,
                 owner_acts_first,
                 &mut combat_state.player_gold,
+                &mut combat_state.enemy_gold,
                 &mut combat_state.gold_change,
                 log,
             );

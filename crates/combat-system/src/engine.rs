@@ -92,6 +92,7 @@ pub fn execute_strikes(
     turn: u8,
     is_player_attacking: bool,
     player_gold: &mut u16,
+    enemy_gold: &mut u16,
     gold_change: &mut i16,
     log: &mut Vec<CombatLogEntry>,
 ) -> (i16, i16) {
@@ -148,6 +149,7 @@ pub fn execute_strikes(
                 is_player_attacking,
                 false, // acts_first: unused for OnHit triggers
                 player_gold,
+                enemy_gold,
                 gold_change,
                 log,
             );
@@ -166,6 +168,7 @@ pub fn execute_strikes(
                 is_player_attacking,
                 false, // acts_first: unused for this trigger
                 player_gold,
+                enemy_gold,
                 gold_change,
                 log,
             );
@@ -189,6 +192,7 @@ pub fn execute_strikes(
                     is_player_attacking,
                     false,
                     player_gold,
+                    enemy_gold,
                     gold_change,
                     log,
                 );
@@ -208,6 +212,7 @@ pub fn execute_strikes(
                     is_player_attacking,
                     false,
                     player_gold,
+                    enemy_gold,
                     gold_change,
                     log,
                 );
@@ -227,6 +232,7 @@ pub fn execute_strikes(
                 !is_player_attacking, // defender is player if attacker is not
                 false,                // acts_first: unused for OnStruck triggers
                 player_gold,
+                enemy_gold,
                 gold_change,
                 log,
             );
@@ -345,6 +351,7 @@ mod tests {
         let mut defender_effects: Vec<ItemEffect> = Vec::new();
         let mut defender_flags: Vec<bool> = Vec::new();
         let mut player_gold: u16 = 0;
+        let mut enemy_gold: u16 = 0;
         let mut gold_change: i16 = 0;
         let mut log: Vec<CombatLogEntry> = Vec::new();
 
@@ -364,6 +371,7 @@ mod tests {
             1,
             true,
             &mut player_gold,
+            &mut enemy_gold,
             &mut gold_change,
             &mut log,
         );
@@ -415,6 +423,7 @@ mod tests {
         let mut defender_effects_again: Vec<ItemEffect> = Vec::new();
         let mut defender_flags_again: Vec<bool> = Vec::new();
         let mut player_gold_again: u16 = 0;
+        let mut enemy_gold_again: u16 = 0;
         let mut gold_change_again: i16 = 0;
         let mut log_again: Vec<CombatLogEntry> = Vec::new();
 
@@ -431,6 +440,7 @@ mod tests {
             1,
             true,
             &mut player_gold_again,
+            &mut enemy_gold_again,
             &mut gold_change_again,
             &mut log_again,
         );
@@ -501,6 +511,7 @@ mod tests {
         let mut defender_effects: Vec<ItemEffect> = Vec::new();
         let mut defender_flags: Vec<bool> = Vec::new();
         let mut player_gold: u16 = 0;
+        let mut enemy_gold: u16 = 0;
         let mut gold_change: i16 = 0;
         let mut log: Vec<CombatLogEntry> = Vec::new();
 
@@ -517,6 +528,7 @@ mod tests {
             1,
             true,
             &mut player_gold,
+            &mut enemy_gold,
             &mut gold_change,
             &mut log,
         );

@@ -394,6 +394,7 @@ pub(crate) struct CombatState {
     pub enemy: Combatant,
     pub sudden_death_bonus: i16,
     pub player_gold: u16,
+    pub enemy_gold: u16,
     /// Net gold change during combat (positive = player gains, negative = player loses)
     pub gold_change: i16,
 }

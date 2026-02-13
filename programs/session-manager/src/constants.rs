@@ -11,6 +11,6 @@ pub const LEVELS_PER_ACT: u8 = 10;
 /// Level 20 gives a mid-road encounter profile.
 pub const DUEL_CAMPAIGN_LEVEL: u8 = 20;
 
-/// Gauntlet uses a separate fixed campaign level for session PDA isolation.
-/// Keep difficulty model aligned in gameplay systems; this constant is for session identity.
-pub const GAUNTLET_CAMPAIGN_LEVEL: u8 = 19;
+/// Fixed campaign level used for Gauntlet difficulty tuning.
+/// Gauntlet shares the same difficulty profile as Duels.
+pub const GAUNTLET_CAMPAIGN_LEVEL: u8 = 20;

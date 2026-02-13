@@ -255,16 +255,11 @@ pub mod session_manager {
     ///
     /// This path is intentionally decoupled from campaign unlock progression:
     /// - Uses a fixed campaign level (DUEL_CAMPAIGN_LEVEL) for balance.
-    /// - Derives duel seed on-chain by default.
-    /// - If `forced_seed != 0`, uses the provided seed (for async duel opponent matching).
+    /// - Derives duel seed on-chain.
     /// - Does not consume campaign runs.
-    pub fn start_duel_session(ctx: Context<StartDuelSession>, forced_seed: u64) -> Result<()> {
+    pub fn start_duel_session(ctx: Context<StartDuelSession>) -> Result<()> {
         let player_profile = &ctx.accounts.player_profile;
         let campaign_level = DUEL_CAMPAIGN_LEVEL;
-        require!(
-            forced_seed == 0,
-            SessionManagerError::ExternalDuelSeedNotAllowed
-        );
 
         let counter = &mut ctx.accounts.session_counter;
         let clock = Clock::get()?;
@@ -930,7 +925,7 @@ pub struct StartDuelSession<'info> {
         init,
         payer = player,
         space = 8 + GameSession::INIT_SPACE,
-        seeds = [GameSession::SEED_PREFIX, player.key().as_ref(), &[DUEL_CAMPAIGN_LEVEL]],
+        seeds = [GameSession::DUEL_SEED_PREFIX, player.key().as_ref()],
         bump
     )]
     pub game_session: Account<'info, GameSession>,
@@ -1000,7 +995,7 @@ pub struct StartGauntletSession<'info> {
         init,
         payer = player,
         space = 8 + GameSession::INIT_SPACE,
-        seeds = [GameSession::SEED_PREFIX, player.key().as_ref(), &[GAUNTLET_CAMPAIGN_LEVEL]],
+        seeds = [GameSession::GAUNTLET_SEED_PREFIX, player.key().as_ref()],
         bump
     )]
     pub game_session: Account<'info, GameSession>,
@@ -1069,8 +1064,6 @@ pub struct StartGauntletSession<'info> {
 pub struct DelegateSession<'info> {
     #[account(
         mut,
-        seeds = [GameSession::SEED_PREFIX, player.key().as_ref(), &[campaign_level]],
-        bump = game_session.bump,
         has_one = player @ SessionManagerError::Unauthorized
     )]
     pub game_session: Account<'info, GameSession>,
@@ -1083,8 +1076,6 @@ pub struct DelegateSession<'info> {
 pub struct CommitSession<'info> {
     #[account(
         mut,
-        seeds = [GameSession::SEED_PREFIX, player.key().as_ref(), &[campaign_level]],
-        bump = game_session.bump,
         has_one = player @ SessionManagerError::Unauthorized
     )]
     pub game_session: Account<'info, GameSession>,
@@ -1100,8 +1091,6 @@ pub struct CommitSession<'info> {
 pub struct EndSession<'info> {
     #[account(
         mut,
-        seeds = [GameSession::SEED_PREFIX, player.key().as_ref(), &[campaign_level]],
-        bump = game_session.bump,
         has_one = player @ SessionManagerError::Unauthorized,
         has_one = burner_wallet @ SessionManagerError::Unauthorized,
         close = player
@@ -1180,8 +1169,6 @@ pub struct EndSession<'info> {
 pub struct AbandonSession<'info> {
     #[account(
         mut,
-        seeds = [GameSession::SEED_PREFIX, player.key().as_ref(), &[campaign_level]],
-        bump = game_session.bump,
         has_one = player @ SessionManagerError::Unauthorized,
         has_one = burner_wallet @ SessionManagerError::Unauthorized,
         close = player

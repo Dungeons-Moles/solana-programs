@@ -51,7 +51,4 @@ pub enum SessionManagerError {
     #[msg("Session can only be ended after death or level completion")]
     SessionNotEndable,
 
-    /// External seed injection is not allowed for duel session start
-    #[msg("External duel seed is not allowed")]
-    ExternalDuelSeedNotAllowed,
 }

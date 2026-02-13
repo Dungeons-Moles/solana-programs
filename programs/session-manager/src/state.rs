@@ -7,8 +7,8 @@ pub const SESSION_ITEM_BITMASK_SIZE: usize = 10;
 pub const EMPTY_STATE_HASH: [u8; 32] = [0u8; 32];
 
 /// Represents an active game session for a player.
-/// PDA Seeds: [b"session", player.key(), &[campaign_level]]
-/// Changed from single session per player to one session per (player, level) pair.
+/// Campaign PDA seeds: [b"session", player.key(), &[campaign_level]]
+/// Duel/Gauntlet use dedicated prefixes to avoid collisions with campaign levels.
 #[account]
 pub struct GameSession {
     /// Player profile owner's wallet
@@ -38,6 +38,10 @@ pub struct GameSession {
 impl GameSession {
     /// PDA seed prefix for session accounts
     pub const SEED_PREFIX: &'static [u8] = b"session";
+    /// PDA seed prefix for duel sessions
+    pub const DUEL_SEED_PREFIX: &'static [u8] = b"duel_session";
+    /// PDA seed prefix for gauntlet sessions
+    pub const GAUNTLET_SEED_PREFIX: &'static [u8] = b"gauntlet_session";
 
     /// Account space calculation
     /// 8 (discriminator) + 32 (player) + 8 (session_id) + 1 (campaign_level) +

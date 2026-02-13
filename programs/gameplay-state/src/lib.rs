@@ -23,7 +23,7 @@ use constants::{
     GAME_STATE_SEED, GAUNTLET_BOOTSTRAP_ECHOES_PER_WEEK, GAUNTLET_COMPANY_FEE_BPS,
     GAUNTLET_CONFIG_SEED, GAUNTLET_ENTRY_LAMPORTS, GAUNTLET_EPOCH_DURATION_SECONDS,
     GAUNTLET_EPOCH_POOL_SEED, GAUNTLET_MAX_WEEKLY_ECHOES, GAUNTLET_PLAYER_SCORE_SEED,
-    GAUNTLET_POOL_FEE_BPS, GAUNTLET_POOL_VAULT_SEED, GAUNTLET_SINK_ADDRESS,
+    GAUNTLET_POOL_FEE_BPS, GAUNTLET_POOL_VAULT_SEED,
     GAUNTLET_WEEK_POOL_SEED, INITIAL_GEAR_SLOTS, MAX_GEAR_SLOTS, PIT_DRAFT_BPS_DENOMINATOR,
     PIT_DRAFT_COMPANY_FEE_BPS, PIT_DRAFT_ENTRY_LAMPORTS, PIT_DRAFT_GAUNTLET_FEE_BPS,
     PIT_DRAFT_QUEUE_SEED, PIT_DRAFT_VAULT_SEED, PIT_DRAFT_WINNER_BPS,
@@ -676,11 +676,6 @@ pub mod gameplay_state {
             COMPANY_TREASURY_ADDRESS,
             GameplayStateError::InvalidDuelFeeAccount,
         )?;
-        require_expected_address(
-            ctx.accounts.gauntlet_sink.key(),
-            GAUNTLET_SINK_ADDRESS,
-            GameplayStateError::InvalidDuelFeeAccount,
-        )?;
         require!(
             !ctx.accounts.game_state.is_dead && !ctx.accounts.game_state.completed,
             GameplayStateError::DuelRunNotFinished
@@ -754,11 +749,6 @@ pub mod gameplay_state {
         require_expected_address(
             ctx.accounts.company_treasury.key(),
             COMPANY_TREASURY_ADDRESS,
-            GameplayStateError::InvalidDuelFeeAccount,
-        )?;
-        require_expected_address(
-            ctx.accounts.gauntlet_sink.key(),
-            GAUNTLET_SINK_ADDRESS,
             GameplayStateError::InvalidDuelFeeAccount,
         )?;
         require!(
@@ -889,7 +879,7 @@ pub mod gameplay_state {
                 )?;
                 transfer_lamports_from_vault(
                     &ctx.accounts.duel_vault.to_account_info(),
-                    &ctx.accounts.gauntlet_sink.to_account_info(),
+                    &ctx.accounts.gauntlet_pool_vault.to_account_info(),
                     gauntlet_fee,
                 )?;
 
@@ -960,7 +950,7 @@ pub mod gameplay_state {
         )?;
         transfer_lamports_from_vault(
             &ctx.accounts.duel_vault.to_account_info(),
-            &ctx.accounts.gauntlet_sink.to_account_info(),
+            &ctx.accounts.gauntlet_pool_vault.to_account_info(),
             gauntlet_fee,
         )?;
 
@@ -986,16 +976,11 @@ pub mod gameplay_state {
     /// Behavior:
     /// - If queue is empty: player pays stake and becomes waiting player.
     /// - If queue has a waiting player: player pays stake, match resolves immediately,
-    ///   winner receives 95% of pot, company gets 3%, gauntlet sink gets 2%.
+    ///   winner receives 95% of pot, company gets 3%, gauntlet pool gets 2%.
     pub fn enter_pit_draft(ctx: Context<EnterPitDraft>) -> Result<()> {
         require_expected_address(
             ctx.accounts.company_treasury.key(),
             COMPANY_TREASURY_ADDRESS,
-            GameplayStateError::InvalidPitDraftFeeAccount,
-        )?;
-        require_expected_address(
-            ctx.accounts.gauntlet_sink.key(),
-            GAUNTLET_SINK_ADDRESS,
             GameplayStateError::InvalidPitDraftFeeAccount,
         )?;
 
@@ -1160,7 +1145,7 @@ pub mod gameplay_state {
         )?;
         transfer_lamports_from_vault(
             &ctx.accounts.pit_draft_vault.to_account_info(),
-            &ctx.accounts.gauntlet_sink.to_account_info(),
+            &ctx.accounts.gauntlet_pool_vault.to_account_info(),
             gauntlet_fee,
         )?;
 
@@ -3281,8 +3266,12 @@ pub struct EnterDuel<'info> {
     #[account(mut)]
     pub company_treasury: SystemAccount<'info>,
 
-    #[account(mut)]
-    pub gauntlet_sink: SystemAccount<'info>,
+    #[account(
+        mut,
+        seeds = [GAUNTLET_POOL_VAULT_SEED],
+        bump = gauntlet_pool_vault.bump
+    )]
+    pub gauntlet_pool_vault: Account<'info, GauntletPoolVault>,
 
     pub system_program: Program<'info, System>,
 }
@@ -3342,8 +3331,12 @@ pub struct FinalizeDuelRun<'info> {
     #[account(mut)]
     pub company_treasury: SystemAccount<'info>,
 
-    #[account(mut)]
-    pub gauntlet_sink: SystemAccount<'info>,
+    #[account(
+        mut,
+        seeds = [GAUNTLET_POOL_VAULT_SEED],
+        bump = gauntlet_pool_vault.bump
+    )]
+    pub gauntlet_pool_vault: Account<'info, GauntletPoolVault>,
 }
 
 #[derive(Accounts)]
@@ -3381,8 +3374,12 @@ pub struct EnterPitDraft<'info> {
     #[account(mut)]
     pub company_treasury: SystemAccount<'info>,
 
-    #[account(mut)]
-    pub gauntlet_sink: SystemAccount<'info>,
+    #[account(
+        mut,
+        seeds = [GAUNTLET_POOL_VAULT_SEED],
+        bump = gauntlet_pool_vault.bump,
+    )]
+    pub gauntlet_pool_vault: Account<'info, GauntletPoolVault>,
 
     pub system_program: Program<'info, System>,
 }

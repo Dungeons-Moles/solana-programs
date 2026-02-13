@@ -5,6 +5,13 @@ import { expect } from "chai";
 import { Keypair, LAMPORTS_PER_SOL, SystemProgram } from "@solana/web3.js";
 
 describe("player-profile", () => {
+  const TREASURY = new anchor.web3.PublicKey(
+    "5LvEA4tH5H5DtWCxa3FcauokxAycvafX9ruvcT2mEXt8",
+  );
+  const GAUNTLET_POOL = new anchor.web3.PublicKey(
+    "1nc1nerator11111111111111111111111111111111",
+  );
+
   // Configure the client to use the local cluster
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
@@ -373,6 +380,85 @@ describe("player-profile", () => {
       // availableRuns is NOT decremented by record_run_result anymore
       // It's decremented by consume_run at session start instead
       expect((profile as any).availableRuns).to.equal(20);
+    });
+  });
+
+  describe("Purchase Runs", () => {
+    it("rejects invalid gauntlet pool account", async () => {
+      const user = Keypair.generate();
+
+      const airdropSig = await provider.connection.requestAirdrop(
+        user.publicKey,
+        2 * LAMPORTS_PER_SOL,
+      );
+      await provider.connection.confirmTransaction(airdropSig);
+
+      const [profilePDA] = getProfilePDA(user.publicKey);
+      await program.methods
+        .initializeProfile("PurchaseRunsGuard")
+        .accounts({
+          playerProfile: profilePDA,
+          owner: user.publicKey,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .signers([user])
+        .rpc();
+
+      try {
+        await program.methods
+          .purchaseRuns()
+          .accounts({
+            playerProfile: profilePDA,
+            owner: user.publicKey,
+            treasury: TREASURY,
+            gauntletPool: user.publicKey,
+            systemProgram: SystemProgram.programId,
+          } as any)
+          .signers([user])
+          .rpc();
+        expect.fail("Expected invalid gauntlet pool account to be rejected");
+      } catch (error: any) {
+        expect(error.toString()).to.satisfy((msg: string) =>
+          msg.includes("InvalidGauntletPool") ||
+          msg.includes("ConstraintAddress"),
+        );
+      }
+    });
+
+    it("accepts canonical gauntlet pool account", async () => {
+      const user = Keypair.generate();
+
+      const airdropSig = await provider.connection.requestAirdrop(
+        user.publicKey,
+        2 * LAMPORTS_PER_SOL,
+      );
+      await provider.connection.confirmTransaction(airdropSig);
+
+      const [profilePDA] = getProfilePDA(user.publicKey);
+      await program.methods
+        .initializeProfile("PurchaseRunsCanonical")
+        .accounts({
+          playerProfile: profilePDA,
+          owner: user.publicKey,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .signers([user])
+        .rpc();
+
+      await program.methods
+        .purchaseRuns()
+        .accounts({
+          playerProfile: profilePDA,
+          owner: user.publicKey,
+          treasury: TREASURY,
+          gauntletPool: GAUNTLET_POOL,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .signers([user])
+        .rpc();
+
+      const profile = await program.account.playerProfile.fetch(profilePDA);
+      expect((profile as any).availableRuns).to.equal(40);
     });
   });
 });

@@ -420,7 +420,10 @@ pub struct PurchaseRuns<'info> {
     )]
     pub treasury: SystemAccount<'info>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        address = Pubkey::new_from_array(GAUNTLET_POOL_PUBKEY) @ PlayerProfileError::InvalidGauntletPool
+    )]
     pub gauntlet_pool: SystemAccount<'info>,
 
     pub system_program: Program<'info, System>,

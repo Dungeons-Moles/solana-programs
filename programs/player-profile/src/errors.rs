@@ -47,6 +47,10 @@ pub enum PlayerProfileError {
     #[msg("Invalid treasury account")]
     InvalidTreasury,
 
+    /// Gauntlet pool account does not match expected address
+    #[msg("Invalid gauntlet pool account")]
+    InvalidGauntletPool,
+
     /// Invalid session account for CPI authorization
     #[msg("Invalid session account")]
     InvalidSession,

@@ -63,6 +63,57 @@ pub fn select_boss(stage: u8, week: Week) -> &'static BossDefinition {
     get_boss_by_index(biome, week, boss_index).expect("Boss should exist for valid stage and week")
 }
 
+#[inline]
+fn splitmix64(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = x;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+#[inline]
+fn duel_week1_pool(index: u8) -> &'static BossDefinition {
+    match index {
+        0 => &BROODMOTHER_A,
+        1 => &OBSIDIAN_GOLEM_A,
+        2 => &GAS_ANOMALY_A,
+        3 => &MAD_MINER_A,
+        4 => &SHARD_COLOSSUS_A,
+        _ => unreachable!("duel week1 index must be in 0..=4"),
+    }
+}
+
+#[inline]
+fn duel_week2_pool(index: u8) -> &'static BossDefinition {
+    match index {
+        0 => &DRILL_SERGEANT_A,
+        1 => &CRYSTAL_MIMIC_A,
+        2 => &RUST_REGENT_A,
+        3 => &POWDER_KEG_BARON_A,
+        4 => &GREEDKEEPER_A,
+        _ => unreachable!("duel week2 index must be in 0..=4"),
+    }
+}
+
+/// Deterministically maps seed to one of the 25 week1×week2 duel boss combinations.
+/// Week1 index = combo / 5, Week2 index = combo % 5.
+pub fn select_duel_week12_indices(seed: u64) -> (u8, u8) {
+    let combo = (splitmix64(seed) % 25) as u8;
+    (combo / 5, combo % 5)
+}
+
+/// Returns duel week 1/2 boss by seed.
+/// Week 3 intentionally has no weekly boss (opponent fight).
+pub fn select_duel_week_boss(seed: u64, week: Week) -> Option<&'static BossDefinition> {
+    let (w1, w2) = select_duel_week12_indices(seed);
+    match week {
+        Week::One => Some(duel_week1_pool(w1)),
+        Week::Two => Some(duel_week2_pool(w2)),
+        Week::Three => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,5 +216,28 @@ mod tests {
         // Level 12, Week 3: Biome B, even = Final 2 (Rusted Chronomancer)
         let boss = select_boss(12, Week::Three);
         assert_eq!(boss.name, "The Rusted Chronomancer");
+    }
+
+    #[test]
+    fn test_duel_week12_indices_deterministic() {
+        let a = select_duel_week12_indices(42);
+        let b = select_duel_week12_indices(42);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_duel_week12_all_combinations_reachable() {
+        let mut seen = [false; 25];
+        for seed in 0..20_000u64 {
+            let (w1, w2) = select_duel_week12_indices(seed);
+            let idx = (w1 as usize) * 5 + (w2 as usize);
+            seen[idx] = true;
+        }
+        assert!(seen.iter().all(|v| *v));
+    }
+
+    #[test]
+    fn test_duel_week3_has_no_boss() {
+        assert!(select_duel_week_boss(123, Week::Three).is_none());
     }
 }

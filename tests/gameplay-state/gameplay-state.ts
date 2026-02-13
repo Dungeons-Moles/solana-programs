@@ -48,6 +48,13 @@ describe("gameplay-state", () => {
     );
   };
 
+  const getDuelSessionPDA = (player: anchor.web3.PublicKey) => {
+    return anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("duel_session"), player.toBuffer()],
+      sessionProgram.programId,
+    );
+  };
+
   const getMapEnemiesPDA = (sessionPda: anchor.web3.PublicKey) => {
     return anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("map_enemies"), sessionPda.toBuffer()],
@@ -76,6 +83,83 @@ describe("gameplay-state", () => {
     );
   };
 
+  const getPitDraftQueuePDA = () => {
+    return anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("pit_draft_queue")],
+      gameplayProgram.programId,
+    );
+  };
+
+  const getPitDraftVaultPDA = () => {
+    return anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("pit_draft_vault")],
+      gameplayProgram.programId,
+    );
+  };
+
+  const getDuelVaultPDA = () => {
+    return anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("duel_vault")],
+      gameplayProgram.programId,
+    );
+  };
+
+  const getDuelOpenQueuePDA = () => {
+    return anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("duel_open_queue")],
+      gameplayProgram.programId,
+    );
+  };
+
+  const getDuelEntryPDA = (sessionPda: anchor.web3.PublicKey) => {
+    return anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("duel_entry"), sessionPda.toBuffer()],
+      gameplayProgram.programId,
+    );
+  };
+
+  const getGauntletConfigPDA = () => {
+    return anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("gauntlet_config")],
+      gameplayProgram.programId,
+    );
+  };
+
+  const getGauntletPoolVaultPDA = () => {
+    return anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("gauntlet_pool_vault")],
+      gameplayProgram.programId,
+    );
+  };
+
+  const getGauntletWeekPoolPDA = (week: number) => {
+    return anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("gauntlet_week_pool"), Buffer.from([week])],
+      gameplayProgram.programId,
+    );
+  };
+
+  const getGauntletEpochPoolPDA = (epochId: anchor.BN) => {
+    const epochBytes = Buffer.alloc(8);
+    epochBytes.writeBigUInt64LE(BigInt(epochId.toString()));
+    return anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("gauntlet_epoch_pool"), epochBytes],
+      gameplayProgram.programId,
+    );
+  };
+
+  const getGauntletPlayerScorePDA = (
+    epochId: anchor.BN,
+    player: anchor.web3.PublicKey,
+  ) => {
+    const epochBytes = Buffer.alloc(8);
+    epochBytes.writeBigUInt64LE(BigInt(epochId.toString()));
+    return anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("gauntlet_player_score"), epochBytes, player.toBuffer()],
+      gameplayProgram.programId,
+    );
+  };
+
   // Helper to derive counter PDA
   const getCounterPDA = () => {
     return anchor.web3.PublicKey.findProgramAddressSync(
@@ -99,6 +183,13 @@ describe("gameplay-state", () => {
     );
   };
 
+  const getSessionManagerAuthorityPDA = () => {
+    return anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("session_manager_authority")],
+      sessionProgram.programId,
+    );
+  };
+
   // Helper to derive PlayerProfile PDA
   const getPlayerProfilePDA = (player: anchor.web3.PublicKey) => {
     return anchor.web3.PublicKey.findProgramAddressSync(
@@ -111,6 +202,31 @@ describe("gameplay-state", () => {
   const [counterPDA] = getCounterPDA();
   let mapConfigInitialized = false;
   const [mapConfigPDA] = getMapConfigPDA();
+  let pitDraftInitialized = false;
+  const [pitDraftQueuePDA] = getPitDraftQueuePDA();
+  const [pitDraftVaultPDA] = getPitDraftVaultPDA();
+  let duelsInitialized = false;
+  const [duelVaultPDA] = getDuelVaultPDA();
+  const [duelOpenQueuePDA] = getDuelOpenQueuePDA();
+  let gauntletInitialized = false;
+  const [gauntletConfigPDA] = getGauntletConfigPDA();
+  const [gauntletPoolVaultPDA] = getGauntletPoolVaultPDA();
+  const [gauntletWeek1PDA] = getGauntletWeekPoolPDA(1);
+  const [gauntletWeek2PDA] = getGauntletWeekPoolPDA(2);
+  const [gauntletWeek3PDA] = getGauntletWeekPoolPDA(3);
+  const [gauntletWeek4PDA] = getGauntletWeekPoolPDA(4);
+  const [gauntletWeek5PDA] = getGauntletWeekPoolPDA(5);
+  const PIT_DRAFT_ENTRY_LAMPORTS = 100_000_000;
+  const PIT_DRAFT_TOTAL_POT = PIT_DRAFT_ENTRY_LAMPORTS * 2;
+  const PIT_DRAFT_WINNER_PAYOUT = (PIT_DRAFT_TOTAL_POT * 95) / 100;
+  const PIT_DRAFT_COMPANY_FEE = (PIT_DRAFT_TOTAL_POT * 3) / 100;
+  const PIT_DRAFT_GAUNTLET_FEE = (PIT_DRAFT_TOTAL_POT * 2) / 100;
+  const DUEL_ENTRY_LAMPORTS = 100_000_000;
+  const companyTreasury = new anchor.web3.PublicKey(
+    "5LvEA4tH5H5DtWCxa3FcauokxAycvafX9ruvcT2mEXt8",
+  );
+  const gauntletPoolVault = gauntletPoolVaultPDA;
+  let treasuryFunded = false;
 
   const ensureCounterExists = async () => {
     if (counterInitialized) return;
@@ -150,6 +266,84 @@ describe("gameplay-state", () => {
       }
     }
     mapConfigInitialized = true;
+  };
+
+  const ensurePitDraftExists = async () => {
+    if (pitDraftInitialized) return;
+    await ensureGauntletExists();
+    await ensureTreasuryAccountsFunded();
+    const admin = provider.wallet;
+    try {
+      await (gameplayProgram.methods as any)
+        .initializePitDraft()
+        .accounts({
+          pitDraftQueue: pitDraftQueuePDA,
+          pitDraftVault: pitDraftVaultPDA,
+          admin: admin.publicKey,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .rpc();
+    } catch (error: any) {
+      if (!error.toString().includes("already in use")) {
+        throw error;
+      }
+    }
+    pitDraftInitialized = true;
+  };
+
+  const ensureDuelsExists = async () => {
+    if (duelsInitialized) return;
+    await ensureGauntletExists();
+    await ensureTreasuryAccountsFunded();
+    const admin = provider.wallet;
+    try {
+      await (gameplayProgram.methods as any)
+        .initializeDuels()
+        .accounts({
+          duelVault: duelVaultPDA,
+          duelOpenQueue: duelOpenQueuePDA,
+          admin: admin.publicKey,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .rpc();
+    } catch (error: any) {
+      if (!error.toString().includes("already in use")) {
+        throw error;
+      }
+    }
+    duelsInitialized = true;
+  };
+
+  const ensureGauntletExists = async () => {
+    if (gauntletInitialized) return;
+    await ensureTreasuryAccountsFunded();
+    const admin = provider.wallet;
+    try {
+      await (gameplayProgram.methods as any)
+        .initializeGauntlet()
+        .accounts({
+          gauntletConfig: gauntletConfigPDA,
+          gauntletPoolVault: gauntletPoolVaultPDA,
+          gauntletWeek1: gauntletWeek1PDA,
+          gauntletWeek2: gauntletWeek2PDA,
+          gauntletWeek3: gauntletWeek3PDA,
+          gauntletWeek4: gauntletWeek4PDA,
+          gauntletWeek5: gauntletWeek5PDA,
+          admin: admin.publicKey,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .preInstructions([
+          anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+            units: 1_400_000,
+          }),
+        ])
+        .rpc();
+    } catch (error: any) {
+      if (!error.toString().includes("already in use")) {
+        throw error;
+      }
+    }
+    gauntletInitialized = true;
   };
 
   // Helper to setup a user with session and game state
@@ -264,6 +458,7 @@ describe("gameplay-state", () => {
       burnerWallet,
       sessionPDA,
       gameStatePDA,
+      inventoryPDA,
       playerProfilePDA,
       mapWidth: gameState.mapWidth,
       mapHeight: gameState.mapHeight,
@@ -271,6 +466,145 @@ describe("gameplay-state", () => {
       startY: gameState.positionY,
       campaignLevel,
     };
+  };
+
+  const setupUserWithDuelGameState = async () => {
+    await ensureCounterExists();
+    await ensureMapConfigExists();
+
+    const user = Keypair.generate();
+    const burnerWallet = Keypair.generate();
+    const duelCampaignLevel = 20;
+
+    const userAirdropSig = await provider.connection.requestAirdrop(
+      user.publicKey,
+      5 * LAMPORTS_PER_SOL,
+    );
+    await provider.connection.confirmTransaction(userAirdropSig);
+
+    const burnerAirdropSig = await provider.connection.requestAirdrop(
+      burnerWallet.publicKey,
+      5 * LAMPORTS_PER_SOL,
+    );
+    await provider.connection.confirmTransaction(burnerAirdropSig);
+
+    const [playerProfilePDA] = getPlayerProfilePDA(user.publicKey);
+    const [sessionPDA] = getDuelSessionPDA(user.publicKey);
+    const [gameStatePDA] = getGameStatePDA(sessionPDA);
+    const [mapEnemiesPDA] = getMapEnemiesPDA(sessionPDA);
+    const [mapPoisPDA] = getMapPoisPDA(sessionPDA);
+    const [inventoryPDA] = getInventoryPDA(sessionPDA);
+    const [generatedMapPDA] = getGeneratedMapPDA(sessionPDA);
+    const [sessionManagerAuthorityPDA] = getSessionManagerAuthorityPDA();
+
+    await playerProfileProgram.methods
+      .initializeProfile("TestDuelPlayer")
+      .accounts({
+        playerProfile: playerProfilePDA,
+        owner: user.publicKey,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .signers([user])
+      .rpc();
+
+    await (sessionProgram.methods as any)
+      .startDuelSession()
+      .accounts({
+        gameSession: sessionPDA,
+        sessionCounter: counterPDA,
+        playerProfile: playerProfilePDA,
+        mapConfig: mapConfigPDA,
+        generatedMap: generatedMapPDA,
+        mapGeneratorProgram: mapGeneratorProgram.programId,
+        player: user.publicKey,
+        burnerWallet: burnerWallet.publicKey,
+        sessionManagerAuthority: sessionManagerAuthorityPDA,
+        gameState: gameStatePDA,
+        mapEnemies: mapEnemiesPDA,
+        mapPois: mapPoisPDA,
+        inventory: inventoryPDA,
+        gameplayStateProgram: gameplayProgram.programId,
+        poiSystemProgram: poiSystemProgram.programId,
+        playerInventoryProgram: playerInventoryProgram.programId,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .preInstructions([
+        anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+          units: 1_400_000,
+        }),
+        anchor.web3.ComputeBudgetProgram.requestHeapFrame({
+          bytes: 256 * 1024,
+        }),
+      ])
+      .signers([user, burnerWallet])
+      .rpc();
+
+    const gameState = await gameplayProgram.account.gameState.fetch(gameStatePDA);
+    return {
+      user,
+      burnerWallet,
+      sessionPDA,
+      gameStatePDA,
+      inventoryPDA,
+      playerProfilePDA,
+      mapWidth: gameState.mapWidth,
+      mapHeight: gameState.mapHeight,
+      startX: gameState.positionX,
+      startY: gameState.positionY,
+      campaignLevel: duelCampaignLevel,
+    };
+  };
+
+  const ensureTreasuryAccountsFunded = async () => {
+    if (treasuryFunded) return;
+    for (const recipient of [companyTreasury]) {
+      const balance = await provider.connection.getBalance(recipient);
+      if (balance < 1_000_000) {
+        const sig = await provider.connection.requestAirdrop(
+          recipient,
+          LAMPORTS_PER_SOL,
+        );
+        await provider.connection.confirmTransaction(sig);
+      }
+    }
+    treasuryFunded = true;
+  };
+
+  const clearPitDraftQueueIfNeeded = async () => {
+    const queue = await (gameplayProgram.account as any).pitDraftQueue.fetch(
+      pitDraftQueuePDA,
+    );
+    if (!queue.waitingPlayer) return;
+
+    const janitor = await setupUserWithGameState();
+    await (gameplayProgram.methods as any)
+      .enterPitDraft()
+      .accounts({
+        pitDraftQueue: pitDraftQueuePDA,
+        pitDraftVault: pitDraftVaultPDA,
+        player: janitor.user.publicKey,
+        playerProfile: janitor.playerProfilePDA,
+        waitingProfile: queue.waitingProfile,
+        waitingPlayerWallet: queue.waitingPlayer,
+        companyTreasury,
+        gauntletPoolVault,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .preInstructions([
+        anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+          units: 400000,
+        }),
+      ])
+      .signers([janitor.user])
+      .rpc();
+
+    await cleanup(
+      janitor.user,
+      janitor.burnerWallet,
+      janitor.sessionPDA,
+      janitor.gameStatePDA,
+      janitor.campaignLevel,
+    );
   };
 
   // Cleanup helper - abandonSession now closes all sub-accounts via CPI
@@ -343,6 +677,47 @@ describe("gameplay-state", () => {
       .signers([burnerWallet])
       .rpc();
     return { x: targetX, y: targetY };
+  };
+
+  const prepareGauntletWeekResolution = async (
+    burnerWallet: Keypair,
+    gameStatePDA: anchor.web3.PublicKey,
+    startX: number,
+    startY: number,
+    mapWidth: number,
+    mapHeight: number,
+  ): Promise<boolean> => {
+    try {
+      await gameplayProgram.methods
+        .setPhaseForTesting({ night3: {} }, 1)
+        .accounts({
+          gameState: gameStatePDA,
+          burnerWallet: burnerWallet.publicKey,
+        } as any)
+        .signers([burnerWallet])
+        .rpc();
+    } catch (error: any) {
+      if (error.toString().includes("TestOnlyInstructionDisabled")) {
+        return false;
+      }
+      throw error;
+    }
+
+    const target = await getAdjacentTargetByTile(
+      gameStatePDA,
+      startX,
+      startY,
+      mapWidth,
+      mapHeight,
+      false,
+    );
+    await movePlayer(burnerWallet, gameStatePDA, target.x, target.y);
+
+    const gs = await gameplayProgram.account.gameState.fetch(gameStatePDA);
+    expect(gs.bossFightReady).to.equal(true);
+    expect(gs.movesRemaining).to.equal(0);
+    expect(gs.phase).to.deep.equal({ night3: {} });
+    return true;
   };
 
   const isWalkableTile = (map: any, x: number, y: number) => {
@@ -1067,6 +1442,494 @@ describe("gameplay-state", () => {
           sessionPDA,
           gameStatePDA,
           campaignLevel,
+        );
+      });
+    });
+
+    describe("pit draft", () => {
+      it("does not reset waiting queue on repeated initialize", async () => {
+        await ensurePitDraftExists();
+        const player = await setupUserWithGameState();
+
+        await (gameplayProgram.methods as any)
+          .enterPitDraft()
+          .accounts({
+            pitDraftQueue: pitDraftQueuePDA,
+            pitDraftVault: pitDraftVaultPDA,
+            player: player.user.publicKey,
+            playerProfile: player.playerProfilePDA,
+            waitingProfile: null,
+            waitingPlayerWallet: null,
+            companyTreasury,
+            gauntletPoolVault,
+            systemProgram: SystemProgram.programId,
+          } as any)
+          .signers([player.user])
+          .rpc();
+
+        const queueBefore = await (gameplayProgram.account as any).pitDraftQueue.fetch(
+          pitDraftQueuePDA,
+        );
+        expect(queueBefore.waitingPlayer.toString()).to.equal(
+          player.user.publicKey.toString(),
+        );
+
+        await (gameplayProgram.methods as any)
+          .initializePitDraft()
+          .accounts({
+            pitDraftQueue: pitDraftQueuePDA,
+            pitDraftVault: pitDraftVaultPDA,
+            admin: provider.wallet.publicKey,
+            systemProgram: SystemProgram.programId,
+          } as any)
+          .rpc();
+
+        const queueAfter = await (gameplayProgram.account as any).pitDraftQueue.fetch(
+          pitDraftQueuePDA,
+        );
+        expect(queueAfter.waitingPlayer.toString()).to.equal(
+          player.user.publicKey.toString(),
+        );
+
+        await cleanup(
+          player.user,
+          player.burnerWallet,
+          player.sessionPDA,
+          player.gameStatePDA,
+          player.campaignLevel,
+        );
+      });
+
+      it("queues first entrant and resolves on second entrant with fee split", async () => {
+        await ensurePitDraftExists();
+        await clearPitDraftQueueIfNeeded();
+
+        const playerOne = await setupUserWithGameState();
+        const playerTwo = await setupUserWithGameState();
+
+        const vaultBalanceBefore = await provider.connection.getBalance(
+          pitDraftVaultPDA,
+        );
+        const companyBefore = await provider.connection.getBalance(
+          companyTreasury,
+        );
+        const gauntletBefore = await provider.connection.getBalance(
+          gauntletPoolVault,
+        );
+
+        await (gameplayProgram.methods as any)
+          .enterPitDraft()
+          .accounts({
+            pitDraftQueue: pitDraftQueuePDA,
+            pitDraftVault: pitDraftVaultPDA,
+            player: playerOne.user.publicKey,
+            playerProfile: playerOne.playerProfilePDA,
+            waitingProfile: null,
+            waitingPlayerWallet: null,
+            companyTreasury,
+            gauntletPoolVault,
+            systemProgram: SystemProgram.programId,
+          } as any)
+          .preInstructions([
+            anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+              units: 400000,
+            }),
+          ])
+          .signers([playerOne.user])
+          .rpc();
+
+        const queueAfterFirst = await (gameplayProgram.account as any).pitDraftQueue.fetch(
+          pitDraftQueuePDA,
+        );
+        expect(queueAfterFirst.waitingPlayer.toString()).to.equal(
+          playerOne.user.publicKey.toString(),
+        );
+
+        const vaultAfterFirst = await provider.connection.getBalance(
+          pitDraftVaultPDA,
+        );
+        expect(vaultAfterFirst - vaultBalanceBefore).to.equal(
+          PIT_DRAFT_ENTRY_LAMPORTS,
+        );
+
+        await (gameplayProgram.methods as any)
+          .enterPitDraft()
+          .accounts({
+            pitDraftQueue: pitDraftQueuePDA,
+            pitDraftVault: pitDraftVaultPDA,
+            player: playerTwo.user.publicKey,
+            playerProfile: playerTwo.playerProfilePDA,
+            waitingProfile: playerOne.playerProfilePDA,
+            waitingPlayerWallet: playerOne.user.publicKey,
+            companyTreasury,
+            gauntletPoolVault,
+            systemProgram: SystemProgram.programId,
+          } as any)
+          .preInstructions([
+            anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+              units: 400000,
+            }),
+          ])
+          .signers([playerTwo.user])
+          .rpc();
+
+        const queueAfterSecond = await (gameplayProgram.account as any).pitDraftQueue.fetch(
+          pitDraftQueuePDA,
+        );
+        expect(queueAfterSecond.waitingPlayer).to.equal(null);
+
+        const vaultAfterSecond = await provider.connection.getBalance(
+          pitDraftVaultPDA,
+        );
+        const companyAfter = await provider.connection.getBalance(companyTreasury);
+        const gauntletAfter = await provider.connection.getBalance(gauntletPoolVault);
+
+        expect(vaultAfterSecond).to.equal(vaultBalanceBefore);
+        expect(companyAfter - companyBefore).to.equal(PIT_DRAFT_COMPANY_FEE);
+        expect(gauntletAfter - gauntletBefore).to.equal(PIT_DRAFT_GAUNTLET_FEE);
+
+        await cleanup(
+          playerOne.user,
+          playerOne.burnerWallet,
+          playerOne.sessionPDA,
+          playerOne.gameStatePDA,
+          playerOne.campaignLevel,
+        );
+        await cleanup(
+          playerTwo.user,
+          playerTwo.burnerWallet,
+          playerTwo.sessionPDA,
+          playerTwo.gameStatePDA,
+          playerTwo.campaignLevel,
+        );
+      });
+    });
+
+    describe("duels", () => {
+      it("rejects enter_duel when session is not duel mode", async () => {
+        await ensureDuelsExists();
+        const player = await setupUserWithGameState();
+        const [generatedMapPDA] = getGeneratedMapPDA(player.sessionPDA);
+        const generatedMap =
+          await mapGeneratorProgram.account.generatedMap.fetch(generatedMapPDA);
+        const seed = generatedMap.seed as anchor.BN;
+        const [duelEntryPDA] = getDuelEntryPDA(player.sessionPDA);
+
+        try {
+          await (gameplayProgram.methods as any)
+            .enterDuel(seed)
+            .accounts({
+              duelEntry: duelEntryPDA,
+              duelOpenQueue: duelOpenQueuePDA,
+              duelVault: duelVaultPDA,
+              player: player.user.publicKey,
+              gameState: player.gameStatePDA,
+              generatedMap: generatedMapPDA,
+              companyTreasury,
+              gauntletPoolVault,
+              systemProgram: SystemProgram.programId,
+            } as any)
+            .signers([player.user])
+            .rpc();
+          expect.fail("Expected enter_duel to reject non-duel run mode");
+        } catch (error: any) {
+          expect(error.toString()).to.include("DuelInvalidRunMode");
+        }
+
+        await cleanup(
+          player.user,
+          player.burnerWallet,
+          player.sessionPDA,
+          player.gameStatePDA,
+          player.campaignLevel,
+        );
+      });
+
+      it("creates per-session duel entries and keeps open queue empty before finalize", async () => {
+        await ensureDuelsExists();
+
+        const playerOne = await setupUserWithDuelGameState();
+        const playerTwo = await setupUserWithDuelGameState();
+        const [generatedMapPDA] = getGeneratedMapPDA(playerOne.sessionPDA);
+        const generatedMapOne =
+          await mapGeneratorProgram.account.generatedMap.fetch(generatedMapPDA);
+        const seedOne = generatedMapOne.seed as anchor.BN;
+        const [duelEntryOnePDA] = getDuelEntryPDA(playerOne.sessionPDA);
+
+        const [generatedMapTwoPDA] = getGeneratedMapPDA(playerTwo.sessionPDA);
+        const generatedMapTwo =
+          await mapGeneratorProgram.account.generatedMap.fetch(generatedMapTwoPDA);
+        const seedTwo = generatedMapTwo.seed as anchor.BN;
+        const [duelEntryTwoPDA] = getDuelEntryPDA(playerTwo.sessionPDA);
+
+        const vaultBefore = await provider.connection.getBalance(duelVaultPDA);
+
+        await (gameplayProgram.methods as any)
+          .enterDuel(seedOne)
+          .accounts({
+            duelEntry: duelEntryOnePDA,
+            duelOpenQueue: duelOpenQueuePDA,
+            duelVault: duelVaultPDA,
+            player: playerOne.user.publicKey,
+            gameState: playerOne.gameStatePDA,
+            generatedMap: generatedMapPDA,
+            companyTreasury,
+            gauntletPoolVault,
+            systemProgram: SystemProgram.programId,
+          } as any)
+          .signers([playerOne.user])
+          .rpc();
+
+        await (gameplayProgram.methods as any)
+          .enterDuel(seedTwo)
+          .accounts({
+            duelEntry: duelEntryTwoPDA,
+            duelOpenQueue: duelOpenQueuePDA,
+            duelVault: duelVaultPDA,
+            player: playerTwo.user.publicKey,
+            gameState: playerTwo.gameStatePDA,
+            generatedMap: generatedMapTwoPDA,
+            companyTreasury,
+            gauntletPoolVault,
+            systemProgram: SystemProgram.programId,
+          } as any)
+          .signers([playerTwo.user])
+          .rpc();
+
+        const duelEntryOne = await (gameplayProgram.account as any).duelEntry.fetch(
+          duelEntryOnePDA,
+        );
+        const duelEntryTwo = await (gameplayProgram.account as any).duelEntry.fetch(
+          duelEntryTwoPDA,
+        );
+        const duelOpenQueue = await (gameplayProgram.account as any).duelOpenQueue.fetch(
+          duelOpenQueuePDA,
+        );
+        const vaultAfter = await provider.connection.getBalance(duelVaultPDA);
+
+        expect(duelEntryOne.player.toString()).to.equal(
+          playerOne.user.publicKey.toString(),
+        );
+        expect(duelEntryOne.seed.toString()).to.equal(seedOne.toString());
+        expect(Number(duelEntryOne.entryLamports)).to.equal(DUEL_ENTRY_LAMPORTS);
+        expect(duelEntryOne.matchedCreator).to.equal(null);
+
+        expect(duelEntryTwo.player.toString()).to.equal(
+          playerTwo.user.publicKey.toString(),
+        );
+        expect(duelEntryTwo.seed.toString()).to.equal(seedTwo.toString());
+        expect(Number(duelEntryTwo.entryLamports)).to.equal(DUEL_ENTRY_LAMPORTS);
+        expect(duelEntryTwo.matchedCreator).to.equal(null);
+
+        expect(duelOpenQueue.entries.length).to.equal(0);
+        expect(vaultAfter - vaultBefore).to.equal(DUEL_ENTRY_LAMPORTS * 2);
+
+        await cleanup(
+          playerOne.user,
+          playerOne.burnerWallet,
+          playerOne.sessionPDA,
+          playerOne.gameStatePDA,
+          playerOne.campaignLevel,
+        );
+        await cleanup(
+          playerTwo.user,
+          playerTwo.burnerWallet,
+          playerTwo.sessionPDA,
+          playerTwo.gameStatePDA,
+          playerTwo.campaignLevel,
+        );
+      });
+    });
+
+    describe("gauntlet", () => {
+      it("enforces canonical epoch pool account in finalize_gauntlet_epoch", async () => {
+        await ensureGauntletExists();
+        const player = await setupUserWithGameState();
+        const [epoch0PoolPDA] = getGauntletEpochPoolPDA(new anchor.BN(0));
+        const [playerScorePDA] = getGauntletPlayerScorePDA(
+          new anchor.BN(0),
+          player.user.publicKey,
+        );
+        const [gameplayAuthorityPDA] = getGameplayAuthorityPDA();
+
+        await (gameplayProgram.methods as any)
+          .enterGauntlet()
+          .accounts({
+            gameState: player.gameStatePDA,
+            player: player.user.publicKey,
+            gauntletConfig: gauntletConfigPDA,
+            gauntletPoolVault: gauntletPoolVaultPDA,
+            companyTreasury,
+            systemProgram: SystemProgram.programId,
+          } as any)
+          .signers([player.user])
+          .rpc();
+
+        const ready = await prepareGauntletWeekResolution(
+          player.burnerWallet,
+          player.gameStatePDA,
+          player.startX,
+          player.startY,
+          player.mapWidth,
+          player.mapHeight,
+        );
+        if (!ready) {
+          await cleanup(
+            player.user,
+            player.burnerWallet,
+            player.sessionPDA,
+            player.gameStatePDA,
+            player.campaignLevel,
+          );
+          return;
+        }
+
+        await (gameplayProgram.methods as any)
+          .resolveGauntletWeek(new anchor.BN(0))
+          .accounts({
+            gameState: player.gameStatePDA,
+            player: player.user.publicKey,
+            inventory: player.inventoryPDA,
+            gameplayAuthority: gameplayAuthorityPDA,
+            playerInventoryProgram: playerInventoryProgram.programId,
+            gauntletConfig: gauntletConfigPDA,
+            gauntletEpochPool: epoch0PoolPDA,
+            gauntletPlayerScore: playerScorePDA,
+            gauntletWeek1: gauntletWeek1PDA,
+            gauntletWeek2: gauntletWeek2PDA,
+            gauntletWeek3: gauntletWeek3PDA,
+            gauntletWeek4: gauntletWeek4PDA,
+            gauntletWeek5: gauntletWeek5PDA,
+            systemProgram: SystemProgram.programId,
+          } as any)
+          .preInstructions([
+            anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+              units: 1_400_000,
+            }),
+          ])
+          .signers([player.user])
+          .rpc();
+
+        try {
+          await (gameplayProgram.methods as any)
+            .finalizeGauntletEpoch(new anchor.BN(1))
+            .accounts({
+              gauntletConfig: gauntletConfigPDA,
+              gauntletPoolVault: gauntletPoolVaultPDA,
+              gauntletEpochPool: epoch0PoolPDA,
+            } as any)
+            .rpc();
+          expect.fail("Expected finalize_gauntlet_epoch to enforce epoch PDA");
+        } catch (error: any) {
+          expect(error.toString()).to.satisfy((msg: string) =>
+            msg.includes("ConstraintSeeds") ||
+            msg.includes("GauntletScoreMismatch"),
+          );
+        }
+
+        await cleanup(
+          player.user,
+          player.burnerWallet,
+          player.sessionPDA,
+          player.gameStatePDA,
+          player.campaignLevel,
+        );
+      });
+
+      it("enters gauntlet and resolves week 1 without defender score account", async () => {
+        await ensureGauntletExists();
+
+        const player = await setupUserWithGameState();
+        const [epochPoolPDA] = getGauntletEpochPoolPDA(new anchor.BN(0));
+        const [playerScorePDA] = getGauntletPlayerScorePDA(
+          new anchor.BN(0),
+          player.user.publicKey,
+        );
+        const [gameplayAuthorityPDA] = getGameplayAuthorityPDA();
+
+        const companyBefore = await provider.connection.getBalance(
+          companyTreasury,
+        );
+        const vaultBefore = await provider.connection.getBalance(
+          gauntletPoolVaultPDA,
+        );
+
+        await (gameplayProgram.methods as any)
+          .enterGauntlet()
+          .accounts({
+            gameState: player.gameStatePDA,
+            player: player.user.publicKey,
+            gauntletConfig: gauntletConfigPDA,
+            gauntletPoolVault: gauntletPoolVaultPDA,
+            companyTreasury,
+            systemProgram: SystemProgram.programId,
+          } as any)
+          .signers([player.user])
+          .rpc();
+
+        const ready = await prepareGauntletWeekResolution(
+          player.burnerWallet,
+          player.gameStatePDA,
+          player.startX,
+          player.startY,
+          player.mapWidth,
+          player.mapHeight,
+        );
+        if (!ready) {
+          await cleanup(
+            player.user,
+            player.burnerWallet,
+            player.sessionPDA,
+            player.gameStatePDA,
+            player.campaignLevel,
+          );
+          return;
+        }
+
+        const companyAfter = await provider.connection.getBalance(companyTreasury);
+        const vaultAfter = await provider.connection.getBalance(gauntletPoolVaultPDA);
+
+        // 0.01 SOL entry -> 3% company, 97% pool
+        expect(companyAfter - companyBefore).to.equal(300000);
+        expect(vaultAfter - vaultBefore).to.equal(9700000);
+
+        await (gameplayProgram.methods as any)
+          .resolveGauntletWeek(new anchor.BN(0))
+          .accounts({
+            gameState: player.gameStatePDA,
+            player: player.user.publicKey,
+            inventory: player.inventoryPDA,
+            gameplayAuthority: gameplayAuthorityPDA,
+            playerInventoryProgram: playerInventoryProgram.programId,
+            gauntletConfig: gauntletConfigPDA,
+            gauntletEpochPool: epochPoolPDA,
+            gauntletPlayerScore: playerScorePDA,
+            gauntletWeek1: gauntletWeek1PDA,
+            gauntletWeek2: gauntletWeek2PDA,
+            gauntletWeek3: gauntletWeek3PDA,
+            gauntletWeek4: gauntletWeek4PDA,
+            gauntletWeek5: gauntletWeek5PDA,
+            systemProgram: SystemProgram.programId,
+          } as any)
+          .preInstructions([
+            anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+              units: 1_400_000,
+            }),
+          ])
+          .signers([player.user])
+          .rpc();
+
+        const gs = await gameplayProgram.account.gameState.fetch(
+          player.gameStatePDA,
+        );
+        expect(gs.runMode).to.exist;
+
+        await cleanup(
+          player.user,
+          player.burnerWallet,
+          player.sessionPDA,
+          player.gameStatePDA,
+          player.campaignLevel,
         );
       });
     });

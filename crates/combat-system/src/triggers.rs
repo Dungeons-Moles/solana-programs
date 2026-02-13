@@ -138,11 +138,13 @@ fn status_stacks(status: &StatusEffects, status_type: StatusType) -> u8 {
 }
 
 #[inline]
-fn increase_player_gold(player_gold: &mut u16, gold_change: &mut i16, value: i16) {
+fn increase_gold(player_gold: &mut u16, gold_change: Option<&mut i16>, value: i16) {
     let gain_u16 = u16::try_from(value).unwrap_or(u16::MAX);
     *player_gold = player_gold.saturating_add(gain_u16);
-    let gain_i16 = i16::try_from(gain_u16).unwrap_or(i16::MAX);
-    *gold_change = gold_change.saturating_add(gain_i16);
+    if let Some(gold_change_ref) = gold_change {
+        let gain_i16 = i16::try_from(gain_u16).unwrap_or(i16::MAX);
+        *gold_change_ref = gold_change_ref.saturating_add(gain_i16);
+    }
 }
 
 #[inline]
@@ -168,7 +170,8 @@ fn apply_status_effect(
 
 /// Applies an effect and logs it.
 /// `is_target_player` indicates whether the effect target is the player (for logging purposes).
-/// `gold_change` tracks net gold changes during combat (positive = player gains).
+/// `gold_change` tracks net gold changes during combat for the first combatant
+/// (positive = first combatant gains).
 #[allow(clippy::too_many_arguments)]
 pub fn apply_effect(
     phase: TriggerType,
@@ -179,6 +182,7 @@ pub fn apply_effect(
     turn: u8,
     is_target_player: bool,
     player_gold: &mut u16,
+    enemy_gold: &mut u16,
     gold_change: &mut i16,
     log: &mut Vec<CombatLogEntry>,
 ) {
@@ -303,11 +307,21 @@ pub fn apply_effect(
         }
         EffectType::StealGold => {
             if is_target_player {
-                *gold_change = gold_change.saturating_sub(value);
-                log.push(CombatLogEntry::gold_stolen(turn, false, -value));
+                let stolen = value.min(i16::try_from(*player_gold).unwrap_or(i16::MAX));
+                if stolen > 0 {
+                    *player_gold = player_gold.saturating_sub(stolen as u16);
+                    *enemy_gold = enemy_gold.saturating_add(stolen as u16);
+                    *gold_change = gold_change.saturating_sub(stolen);
+                    log.push(CombatLogEntry::gold_stolen(turn, false, -stolen));
+                }
             } else {
-                *gold_change = gold_change.saturating_add(value);
-                log.push(CombatLogEntry::gold_stolen(turn, true, value));
+                let stolen = value.min(i16::try_from(*enemy_gold).unwrap_or(i16::MAX));
+                if stolen > 0 {
+                    *enemy_gold = enemy_gold.saturating_sub(stolen as u16);
+                    *player_gold = player_gold.saturating_add(stolen as u16);
+                    *gold_change = gold_change.saturating_add(stolen);
+                    log.push(CombatLogEntry::gold_stolen(turn, true, stolen));
+                }
             }
         }
         EffectType::ApplyReflection => {
@@ -407,13 +421,21 @@ pub fn apply_effect(
         }
         EffectType::GainGold => {
             if is_target_player {
-                increase_player_gold(player_gold, gold_change, value);
+                increase_gold(player_gold, Some(gold_change), value);
+            } else {
+                increase_gold(enemy_gold, None, value);
             }
         }
         EffectType::ConsumeGoldForArmor => {
             if is_target_player && *player_gold > 0 {
                 *player_gold = player_gold.saturating_sub(1);
                 *gold_change = gold_change.saturating_sub(1);
+                stats.arm = stats.arm.saturating_add(value.max(0));
+                if value > 0 {
+                    log.push(CombatLogEntry::armor_change(turn, is_target_player, value));
+                }
+            } else if !is_target_player && *enemy_gold > 0 {
+                *enemy_gold = enemy_gold.saturating_sub(1);
                 stats.arm = stats.arm.saturating_add(value.max(0));
                 if value > 0 {
                     log.push(CombatLogEntry::armor_change(turn, is_target_player, value));
@@ -457,6 +479,7 @@ pub fn process_triggers_for_phase(
     is_owner_player: bool,
     owner_acts_first: bool,
     player_gold: &mut u16,
+    enemy_gold: &mut u16,
     gold_change: &mut i16,
     log: &mut Vec<CombatLogEntry>,
 ) {
@@ -479,6 +502,7 @@ pub fn process_triggers_for_phase(
         is_owner_player,
         owner_acts_first,
         player_gold,
+        enemy_gold,
         gold_change,
         log,
         true, // first pass: only unconditional status effects
@@ -496,6 +520,7 @@ pub fn process_triggers_for_phase(
         is_owner_player,
         owner_acts_first,
         player_gold,
+        enemy_gold,
         gold_change,
         log,
         false, // second pass: everything else
@@ -515,6 +540,7 @@ fn process_effects_pass(
     is_owner_player: bool,
     owner_acts_first: bool,
     player_gold: &mut u16,
+    enemy_gold: &mut u16,
     gold_change: &mut i16,
     log: &mut Vec<CombatLogEntry>,
     first_pass: bool,
@@ -610,6 +636,7 @@ fn process_effects_pass(
                     turn,
                     is_owner_player, // Reflected back to owner
                     player_gold,
+                    enemy_gold,
                     gold_change,
                     log,
                 );
@@ -624,12 +651,17 @@ fn process_effects_pass(
                     turn,
                     !is_owner_player, // Target is opponent
                     player_gold,
+                    enemy_gold,
                     gold_change,
                     log,
                 );
             }
         } else {
-            let gold_before = *player_gold;
+            let owner_gold_before = if is_owner_player {
+                *player_gold
+            } else {
+                *enemy_gold
+            };
             // Effect targets self (owner)
             apply_effect(
                 phase,
@@ -640,12 +672,16 @@ fn process_effects_pass(
                 turn,
                 is_owner_player, // Target is owner
                 player_gold,
+                enemy_gold,
                 gold_change,
                 log,
             );
             if matches!(effect.effect_type, EffectType::ConsumeGoldForArmor)
-                && is_owner_player
-                && *player_gold < gold_before
+                && (if is_owner_player {
+                    *player_gold < owner_gold_before
+                } else {
+                    *enemy_gold < owner_gold_before
+                })
             {
                 gold_armor_conversion_happened = true;
             }
@@ -679,6 +715,7 @@ fn process_effects_pass(
             is_owner_player,
             owner_acts_first,
             player_gold,
+            enemy_gold,
             gold_change,
             log,
         );
@@ -850,6 +887,7 @@ mod tests {
         }];
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
+        let mut enemy_gold: u16 = 0;
         let mut gold_change = 0i16;
         let mut log = Vec::new();
 
@@ -866,6 +904,7 @@ mod tests {
             false, // is_owner_player (enemy is owner)
             false, // owner_acts_first: enemy is slower
             &mut player_gold,
+            &mut enemy_gold,
             &mut gold_change,
             &mut log,
         );
@@ -931,6 +970,7 @@ mod tests {
         }];
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
+        let mut enemy_gold: u16 = 0;
         let mut gold_change = 0i16;
         let mut log = Vec::new();
 
@@ -947,6 +987,7 @@ mod tests {
             false, // is_owner_player (enemy is owner)
             true,  // owner_acts_first: enemy is faster
             &mut player_gold,
+            &mut enemy_gold,
             &mut gold_change,
             &mut log,
         );
@@ -1058,6 +1099,7 @@ mod tests {
         ];
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
+        let mut enemy_gold: u16 = 0;
         let mut gold_change = 0i16;
         let mut log = Vec::new();
 
@@ -1073,6 +1115,7 @@ mod tests {
             true,  // is_owner_player
             false, // owner_acts_first: unused for TurnStart
             &mut player_gold,
+            &mut enemy_gold,
             &mut gold_change,
             &mut log,
         );
@@ -1144,6 +1187,7 @@ mod tests {
 
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
+        let mut enemy_gold: u16 = 0;
         let mut gold_change = 0i16;
         let mut log = Vec::new();
 
@@ -1159,6 +1203,7 @@ mod tests {
             true,
             true,
             &mut player_gold,
+            &mut enemy_gold,
             &mut gold_change,
             &mut log,
         );
@@ -1207,6 +1252,7 @@ mod tests {
         }];
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
+        let mut enemy_gold: u16 = 0;
         let mut gold_change = 0i16;
         let mut log = Vec::new();
 
@@ -1222,6 +1268,7 @@ mod tests {
             true,
             true,
             &mut player_gold,
+            &mut enemy_gold,
             &mut gold_change,
             &mut log,
         );
@@ -1240,6 +1287,7 @@ mod tests {
             true,
             true,
             &mut player_gold,
+            &mut enemy_gold,
             &mut gold_change,
             &mut log,
         );
@@ -1291,6 +1339,7 @@ mod tests {
         }];
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
+        let mut enemy_gold: u16 = 0;
         let mut gold_change = 0i16;
         let mut log = Vec::new();
 
@@ -1306,6 +1355,7 @@ mod tests {
             true,  // is_owner_player
             false, // owner_acts_first: unused for OnHit
             &mut player_gold,
+            &mut enemy_gold,
             &mut gold_change,
             &mut log,
         );
@@ -1336,6 +1386,7 @@ mod tests {
         }];
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
+        let mut enemy_gold: u16 = 0;
         let mut gold_change = 0i16;
         let mut log = Vec::new();
 
@@ -1351,6 +1402,7 @@ mod tests {
             true,  // is_owner_player
             false, // owner_acts_first: unused for OnHit
             &mut player_gold,
+            &mut enemy_gold,
             &mut gold_change,
             &mut log,
         );
@@ -1381,6 +1433,7 @@ mod tests {
         }];
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
+        let mut enemy_gold: u16 = 0;
         let mut gold_change = 0i16;
         let mut log = Vec::new();
 
@@ -1396,6 +1449,7 @@ mod tests {
             true,  // is_owner_player
             false, // owner_acts_first: unused for OnHit
             &mut player_gold,
+            &mut enemy_gold,
             &mut gold_change,
             &mut log,
         );
@@ -1428,6 +1482,7 @@ mod tests {
         }];
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
+        let mut enemy_gold: u16 = 0;
         let mut gold_change = 0i16;
         let mut log = Vec::new();
 
@@ -1443,6 +1498,7 @@ mod tests {
             true,  // is_owner_player
             false, // owner_acts_first: unused for OnHit
             &mut player_gold,
+            &mut enemy_gold,
             &mut gold_change,
             &mut log,
         );
@@ -1472,6 +1528,7 @@ mod tests {
         }];
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
+        let mut enemy_gold: u16 = 0;
         let mut gold_change = 0i16;
         let mut log = Vec::new();
 
@@ -1487,6 +1544,7 @@ mod tests {
             true,  // is_owner_player
             false, // owner_acts_first: unused for OnHit
             &mut player_gold,
+            &mut enemy_gold,
             &mut gold_change,
             &mut log,
         );
@@ -1528,6 +1586,7 @@ mod tests {
         ];
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
+        let mut enemy_gold: u16 = 0;
         let mut gold_change = 0i16;
         let mut log = Vec::new();
 
@@ -1543,6 +1602,7 @@ mod tests {
             true,  // is_owner_player
             false, // owner_acts_first: unused for OnHit
             &mut player_gold,
+            &mut enemy_gold,
             &mut gold_change,
             &mut log,
         );
@@ -1592,6 +1652,7 @@ mod tests {
         ];
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
+        let mut enemy_gold: u16 = 0;
         let mut gold_change = 0i16;
         let mut log = Vec::new();
 
@@ -1607,6 +1668,7 @@ mod tests {
             true,  // is_owner_player
             false, // owner_acts_first: unused for OnHit
             &mut player_gold,
+            &mut enemy_gold,
             &mut gold_change,
             &mut log,
         );
@@ -1702,6 +1764,7 @@ mod tests {
         ];
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
+        let mut enemy_gold: u16 = 0;
         let mut gold_change = 0i16;
         let mut log = Vec::new();
 
@@ -1717,6 +1780,7 @@ mod tests {
             true, // is_owner_player
             true, // owner_acts_first
             &mut player_gold,
+            &mut enemy_gold,
             &mut gold_change,
             &mut log,
         );
@@ -1802,6 +1866,7 @@ mod tests {
         ];
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
+        let mut enemy_gold: u16 = 0;
         let mut gold_change = 0i16;
         let mut log = Vec::new();
 
@@ -1817,6 +1882,7 @@ mod tests {
             true, // is_owner_player
             true, // owner_acts_first
             &mut player_gold,
+            &mut enemy_gold,
             &mut gold_change,
             &mut log,
         );

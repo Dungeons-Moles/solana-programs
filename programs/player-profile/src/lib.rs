@@ -63,6 +63,29 @@ pub mod player_profile {
         Ok(())
     }
 
+    /// Updates the active item pool bitmask.
+    /// The pool must be a subset of unlocked items and contain at least 40 entries.
+    pub fn update_active_item_pool(
+        ctx: Context<UpdateActiveItemPool>,
+        active_item_pool: [u8; ITEM_BITMASK_SIZE],
+    ) -> Result<()> {
+        let profile = &mut ctx.accounts.player_profile;
+
+        require!(
+            bitmask::is_subset(active_item_pool, profile.unlocked_items),
+            PlayerProfileError::ItemNotUnlocked
+        );
+
+        require!(
+            bitmask::count_bits(active_item_pool) >= MIN_ACTIVE_POOL_SIZE,
+            PlayerProfileError::ActivePoolTooSmall
+        );
+
+        profile.active_item_pool = active_item_pool;
+
+        Ok(())
+    }
+
     /// Records the result of a completed dungeon run.
     /// On first-time victory, unlocks the next level and a random item.
     /// Note: available_runs is NOT decremented here - it's already done by consume_run
@@ -246,13 +269,18 @@ pub mod player_profile {
         Ok(())
     }
 
-    /// Purchase additional runs by paying SOL to the treasury.
+    /// Purchase additional runs and split payment between treasury and gauntlet pool.
     /// Each purchase adds 20 runs and costs 0.001 SOL.
     pub fn purchase_runs(ctx: Context<PurchaseRuns>) -> Result<()> {
         let profile = &mut ctx.accounts.player_profile;
         let clock = Clock::get()?;
+        let half = RUN_PURCHASE_COST_LAMPORTS / 2;
+        let treasury_amount = half;
+        let gauntlet_amount = RUN_PURCHASE_COST_LAMPORTS
+            .checked_sub(half)
+            .ok_or(PlayerProfileError::ArithmeticOverflow)?;
 
-        // Transfer SOL from player to treasury
+        // Transfer treasury split.
         system_program::transfer(
             CpiContext::new(
                 ctx.accounts.system_program.to_account_info(),
@@ -261,7 +289,19 @@ pub mod player_profile {
                     to: ctx.accounts.treasury.to_account_info(),
                 },
             ),
-            RUN_PURCHASE_COST_LAMPORTS,
+            treasury_amount,
+        )?;
+
+        // Transfer gauntlet pool split.
+        system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.owner.to_account_info(),
+                    to: ctx.accounts.gauntlet_pool.to_account_info(),
+                },
+            ),
+            gauntlet_amount,
         )?;
 
         // Add runs to profile
@@ -305,6 +345,19 @@ pub struct InitializeProfile<'info> {
 
 #[derive(Accounts)]
 pub struct UpdateProfileName<'info> {
+    #[account(
+        mut,
+        seeds = [PlayerProfile::SEED_PREFIX, owner.key().as_ref()],
+        bump = player_profile.bump,
+        has_one = owner @ PlayerProfileError::Unauthorized
+    )]
+    pub player_profile: Account<'info, PlayerProfile>,
+
+    pub owner: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateActiveItemPool<'info> {
     #[account(
         mut,
         seeds = [PlayerProfile::SEED_PREFIX, owner.key().as_ref()],
@@ -366,6 +419,12 @@ pub struct PurchaseRuns<'info> {
         address = Pubkey::new_from_array(TREASURY_PUBKEY) @ PlayerProfileError::InvalidTreasury
     )]
     pub treasury: SystemAccount<'info>,
+
+    #[account(
+        mut,
+        address = Pubkey::new_from_array(GAUNTLET_POOL_PUBKEY) @ PlayerProfileError::InvalidGauntletPool
+    )]
+    pub gauntlet_pool: SystemAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }

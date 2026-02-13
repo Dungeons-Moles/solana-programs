@@ -1,44 +1,69 @@
 # Dungeons & Moles Solana Programs
 
-This workspace contains three Anchor programs that power the on-chain gameplay systems for Dungeons & Moles.
+Monorepo for the on-chain gameplay stack used by Dungeons & Moles.
 
-## Programs
+## Workspace Overview
 
-- `player-profile`: Player identity, tier unlocks, run tracking
-- `session-manager`: Session lifecycle for gameplay (MagicBlock delegation stubbed for now)
-- `map-generator`: Deterministic seed configuration for map generation
+### On-chain programs (`programs/`)
 
-## PDA Derivations
+- `player-profile`: player identity, progression, and run metadata
+- `session-manager`: gameplay session lifecycle and authority flow
+- `map-generator`: deterministic map seed/config and map state
+- `gameplay-state`: core run state, movement, combat entry, and phase progression
+- `player-inventory`: inventory, item effects, offers, and fusion logic
+- `poi-system`: point-of-interest spawn and interaction flow
 
-Use the following PDA seeds for client integration.
+### Shared gameplay crates (`crates/`)
 
-### Player Profile Program
+- `combat-system`: combat engine and effect/trigger resolution
+- `field-enemies`: enemy archetypes, scaling, and spawn support
+- `boss-system`: boss definitions, traits, phases, and scaling
 
-- `PlayerProfile`: `"player" + owner_pubkey`
-  - Seeds: `[b"player", owner.key().as_ref()]`
-- `Treasury`: `"treasury"`
-  - Seeds: `[b"treasury"]`
+## Repository Layout
 
-### Session Manager Program
+```text
+crates/
+  boss-system/
+  combat-system/
+  field-enemies/
+programs/
+  gameplay-state/
+  map-generator/
+  player-inventory/
+  player-profile/
+  poi-system/
+  session-manager/
+tests/
+```
 
-- `GameSession`: `"session" + player_pubkey`
-  - Seeds: `[b"session", player.key().as_ref()]`
-- `SessionCounter`: `"session_counter"`
-  - Seeds: `[b"session_counter"]`
+## Tooling
 
-### Map Generator Program
+- Rust `1.75+` (edition `2021`, Solana BPF target)
+- Anchor `0.32.0`
+- Solana CLI `2.3+`
+- Node.js `>=18` (TypeScript tests)
 
-- `MapConfig`: `"map_config"`
-  - Seeds: `[b"map_config"]`
-
-## Build & Test
+## Build, Test, Lint
 
 ```bash
 anchor build
 anchor test
+cargo test
+cargo clippy
 ```
 
-## Notes
+## Test Suite
 
-- MagicBlock SDK integration is currently stubbed in-program due to Solana toolchain compatibility.
-- Map generation happens off-chain; on-chain verification compares hashes.
+TypeScript integration tests live in `tests/`:
+
+- `tests/session-manager/session-manager.ts`
+- `tests/map-generator/map-generator.ts`
+- `tests/gameplay-state/gameplay-state.ts`
+- `tests/player-inventory/inventory_management.ts`
+- `tests/player-profile/player-profile.ts`
+- `tests/poi-system/poi-system.ts`
+
+## Operational Notes
+
+- MagicBlock integration is currently stubbed while SDK/toolchain compatibility is finalized.
+- Some gameplay systems are split across program + crate boundaries to keep CPI surfaces focused and reusable.

@@ -535,6 +535,7 @@ dependencies = [
  "field-enemies",
  "map-generator",
  "player-inventory",
+ "player-profile",
  "sha2",
 ]
 

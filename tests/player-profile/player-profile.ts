@@ -1,6 +1,7 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { PlayerProfile } from "../../target/types/player_profile";
+import { GameplayState } from "../../target/types/gameplay_state";
 import { expect } from "chai";
 import { Keypair, LAMPORTS_PER_SOL, SystemProgram } from "@solana/web3.js";
 
@@ -8,15 +9,30 @@ describe("player-profile", () => {
   const TREASURY = new anchor.web3.PublicKey(
     "5LvEA4tH5H5DtWCxa3FcauokxAycvafX9ruvcT2mEXt8",
   );
-  const GAUNTLET_POOL = new anchor.web3.PublicKey(
-    "1nc1nerator11111111111111111111111111111111",
-  );
-
   // Configure the client to use the local cluster
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
   const program = anchor.workspace.PlayerProfile as Program<PlayerProfile>;
+  const gameplayProgram = anchor.workspace.GameplayState as Program<GameplayState>;
+
+  const getGauntletConfigPDA = () =>
+    anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("gauntlet_config")],
+      gameplayProgram.programId,
+    );
+  const getGauntletPoolVaultPDA = () =>
+    anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("gauntlet_pool_vault")],
+      gameplayProgram.programId,
+    );
+  const getGauntletWeekPoolPDA = (week: number) =>
+    anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("gauntlet_week_pool"), Buffer.from([week])],
+      gameplayProgram.programId,
+    );
+  const [GAUNTLET_POOL] = getGauntletPoolVaultPDA();
+  let gauntletInitialized = false;
 
   // Helper to derive profile PDA
   const getProfilePDA = (owner: anchor.web3.PublicKey) => {
@@ -24,6 +40,44 @@ describe("player-profile", () => {
       [Buffer.from("player"), owner.toBuffer()],
       program.programId,
     );
+  };
+
+  const ensureGauntletInitialized = async () => {
+    if (gauntletInitialized) return;
+    const [gauntletConfig] = getGauntletConfigPDA();
+    const [gauntletPoolVault] = getGauntletPoolVaultPDA();
+    const [gauntletWeek1] = getGauntletWeekPoolPDA(1);
+    const [gauntletWeek2] = getGauntletWeekPoolPDA(2);
+    const [gauntletWeek3] = getGauntletWeekPoolPDA(3);
+    const [gauntletWeek4] = getGauntletWeekPoolPDA(4);
+    const [gauntletWeek5] = getGauntletWeekPoolPDA(5);
+
+    try {
+      await gameplayProgram.methods
+        .initializeGauntlet()
+        .accounts({
+          gauntletConfig,
+          gauntletPoolVault,
+          gauntletWeek1,
+          gauntletWeek2,
+          gauntletWeek3,
+          gauntletWeek4,
+          gauntletWeek5,
+          admin: provider.wallet.publicKey,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .preInstructions([
+          anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+            units: 1_400_000,
+          }),
+        ])
+        .rpc();
+    } catch (error: any) {
+      if (!error.toString().includes("already in use")) {
+        throw error;
+      }
+    }
+    gauntletInitialized = true;
   };
 
   describe("Initialize Profile", () => {
@@ -384,6 +438,10 @@ describe("player-profile", () => {
   });
 
   describe("Purchase Runs", () => {
+    before(async () => {
+      await ensureGauntletInitialized();
+    });
+
     it("rejects invalid gauntlet pool account", async () => {
       const user = Keypair.generate();
 

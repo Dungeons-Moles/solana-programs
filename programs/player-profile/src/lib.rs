@@ -270,10 +270,26 @@ pub mod player_profile {
     }
 
     /// Purchase additional runs and split payment between treasury and gauntlet pool.
-    /// Each purchase adds 20 runs and costs 0.001 SOL.
+    /// Each purchase adds 20 runs and costs 0.005 SOL.
     pub fn purchase_runs(ctx: Context<PurchaseRuns>) -> Result<()> {
         let profile = &mut ctx.accounts.player_profile;
         let clock = Clock::get()?;
+        let gameplay_state_program = Pubkey::new_from_array(GAMEPLAY_STATE_PROGRAM_ID);
+        let (expected_gauntlet_pool, _) = Pubkey::find_program_address(
+            &[GAUNTLET_POOL_VAULT_SEED],
+            &gameplay_state_program,
+        );
+        require_keys_eq!(
+            ctx.accounts.gauntlet_pool.key(),
+            expected_gauntlet_pool,
+            PlayerProfileError::InvalidGauntletPool
+        );
+        require_keys_eq!(
+            *ctx.accounts.gauntlet_pool.owner,
+            gameplay_state_program,
+            PlayerProfileError::InvalidGauntletPool
+        );
+
         let half = RUN_PURCHASE_COST_LAMPORTS / 2;
         let treasury_amount = half;
         let gauntlet_amount = RUN_PURCHASE_COST_LAMPORTS
@@ -420,11 +436,10 @@ pub struct PurchaseRuns<'info> {
     )]
     pub treasury: SystemAccount<'info>,
 
-    #[account(
-        mut,
-        address = Pubkey::new_from_array(GAUNTLET_POOL_PUBKEY) @ PlayerProfileError::InvalidGauntletPool
-    )]
-    pub gauntlet_pool: SystemAccount<'info>,
+    /// CHECK: Validated in instruction to be the canonical gameplay-state
+    /// gauntlet pool vault PDA and owned by gameplay-state program.
+    #[account(mut)]
+    pub gauntlet_pool: AccountInfo<'info>,
 
     pub system_program: Program<'info, System>,
 }

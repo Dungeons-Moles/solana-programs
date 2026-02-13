@@ -1,18 +1,13 @@
 # solana-programs Development Guidelines
 
-Auto-generated from all feature plans. Last updated: 2026-01-26
+Auto-generated from all feature plans. Last updated: 2026-02-13
 
 ## Active Technologies
 
-- Rust 1.75+ (Solana BPF target) + Anchor 0.32+, Solana CLI 2.3+, solana-program (001-solana-core-programs)
-- Rust 2021 edition, Solana SDK 2.x + Anchor 0.31.1 (matching existing programs) (002-gameplay-state-tracking)
-- Rust 2021 edition (Solana BPF target) + Anchor 0.31.1 (matching existing programs), solana-program (003-combat-system)
-- Solana accounts (PDA-based state) + on-chain item registry (004-item-system)
-- Rust 1.75+ (Solana BPF target) + Anchor 0.32+, anchor-lang, solana-program (005-field-enemies)
-- Rust 2021 edition (Solana BPF target) + Anchor 0.31.1 + solana-program, anchor-lang, combat-system crate (006-boss-system)
-- Rust 2021 edition (Solana BPF target) + Anchor 0.32.0, solana-program (007-poi-system)
-- Rust 2021 edition (Solana BPF target) + Anchor 0.32+, solana-program, combat-system crate, player-inventory crate (008-item-offer-generation)
-- Rust 1.75+ (Solana BPF target) + Anchor 0.32+, solana-program, combat-system, field-enemies, boss-system, poi-system (010-core-gameplay-loop)
+- Rust 2021 edition (Solana BPF target) + Anchor 0.32.0 across all programs/crates
+- Solana SDK/CLI 2.3+ and `solana-program` account/PDA patterns
+- TypeScript integration tests via `ts-mocha` + `@coral-xyz/anchor` 0.32.0
+- Shared gameplay crates: `combat-system`, `field-enemies`, `boss-system`
 - MagicBlock integration is stubbed (SDK pending toolchain update)
 
 ## Project Structure
@@ -38,6 +33,7 @@ anchor build
 anchor test
 cargo test
 cargo clippy
+yarn test
 
 ## Code Style
 
@@ -45,12 +41,11 @@ Rust 1.75+ (Solana BPF target): Follow standard conventions
 
 ## Recent Changes
 
-- 010-core-gameplay-loop: Integrated core gameplay loop with combat, enemies, bosses, and POI systems
-- 008-item-offer-generation: Implemented item offer generation logic and state
-- 007-poi-system: Implemented POI system with PDA-based state for per-session instances
-- 006-boss-system: Implemented 24 boss definitions, stat scaling, phase mechanics
-- 005-field-enemies: Implemented enemy spawning and reward logic (in crates/field-enemies)
-- 001-solana-core-programs: Implemented session manager and map generator
+- Core gameplay loop integrated across session, map, gameplay-state, POI, inventory, and combat systems
+- PvP mode plumbing is active in `gameplay-state` (`Duel`, `Gauntlet`, `Pit Draft`) with on-chain settlement vaults
+- Profile run economy is active in `player-profile` (20 initial runs, paid top-ups, treasury/pool split)
+- Item registry and offer generation use an 80-item core set plus starter Basic Pickaxe handling
+- Enemy and boss systems are data-driven via `field-enemies` and `boss-system` crates
 
 <!-- MANUAL ADDITIONS START -->
 <!-- MANUAL ADDITIONS END -->

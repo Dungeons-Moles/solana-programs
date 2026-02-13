@@ -9,7 +9,7 @@ Monorepo for the on-chain gameplay stack used by Dungeons & Moles.
 - `player-profile`: player identity, progression, and run metadata
 - `session-manager`: gameplay session lifecycle and authority flow
 - `map-generator`: deterministic map seed/config and map state
-- `gameplay-state`: core run state, movement, combat entry, and phase progression
+- `gameplay-state`: campaign state, movement/combat resolution, and PvP mode settlement (gauntlet/duel/pit-draft)
 - `player-inventory`: inventory, item effects, offers, and fusion logic
 - `poi-system`: point-of-interest spawn and interaction flow
 
@@ -62,6 +62,14 @@ TypeScript integration tests live in `tests/`:
 - `tests/player-inventory/inventory_management.ts`
 - `tests/player-profile/player-profile.ts`
 - `tests/poi-system/poi-system.ts`
+
+## Implemented Economy Constants
+
+- Profile starts with `20` campaign runs.
+- Run top-up is `20` runs for `0.005 SOL`, split `50% treasury / 50% gauntlet pool`.
+- Gauntlet entry is `0.01 SOL` (`3% company / 97% gauntlet pool`).
+- Duel entry is currently fixed at `0.1 SOL` (`3% company / 2% gauntlet pool / 95% winner`).
+- Pit Draft entry is currently fixed at `0.1 SOL` (`3% company / 2% gauntlet pool / 95% winner`).
 
 ## Operational Notes
 

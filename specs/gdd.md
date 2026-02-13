@@ -1,7 +1,7 @@
 # Dungeons & Moles — Dungeon Crawler Auto-Battler (GDD v0.4)
 
-Status: Implementation in Progress (Core Loop Active)
-Last updated: 2026-02-07
+Status: Implementation in Progress (Core + PvP Modes Active)
+Last updated: 2026-02-13
 
 This document consolidates the current gameplay design inspired by "He Is Coming", including items, itemsets, bosses, enemies, POIs, biomes/acts, balancing knobs, and v1 mode/economy rules (PvE + PvP). Incorporates Balance Patch v0.4 (Revised).
 
@@ -111,6 +111,7 @@ Inventory:
 - Starts with **4 Gear slots** + 1 Tool slot.
 - After defeating **Week 1 boss**: +2 slots (Automatic sync via CPI).
 - After defeating **Week 2 boss**: +2 slots (Automatic sync via CPI).
+- Gauntlet extension (5-week modes): Week 3 -> 10 total slots, Week 4 -> 12 total slots.
 - Tool slot is separate (exactly 1 equipped Tool).
 
 ---
@@ -700,8 +701,8 @@ Optional "final prep bias":
 ### Session Cost & Profile
 
 - **Profile Creation:** Players start with **20 free PvE runs** (Campaign).
-- **Top-up:** 20 additional PvE runs cost **0.05 SOL**.
-- **Run Debit:** A run is debited only upon defeat (HP 0) or level completion.
+- **Top-up (current implementation):** 20 additional PvE runs cost **0.005 SOL**.
+- **Run Debit (current implementation):** A run is debited at **session start**.
 
 ### Mode Fees & Splits (v1)
 
@@ -710,7 +711,7 @@ All splits below are expressed as % of the **SOL paid**.
 #### PvE — Campaign / Practice
 
 - New account: 20 free PvE runs.
-- After that: 0.05 SOL for 20 PvE runs.
+- After that: 0.005 SOL for 20 PvE runs.
 - Split: **50% company / 50% Gauntlet pool**.
 
 #### PvP — Gauntlet (Async)
@@ -720,12 +721,12 @@ All splits below are expressed as % of the **SOL paid**.
 
 #### PvP — Duels (Direct)
 
-- Stakes (v1): **0.1 SOL** and **0.2 SOL**.
+- Entry stake (current implementation): **0.1 SOL**.
 - Split: **3% company / 2% Gauntlet pool / 95% winner**.
 
 #### PvP — Pit Draft (Instant)
 
-- Stakes (v1): **0.05 SOL** and **0.1 SOL**.
+- Entry stake (current implementation): **0.1 SOL**.
 - Split: **3% company / 2% Gauntlet pool / 95% winner**.
 
 #### Trading — Skins / Items
@@ -747,6 +748,7 @@ Inventory slots:
 - Start 4 Gear slots.
 - After Week 1 boss: 6 slots.
 - After Week 2 boss: 8 slots.
+- Gauntlet extension (5-week modes): Week 3 -> 10 slots, Week 4 -> 12 slots.
 
 Design intent:
 
@@ -801,7 +803,7 @@ Shop affordability (Act 1 baseline):
 
 - Two players stake SOL and play on the **same map seed**.
 - PvE progression builds toward a decisive PvP resolution (Week 3) using deterministic combat.
-- Stakes (v1): 0.1 and 0.2 only (to avoid matchmaking dilution).
+- Entry stake (current implementation): 0.1 SOL.
 
 ### PvP — Pit Draft (Instant)
 

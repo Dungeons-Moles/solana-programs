@@ -97,9 +97,8 @@ pub const GAUNTLET_EPOCH_DURATION_SECONDS: i64 = 7 * 24 * 60 * 60;
 pub const GAUNTLET_MAX_WEEKLY_ECHOES: usize = 50;
 pub const GAUNTLET_BOOTSTRAP_ECHOES_PER_WEEK: usize = 10;
 
-/// Fixed campaign level used by Gauntlet session identity (must match session-manager).
-pub const GAUNTLET_CAMPAIGN_LEVEL: u8 = 19;
+/// Fixed campaign level used by Gauntlet/Duels difficulty profile (must match session-manager).
+pub const GAUNTLET_CAMPAIGN_LEVEL: u8 = 20;
 
-/// Company treasury and gauntlet sink addresses.
+/// Company treasury address.
 pub const COMPANY_TREASURY_ADDRESS: &str = "5LvEA4tH5H5DtWCxa3FcauokxAycvafX9ruvcT2mEXt8";
-pub const GAUNTLET_SINK_ADDRESS: &str = "1nc1nerator11111111111111111111111111111111";

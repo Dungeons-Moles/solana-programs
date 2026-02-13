@@ -56,8 +56,12 @@ pub const TREASURY_PUBKEY: [u8; 32] = [
     0xb6, 0xf7, 0xee, 0xc0, 0x3b, 0xfd, 0xa8, 0x84, 0xfd, 0x3c, 0x91, 0x6b, 0x20, 0x5f, 0x91, 0x35,
 ];
 
-/// Gauntlet pool wallet for run purchase split (1nc1nerator11111111111111111111111111111111)
-pub const GAUNTLET_POOL_PUBKEY: [u8; 32] = [
-    0x00, 0x33, 0x90, 0x72, 0x8d, 0x34, 0x11, 0x60, 0x79, 0xbd, 0xc9, 0x11, 0xbf, 0xff, 0x00, 0xdb,
-    0xd4, 0x4d, 0x2e, 0xcd, 0xcc, 0xf7, 0x9c, 0xa6, 0xe1, 0x00, 0x38, 0xe1, 0x00, 0x00, 0x00, 0x00,
+/// Gameplay-state program ID (5VAaGSSoBP4UEt3RL2EXvDwpeDxAXMndsJn7QX96nc4n).
+/// Used to derive and validate the canonical gauntlet pool vault PDA.
+pub const GAMEPLAY_STATE_PROGRAM_ID: [u8; 32] = [
+    66, 165, 213, 208, 125, 103, 44, 88, 115, 217, 192, 197, 1, 117, 7, 170, 78, 32, 208, 143, 119,
+    94, 47, 124, 229, 196, 47, 149, 235, 227, 237, 31,
 ];
+
+/// Seed used by gameplay-state for the canonical gauntlet pool vault PDA.
+pub const GAUNTLET_POOL_VAULT_SEED: &[u8] = b"gauntlet_pool_vault";

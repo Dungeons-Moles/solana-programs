@@ -14,27 +14,29 @@ use combat_system::state::CombatantInput;
 #[cfg(test)]
 use combat_system::state::Condition;
 use combat_system::{
-    resolve_combat_with_both_gold, resolve_combat_with_player_gold, CombatLogEntry, EffectType, ItemEffect,
+    resolve_combat_with_both_gold, resolve_combat_with_player_gold, CombatLogEntry, EffectType,
+    ItemEffect,
 };
 use constants::{
-    BASE_ARM, BASE_ATK, BASE_HP, BASE_SPD, COMPANY_TREASURY_ADDRESS, DAY_MOVES, DUEL_ENTRY_LAMPORTS,
-    DUEL_ENTRY_SEED, DUEL_OPEN_QUEUE_SEED, DUEL_QUEUE_SEED, DUEL_VAULT_SEED, GAME_STATE_SEED,
-    GAUNTLET_BOOTSTRAP_ECHOES_PER_WEEK,
-    GAUNTLET_COMPANY_FEE_BPS, GAUNTLET_CONFIG_SEED, GAUNTLET_ENTRY_LAMPORTS, GAUNTLET_EPOCH_DURATION_SECONDS,
+    BASE_ARM, BASE_ATK, BASE_HP, BASE_SPD, COMPANY_TREASURY_ADDRESS, DAY_MOVES,
+    DUEL_ENTRY_LAMPORTS, DUEL_ENTRY_SEED, DUEL_OPEN_QUEUE_SEED, DUEL_QUEUE_SEED, DUEL_VAULT_SEED,
+    GAME_STATE_SEED, GAUNTLET_BOOTSTRAP_ECHOES_PER_WEEK, GAUNTLET_COMPANY_FEE_BPS,
+    GAUNTLET_CONFIG_SEED, GAUNTLET_ENTRY_LAMPORTS, GAUNTLET_EPOCH_DURATION_SECONDS,
     GAUNTLET_EPOCH_POOL_SEED, GAUNTLET_MAX_WEEKLY_ECHOES, GAUNTLET_PLAYER_SCORE_SEED,
-    GAUNTLET_POOL_FEE_BPS, GAUNTLET_POOL_VAULT_SEED, GAUNTLET_SINK_ADDRESS, GAUNTLET_WEEK_POOL_SEED,
-    INITIAL_GEAR_SLOTS, MAX_GEAR_SLOTS, PIT_DRAFT_BPS_DENOMINATOR, PIT_DRAFT_COMPANY_FEE_BPS,
-    PIT_DRAFT_ENTRY_LAMPORTS, PIT_DRAFT_GAUNTLET_FEE_BPS, PIT_DRAFT_QUEUE_SEED, PIT_DRAFT_VAULT_SEED,
-    PIT_DRAFT_WINNER_BPS,
+    GAUNTLET_POOL_FEE_BPS, GAUNTLET_POOL_VAULT_SEED, GAUNTLET_SINK_ADDRESS,
+    GAUNTLET_WEEK_POOL_SEED, INITIAL_GEAR_SLOTS, MAX_GEAR_SLOTS, PIT_DRAFT_BPS_DENOMINATOR,
+    PIT_DRAFT_COMPANY_FEE_BPS, PIT_DRAFT_ENTRY_LAMPORTS, PIT_DRAFT_GAUNTLET_FEE_BPS,
+    PIT_DRAFT_QUEUE_SEED, PIT_DRAFT_VAULT_SEED, PIT_DRAFT_WINNER_BPS,
 };
 use errors::GameplayStateError;
 
 /// Seed for gameplay_authority PDA used for CPI calls to other programs
 pub const GAMEPLAY_AUTHORITY_SEED: &[u8] = b"gameplay_authority";
+pub const SESSION_MANAGER_RUNMODE_AUTHORITY_SEED: &[u8] = b"session_manager_authority";
 use movement::{
-    calculate_move_cost, chebyshev_distance, get_boss_for_combat, get_boss_id, get_duel_boss_for_combat,
-    get_duel_boss_id, is_adjacent,
-    is_within_bounds, should_process_night_enemy_movement, should_process_target_enemy_combat,
+    calculate_move_cost, chebyshev_distance, get_boss_for_combat, get_boss_id,
+    get_duel_boss_for_combat, get_duel_boss_id, is_adjacent, is_within_bounds,
+    should_process_night_enemy_movement, should_process_target_enemy_combat,
 };
 use player_inventory::effects::generate_combat_effects;
 use player_inventory::items::ITEMS;
@@ -42,11 +44,9 @@ use player_inventory::state::{ItemInstance, ItemType, PlayerInventory, Tier, Too
 use player_profile::state::PlayerProfile;
 use state::{
     DuelCreatorEntry, DuelEntry, DuelLoadoutSnapshot, DuelOpenQueue, DuelQueue, DuelRunOutcome,
-    DuelVault, GauntletConfig,
-    GauntletEchoSnapshot, GauntletEchoSource, GauntletEpochPool, GauntletLoadoutSnapshot, GauntletPendingPoints,
-    GauntletPlayerScore, GauntletPoolVault, GauntletWeekPool, GameState, MapEnemies, Phase, PitDraftQueue,
-    PitDraftVault,
-    RunMode,
+    DuelVault, GameState, GauntletConfig, GauntletEchoSnapshot, GauntletEchoSource,
+    GauntletEpochPool, GauntletLoadoutSnapshot, GauntletPendingPoints, GauntletPlayerScore,
+    GauntletPoolVault, GauntletWeekPool, MapEnemies, Phase, PitDraftQueue, PitDraftVault, RunMode,
 };
 use stats::{calculate_stats, PlayerStats};
 
@@ -67,6 +67,8 @@ pub const POI_SYSTEM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
 pub const NIGHT_VISION_RADIUS: u8 = 2;
 pub const DAY_VISION_RADIUS: u8 = 4;
 pub const PIT_DRAFT_MAX_START_GOLD: u16 = 30;
+/// Hard cap for combat log entries emitted in PvP visual events to avoid oversized event payloads.
+pub const MAX_PVP_VISUAL_LOG_ENTRIES: usize = 512;
 pub const DISCOVER_VISIBLE_WAYPOINTS_DISCRIMINATOR: [u8; 8] =
     [0x3b, 0x26, 0x6a, 0x00, 0x3a, 0xb1, 0x50, 0xfc];
 
@@ -159,12 +161,14 @@ pub mod gameplay_state {
         let queue = &mut ctx.accounts.pit_draft_queue;
         let vault = &mut ctx.accounts.pit_draft_vault;
 
-        if queue.bump == 0 {
+        if !queue.initialized {
             queue.waiting_player = None;
             queue.waiting_profile = None;
+            queue.initialized = true;
             queue.bump = ctx.bumps.pit_draft_queue;
         }
-        if vault.bump == 0 {
+        if !vault.initialized {
+            vault.initialized = true;
             vault.bump = ctx.bumps.pit_draft_vault;
         }
 
@@ -174,12 +178,14 @@ pub mod gameplay_state {
     /// Initializes global duel vault PDA.
     pub fn initialize_duels(ctx: Context<InitializeDuels>) -> Result<()> {
         let vault = &mut ctx.accounts.duel_vault;
-        if vault.bump == 0 {
+        if !vault.initialized {
+            vault.initialized = true;
             vault.bump = ctx.bumps.duel_vault;
         }
         let open_queue = &mut ctx.accounts.duel_open_queue;
-        if open_queue.bump == 0 {
+        if !open_queue.initialized {
             open_queue.entries = Vec::new();
+            open_queue.initialized = true;
             open_queue.bump = ctx.bumps.duel_open_queue;
         }
         Ok(())
@@ -188,10 +194,11 @@ pub mod gameplay_state {
     /// Initializes a seed-scoped duel queue PDA.
     pub fn initialize_duel_queue(ctx: Context<InitializeDuelQueue>, seed: u64) -> Result<()> {
         let queue = &mut ctx.accounts.duel_queue;
-        if queue.bump == 0 {
+        if !queue.initialized {
             queue.seed = seed;
             queue.player_a = None;
             queue.player_b = None;
+            queue.initialized = true;
             queue.bump = ctx.bumps.duel_queue;
         } else {
             require!(queue.seed == seed, GameplayStateError::DuelSeedMismatch);
@@ -205,8 +212,27 @@ pub mod gameplay_state {
         run_mode: RunMode,
         max_weeks: u8,
     ) -> Result<()> {
-        require!((1..=5).contains(&max_weeks), GameplayStateError::InvalidWeek);
+        require!(
+            ctx.accounts.session_manager_authority.is_signer,
+            GameplayStateError::Unauthorized
+        );
+        require!(
+            (run_mode == RunMode::Campaign && max_weeks == 3)
+                || (run_mode == RunMode::Duel && max_weeks == 3)
+                || (run_mode == RunMode::Gauntlet && max_weeks == 5),
+            GameplayStateError::InvalidRunModeMaxWeeks
+        );
         let game_state = &mut ctx.accounts.game_state;
+        require!(
+            game_state.week == 1
+                && matches!(game_state.phase, Phase::Day1)
+                && game_state.total_moves == 0
+                && game_state.moves_remaining == DAY_MOVES
+                && !game_state.boss_fight_ready
+                && !game_state.is_dead
+                && !game_state.completed,
+            GameplayStateError::RunModeConfigurationLocked
+        );
         game_state.run_mode = run_mode;
         game_state.max_weeks = max_weeks;
         Ok(())
@@ -217,49 +243,71 @@ pub mod gameplay_state {
         let config = &mut ctx.accounts.gauntlet_config;
         let clock = Clock::get()?;
 
-        if config.bump == 0 {
+        if !config.initialized {
             config.entry_lamports = GAUNTLET_ENTRY_LAMPORTS;
             config.company_fee_bps = GAUNTLET_COMPANY_FEE_BPS as u16;
             config.pool_fee_bps = GAUNTLET_POOL_FEE_BPS as u16;
             config.current_epoch_id = 0;
             config.current_epoch_start_ts = clock.unix_timestamp;
             config.epoch_duration_seconds = GAUNTLET_EPOCH_DURATION_SECONDS;
+            config.initialized = true;
             config.bump = ctx.bumps.gauntlet_config;
         }
 
-        if ctx.accounts.gauntlet_pool_vault.bump == 0 {
+        if !ctx.accounts.gauntlet_pool_vault.initialized {
+            ctx.accounts.gauntlet_pool_vault.initialized = true;
             ctx.accounts.gauntlet_pool_vault.bump = ctx.bumps.gauntlet_pool_vault;
         }
 
-        if ctx.accounts.gauntlet_week1.bump == 0 {
+        if !ctx.accounts.gauntlet_week1.initialized {
             initialize_week_pool(&mut ctx.accounts.gauntlet_week1, 1)?;
+            ctx.accounts.gauntlet_week1.initialized = true;
             ctx.accounts.gauntlet_week1.bump = ctx.bumps.gauntlet_week1;
         } else {
-            require!(ctx.accounts.gauntlet_week1.week == 1, GameplayStateError::InvalidGauntletWeek);
+            require!(
+                ctx.accounts.gauntlet_week1.week == 1,
+                GameplayStateError::InvalidGauntletWeek
+            );
         }
-        if ctx.accounts.gauntlet_week2.bump == 0 {
+        if !ctx.accounts.gauntlet_week2.initialized {
             initialize_week_pool(&mut ctx.accounts.gauntlet_week2, 2)?;
+            ctx.accounts.gauntlet_week2.initialized = true;
             ctx.accounts.gauntlet_week2.bump = ctx.bumps.gauntlet_week2;
         } else {
-            require!(ctx.accounts.gauntlet_week2.week == 2, GameplayStateError::InvalidGauntletWeek);
+            require!(
+                ctx.accounts.gauntlet_week2.week == 2,
+                GameplayStateError::InvalidGauntletWeek
+            );
         }
-        if ctx.accounts.gauntlet_week3.bump == 0 {
+        if !ctx.accounts.gauntlet_week3.initialized {
             initialize_week_pool(&mut ctx.accounts.gauntlet_week3, 3)?;
+            ctx.accounts.gauntlet_week3.initialized = true;
             ctx.accounts.gauntlet_week3.bump = ctx.bumps.gauntlet_week3;
         } else {
-            require!(ctx.accounts.gauntlet_week3.week == 3, GameplayStateError::InvalidGauntletWeek);
+            require!(
+                ctx.accounts.gauntlet_week3.week == 3,
+                GameplayStateError::InvalidGauntletWeek
+            );
         }
-        if ctx.accounts.gauntlet_week4.bump == 0 {
+        if !ctx.accounts.gauntlet_week4.initialized {
             initialize_week_pool(&mut ctx.accounts.gauntlet_week4, 4)?;
+            ctx.accounts.gauntlet_week4.initialized = true;
             ctx.accounts.gauntlet_week4.bump = ctx.bumps.gauntlet_week4;
         } else {
-            require!(ctx.accounts.gauntlet_week4.week == 4, GameplayStateError::InvalidGauntletWeek);
+            require!(
+                ctx.accounts.gauntlet_week4.week == 4,
+                GameplayStateError::InvalidGauntletWeek
+            );
         }
-        if ctx.accounts.gauntlet_week5.bump == 0 {
+        if !ctx.accounts.gauntlet_week5.initialized {
             initialize_week_pool(&mut ctx.accounts.gauntlet_week5, 5)?;
+            ctx.accounts.gauntlet_week5.initialized = true;
             ctx.accounts.gauntlet_week5.bump = ctx.bumps.gauntlet_week5;
         } else {
-            require!(ctx.accounts.gauntlet_week5.week == 5, GameplayStateError::InvalidGauntletWeek);
+            require!(
+                ctx.accounts.gauntlet_week5.week == 5,
+                GameplayStateError::InvalidGauntletWeek
+            );
         }
 
         Ok(())
@@ -267,13 +315,11 @@ pub mod gameplay_state {
 
     /// Pays gauntlet entry and marks this run as gauntlet mode.
     pub fn enter_gauntlet(ctx: Context<EnterGauntlet>) -> Result<()> {
-        let company_treasury_expected = Pubkey::from_str(COMPANY_TREASURY_ADDRESS)
-            .map_err(|_| GameplayStateError::InvalidGauntletFeeAccount)?;
-        require_keys_eq!(
+        require_expected_address(
             ctx.accounts.company_treasury.key(),
-            company_treasury_expected,
-            GameplayStateError::InvalidGauntletFeeAccount
-        );
+            COMPANY_TREASURY_ADDRESS,
+            GameplayStateError::InvalidGauntletFeeAccount,
+        )?;
 
         let game_state = &mut ctx.accounts.game_state;
         require!(
@@ -341,6 +387,12 @@ pub mod gameplay_state {
             game_state.week >= 1 && game_state.week <= 5,
             GameplayStateError::InvalidGauntletWeek
         );
+        // Enforce end-of-week progression gate: gauntlet echo combat may only resolve
+        // after the player reaches Night3 with no moves remaining for the current week.
+        require!(
+            gauntlet_week_resolution_ready(game_state),
+            GameplayStateError::BossFightNotReady
+        );
 
         let week = game_state.week;
         require!(
@@ -348,7 +400,8 @@ pub mod gameplay_state {
             GameplayStateError::GauntletScoreMismatch
         );
         ctx.accounts.gauntlet_epoch_pool.epoch_id = epoch_id;
-        if ctx.accounts.gauntlet_epoch_pool.bump == 0 {
+        if !ctx.accounts.gauntlet_epoch_pool.initialized {
+            ctx.accounts.gauntlet_epoch_pool.initialized = true;
             ctx.accounts.gauntlet_epoch_pool.bump = ctx.bumps.gauntlet_epoch_pool;
             ctx.accounts.gauntlet_epoch_pool.finalized = false;
         }
@@ -359,8 +412,14 @@ pub mod gameplay_state {
             4 => &mut ctx.accounts.gauntlet_week4,
             _ => &mut ctx.accounts.gauntlet_week5,
         };
-        require!(week_pool.week == week, GameplayStateError::InvalidGauntletWeek);
-        require!(!week_pool.entries.is_empty(), GameplayStateError::GauntletNotInitialized);
+        require!(
+            week_pool.week == week,
+            GameplayStateError::InvalidGauntletWeek
+        );
+        require!(
+            !week_pool.entries.is_empty(),
+            GameplayStateError::GauntletNotInitialized
+        );
 
         let rand = derive_u64_random(&[
             b"gauntlet_draw",
@@ -374,7 +433,8 @@ pub mod gameplay_state {
         let player_inventory = &ctx.accounts.inventory;
         let player_stats = calculate_stats(player_inventory);
         let player_effects = generate_combat_effects(player_inventory);
-        let echo_inventory = snapshot_to_inventory(echo, game_state.session, ctx.accounts.player.key());
+        let echo_inventory =
+            snapshot_to_inventory(echo, game_state.session, ctx.accounts.player.key());
         let echo_stats = calculate_stats(&echo_inventory);
         let echo_effects = generate_combat_effects(&echo_inventory);
 
@@ -395,6 +455,8 @@ pub mod gameplay_state {
                 GauntletEchoSource::Player(p) => Some(p),
             },
         });
+        let (gauntlet_log, gauntlet_log_truncated, gauntlet_total_log_entries) =
+            cap_pvp_visual_log(&outcome.log);
         emit!(GauntletCombatVisual {
             player: ctx.accounts.player.key(),
             week,
@@ -402,7 +464,9 @@ pub mod gameplay_state {
             player_gear: player_inventory.gear,
             echo_tool: echo.loadout.tool,
             echo_gear: echo.loadout.gear,
-            combat_log: outcome.log.clone(),
+            combat_log: gauntlet_log,
+            combat_log_truncated: gauntlet_log_truncated,
+            combat_log_total_entries: gauntlet_total_log_entries,
             player_won: outcome.player_won,
             final_player_hp: outcome.final_player_hp,
             final_echo_hp: outcome.final_enemy_hp,
@@ -410,10 +474,10 @@ pub mod gameplay_state {
         });
 
         if outcome.player_won {
-        game_state.hp = outcome.final_player_hp.min(player_stats.max_hp);
-        game_state.gold = (game_state.gold as i32)
-            .saturating_add(outcome.gold_change as i32)
-            .max(0) as u16;
+            game_state.hp = outcome.final_player_hp.min(player_stats.max_hp);
+            game_state.gold = (game_state.gold as i32)
+                .saturating_add(outcome.gold_change as i32)
+                .max(0) as u16;
             game_state.boss_fight_ready = false;
 
             let points_awarded = gauntlet_survival_points(week);
@@ -431,7 +495,13 @@ pub mod gameplay_state {
                 .checked_add(points_awarded)
                 .ok_or(GameplayStateError::ArithmeticOverflow)?;
 
-            maybe_insert_player_echo(week_pool, game_state.week, player_inventory, game_state.gold, ctx.accounts.player.key())?;
+            maybe_insert_player_echo(
+                week_pool,
+                game_state.week,
+                player_inventory,
+                game_state.gold,
+                ctx.accounts.player.key(),
+            )?;
 
             if week >= game_state.max_weeks {
                 game_state.completed = true;
@@ -464,11 +534,7 @@ pub mod gameplay_state {
             game_state.hp = 0;
             game_state.is_dead = true;
             game_state.boss_fight_ready = false;
-            maybe_award_defender_points(
-                &echo,
-                week,
-                &mut ctx.accounts.gauntlet_epoch_pool,
-            )?;
+            maybe_award_defender_points(&echo, week, &mut ctx.accounts.gauntlet_epoch_pool)?;
 
             emit!(GauntletRunEnded {
                 player: ctx.accounts.player.key(),
@@ -507,15 +573,15 @@ pub mod gameplay_state {
         let current_epoch_id = epoch_id;
         let epoch_pool = &mut ctx.accounts.gauntlet_epoch_pool;
         epoch_pool.epoch_id = current_epoch_id;
-        epoch_pool.total_pool_lamports = ctx.accounts.gauntlet_pool_vault.to_account_info().lamports();
+        epoch_pool.total_pool_lamports = ctx
+            .accounts
+            .gauntlet_pool_vault
+            .to_account_info()
+            .lamports();
         if epoch_pool.pending_defender_points.is_empty() {
             epoch_pool.pending_defender_points = Vec::new();
         }
         epoch_pool.finalized = true;
-        if epoch_pool.bump == 0 {
-            epoch_pool.bump = 1;
-        }
-
         config.current_epoch_id = config
             .current_epoch_id
             .checked_add(1)
@@ -560,8 +626,10 @@ pub mod gameplay_state {
             GameplayStateError::GauntletAlreadyClaimed
         );
 
-        let pending_defender_points =
-            take_pending_defender_points(&mut ctx.accounts.gauntlet_epoch_pool, ctx.accounts.player.key());
+        let pending_defender_points = take_pending_defender_points(
+            &mut ctx.accounts.gauntlet_epoch_pool,
+            ctx.accounts.player.key(),
+        );
         if pending_defender_points > 0 {
             ctx.accounts.gauntlet_player_score.points = ctx
                 .accounts
@@ -603,21 +671,16 @@ pub mod gameplay_state {
 
     /// Pays duel entry and registers this run in async duel matchmaking.
     pub fn enter_duel(ctx: Context<EnterDuel>, seed: u64) -> Result<()> {
-        let company_treasury_expected = Pubkey::from_str(COMPANY_TREASURY_ADDRESS)
-            .map_err(|_| GameplayStateError::InvalidDuelFeeAccount)?;
-        let gauntlet_sink_expected = Pubkey::from_str(GAUNTLET_SINK_ADDRESS)
-            .map_err(|_| GameplayStateError::InvalidDuelFeeAccount)?;
-
-        require_keys_eq!(
+        require_expected_address(
             ctx.accounts.company_treasury.key(),
-            company_treasury_expected,
-            GameplayStateError::InvalidDuelFeeAccount
-        );
-        require_keys_eq!(
+            COMPANY_TREASURY_ADDRESS,
+            GameplayStateError::InvalidDuelFeeAccount,
+        )?;
+        require_expected_address(
             ctx.accounts.gauntlet_sink.key(),
-            gauntlet_sink_expected,
-            GameplayStateError::InvalidDuelFeeAccount
-        );
+            GAUNTLET_SINK_ADDRESS,
+            GameplayStateError::InvalidDuelFeeAccount,
+        )?;
         require!(
             !ctx.accounts.game_state.is_dead && !ctx.accounts.game_state.completed,
             GameplayStateError::DuelRunNotFinished
@@ -633,7 +696,10 @@ pub mod gameplay_state {
 
         let player_key = ctx.accounts.player.key();
         let duel_entry = &mut ctx.accounts.duel_entry;
-        require!(duel_entry.entry_lamports == 0, GameplayStateError::DuelAlreadyQueued);
+        require!(
+            duel_entry.entry_lamports == 0,
+            GameplayStateError::DuelAlreadyQueued
+        );
 
         system_program::transfer(
             CpiContext::new(
@@ -663,15 +729,14 @@ pub mod gameplay_state {
         duel_entry.bump = ctx.bumps.duel_entry;
 
         let open_queue = &mut ctx.accounts.duel_open_queue;
-        let slot = if let Some(matched_idx) =
-            find_matching_creator_index(open_queue, player_key, seed)
-        {
-            let creator = open_queue.entries.remove(matched_idx);
-            duel_entry.matched_creator = Some(creator);
-            2
-        } else {
-            1
-        };
+        let slot =
+            if let Some(matched_idx) = find_matching_creator_index(open_queue, player_key, seed) {
+                let creator = open_queue.entries.remove(matched_idx);
+                duel_entry.matched_creator = Some(creator);
+                2
+            } else {
+                1
+            };
 
         emit!(DuelQueued {
             seed,
@@ -686,21 +751,16 @@ pub mod gameplay_state {
 
     /// Finalizes this player's duel run and resolves duel outcomes when possible.
     pub fn finalize_duel_run(ctx: Context<FinalizeDuelRun>, seed: u64) -> Result<()> {
-        let company_treasury_expected = Pubkey::from_str(COMPANY_TREASURY_ADDRESS)
-            .map_err(|_| GameplayStateError::InvalidDuelFeeAccount)?;
-        let gauntlet_sink_expected = Pubkey::from_str(GAUNTLET_SINK_ADDRESS)
-            .map_err(|_| GameplayStateError::InvalidDuelFeeAccount)?;
-
-        require_keys_eq!(
+        require_expected_address(
             ctx.accounts.company_treasury.key(),
-            company_treasury_expected,
-            GameplayStateError::InvalidDuelFeeAccount
-        );
-        require_keys_eq!(
+            COMPANY_TREASURY_ADDRESS,
+            GameplayStateError::InvalidDuelFeeAccount,
+        )?;
+        require_expected_address(
             ctx.accounts.gauntlet_sink.key(),
-            gauntlet_sink_expected,
-            GameplayStateError::InvalidDuelFeeAccount
-        );
+            GAUNTLET_SINK_ADDRESS,
+            GameplayStateError::InvalidDuelFeeAccount,
+        )?;
         require!(
             ctx.accounts.generated_map.seed == seed,
             GameplayStateError::DuelSeedMismatch
@@ -718,7 +778,11 @@ pub mod gameplay_state {
 
         let player_key = ctx.accounts.player.key();
         let duel_entry = &mut ctx.accounts.duel_entry;
-        require_keys_eq!(duel_entry.player, player_key, GameplayStateError::DuelNotQueued);
+        require_keys_eq!(
+            duel_entry.player,
+            player_key,
+            GameplayStateError::DuelNotQueued
+        );
         require_keys_eq!(
             duel_entry.game_state,
             ctx.accounts.game_state.key(),
@@ -729,7 +793,10 @@ pub mod gameplay_state {
             game_state.session,
             GameplayStateError::DuelGameStateMismatch
         );
-        require!(duel_entry.seed == seed, GameplayStateError::DuelSeedMismatch);
+        require!(
+            duel_entry.seed == seed,
+            GameplayStateError::DuelSeedMismatch
+        );
         require!(!duel_entry.finalized, GameplayStateError::DuelAlreadyQueued);
 
         duel_entry.finalized = true;
@@ -768,6 +835,8 @@ pub mod gameplay_state {
                     duel_entry.loadout.gold_at_battle_start,
                 )?;
 
+                let (duel_log, duel_log_truncated, duel_total_log_entries) =
+                    cap_pvp_visual_log(&combat_outcome.log);
                 emit!(DuelCombatVisual {
                     seed,
                     player_a: creator.player,
@@ -776,7 +845,9 @@ pub mod gameplay_state {
                     player_a_gear: creator_inventory.gear,
                     player_b_tool: opponent_inventory.tool,
                     player_b_gear: opponent_inventory.gear,
-                    combat_log: combat_outcome.log.clone(),
+                    combat_log: duel_log,
+                    combat_log_truncated: duel_log_truncated,
+                    combat_log_total_entries: duel_total_log_entries,
                     player_a_won: combat_outcome.player_won,
                     final_player_a_hp: combat_outcome.final_player_hp,
                     final_player_b_hp: combat_outcome.final_enemy_hp,
@@ -787,18 +858,7 @@ pub mod gameplay_state {
                     .entry_lamports
                     .checked_add(duel_entry.entry_lamports)
                     .ok_or(GameplayStateError::ArithmeticOverflow)?;
-                let company_fee = total_pot
-                    .checked_mul(PIT_DRAFT_COMPANY_FEE_BPS)
-                    .and_then(|v| v.checked_div(PIT_DRAFT_BPS_DENOMINATOR))
-                    .ok_or(GameplayStateError::ArithmeticOverflow)?;
-                let gauntlet_fee = total_pot
-                    .checked_mul(PIT_DRAFT_GAUNTLET_FEE_BPS)
-                    .and_then(|v| v.checked_div(PIT_DRAFT_BPS_DENOMINATOR))
-                    .ok_or(GameplayStateError::ArithmeticOverflow)?;
-                let winner_payout = total_pot
-                    .checked_mul(PIT_DRAFT_WINNER_BPS)
-                    .and_then(|v| v.checked_div(PIT_DRAFT_BPS_DENOMINATOR))
-                    .ok_or(GameplayStateError::ArithmeticOverflow)?;
+                let (company_fee, gauntlet_fee, winner_payout) = compute_pvp_pot_split(total_pot)?;
                 let winner_key = if combat_outcome.player_won {
                     creator.player
                 } else {
@@ -812,8 +872,10 @@ pub mod gameplay_state {
                         winner_payout,
                     )?;
                 } else {
-                    let creator_wallet =
-                        resolve_wallet_account(ctx.accounts.creator_wallet.as_ref(), creator.player)?;
+                    let creator_wallet = resolve_wallet_account(
+                        ctx.accounts.creator_wallet.as_ref(),
+                        creator.player,
+                    )?;
                     transfer_lamports_from_vault(
                         &ctx.accounts.duel_vault.to_account_info(),
                         &creator_wallet,
@@ -926,21 +988,16 @@ pub mod gameplay_state {
     /// - If queue has a waiting player: player pays stake, match resolves immediately,
     ///   winner receives 95% of pot, company gets 3%, gauntlet sink gets 2%.
     pub fn enter_pit_draft(ctx: Context<EnterPitDraft>) -> Result<()> {
-        let company_treasury_expected = Pubkey::from_str(COMPANY_TREASURY_ADDRESS)
-            .map_err(|_| GameplayStateError::InvalidPitDraftFeeAccount)?;
-        let gauntlet_sink_expected = Pubkey::from_str(GAUNTLET_SINK_ADDRESS)
-            .map_err(|_| GameplayStateError::InvalidPitDraftFeeAccount)?;
-
-        require_keys_eq!(
+        require_expected_address(
             ctx.accounts.company_treasury.key(),
-            company_treasury_expected,
-            GameplayStateError::InvalidPitDraftFeeAccount
-        );
-        require_keys_eq!(
+            COMPANY_TREASURY_ADDRESS,
+            GameplayStateError::InvalidPitDraftFeeAccount,
+        )?;
+        require_expected_address(
             ctx.accounts.gauntlet_sink.key(),
-            gauntlet_sink_expected,
-            GameplayStateError::InvalidPitDraftFeeAccount
-        );
+            GAUNTLET_SINK_ADDRESS,
+            GameplayStateError::InvalidPitDraftFeeAccount,
+        )?;
 
         let queue = &mut ctx.accounts.pit_draft_queue;
         let player_key = ctx.accounts.player.key();
@@ -1057,6 +1114,8 @@ pub mod gameplay_state {
             entrant_start_gold,
         )?;
 
+        let (pit_log, pit_log_truncated, pit_total_log_entries) =
+            cap_pvp_visual_log(&combat_outcome.log);
         emit!(PitDraftCombatVisual {
             player_a: waiting_player,
             player_b: player_key,
@@ -1064,7 +1123,9 @@ pub mod gameplay_state {
             player_a_gear: waiting_inventory.gear,
             player_b_tool: entrant_inventory.tool,
             player_b_gear: entrant_inventory.gear,
-            combat_log: combat_outcome.log.clone(),
+            combat_log: pit_log,
+            combat_log_truncated: pit_log_truncated,
+            combat_log_total_entries: pit_total_log_entries,
             player_a_won: combat_outcome.player_won,
             final_player_a_hp: combat_outcome.final_player_hp,
             final_player_b_hp: combat_outcome.final_enemy_hp,
@@ -1074,27 +1135,7 @@ pub mod gameplay_state {
         let total_pot = PIT_DRAFT_ENTRY_LAMPORTS
             .checked_mul(2)
             .ok_or(GameplayStateError::ArithmeticOverflow)?;
-        let company_fee = total_pot
-            .checked_mul(PIT_DRAFT_COMPANY_FEE_BPS)
-            .and_then(|v| v.checked_div(PIT_DRAFT_BPS_DENOMINATOR))
-            .ok_or(GameplayStateError::ArithmeticOverflow)?;
-        let gauntlet_fee = total_pot
-            .checked_mul(PIT_DRAFT_GAUNTLET_FEE_BPS)
-            .and_then(|v| v.checked_div(PIT_DRAFT_BPS_DENOMINATOR))
-            .ok_or(GameplayStateError::ArithmeticOverflow)?;
-        let winner_payout = total_pot
-            .checked_mul(PIT_DRAFT_WINNER_BPS)
-            .and_then(|v| v.checked_div(PIT_DRAFT_BPS_DENOMINATOR))
-            .ok_or(GameplayStateError::ArithmeticOverflow)?;
-
-        let distributed = winner_payout
-            .checked_add(company_fee)
-            .and_then(|v| v.checked_add(gauntlet_fee))
-            .ok_or(GameplayStateError::ArithmeticOverflow)?;
-        require!(
-            distributed == total_pot,
-            GameplayStateError::ArithmeticOverflow
-        );
+        let (company_fee, gauntlet_fee, winner_payout) = compute_pvp_pot_split(total_pot)?;
 
         let winner_account = if combat_outcome.player_won {
             waiting_player_wallet.to_account_info()
@@ -1254,7 +1295,7 @@ pub mod gameplay_state {
                 week: game_state.week,
             });
 
-            if game_state.run_mode != RunMode::Gauntlet {
+            if should_resolve_weekly_boss(game_state.run_mode, game_state.week) {
                 // Resolve boss fight inline (same as move_player does)
                 let player_won = resolve_boss_fight(
                     game_state,
@@ -1703,7 +1744,7 @@ pub mod gameplay_state {
                     week: game_state.week,
                 });
 
-                if game_state.run_mode != RunMode::Gauntlet {
+                if should_resolve_weekly_boss(game_state.run_mode, game_state.week) {
                     let player_won = resolve_boss_fight(
                         game_state,
                         ctx.accounts.generated_map.seed,
@@ -1880,7 +1921,12 @@ fn is_pool_item_enabled(pool: &[u8; 10], index: usize) -> bool {
 }
 
 fn derive_u64_random(seeds: &[&[u8]]) -> u64 {
-    // Lightweight deterministic mixer for on-chain pseudo-random selection.
+    // SECURITY NOTE:
+    // This is a lightweight deterministic mixer for on-chain pseudo-random selection.
+    // Inputs are public/predictable (slot, pubkeys, tags), so this is NOT adversary-resistant RNG.
+    // For PvP modes with financial stakes, entrants can simulate outcomes off-chain and time participation.
+    // We currently accept this tradeoff for deterministic replay/auditability.
+    // TODO(PvP fairness): migrate queue/draft/gold/echo selection entropy to VRF-backed randomness.
     let mut acc: u64 = 0xcbf2_9ce4_8422_2325;
     for seed in seeds {
         for byte in *seed {
@@ -1893,6 +1939,17 @@ fn derive_u64_random(seeds: &[&[u8]]) -> u64 {
     acc ^= acc >> 27;
     acc = acc.wrapping_mul(0x94d0_49bb_1331_11eb);
     acc ^ (acc >> 31)
+}
+
+fn cap_pvp_visual_log(log: &[CombatLogEntry]) -> (Vec<CombatLogEntry>, bool, u16) {
+    let total_entries = core::cmp::min(log.len(), u16::MAX as usize) as u16;
+    let truncated = log.len() > MAX_PVP_VISUAL_LOG_ENTRIES;
+    let capped = if truncated {
+        log[..MAX_PVP_VISUAL_LOG_ENTRIES].to_vec()
+    } else {
+        log.to_vec()
+    };
+    (capped, truncated, total_entries)
 }
 
 fn draw_unique_indices(
@@ -1971,6 +2028,42 @@ fn build_pit_draft_inventory(
         gear_slot_capacity: MAX_GEAR_SLOTS,
         bump: 0,
     })
+}
+
+fn require_expected_address(
+    actual: Pubkey,
+    expected_address: &str,
+    error: GameplayStateError,
+) -> Result<()> {
+    let expected = Pubkey::from_str(expected_address).map_err(|_| error)?;
+    require_keys_eq!(actual, expected, error);
+    Ok(())
+}
+
+fn compute_pvp_pot_split(total_pot: u64) -> Result<(u64, u64, u64)> {
+    let company_fee = total_pot
+        .checked_mul(PIT_DRAFT_COMPANY_FEE_BPS)
+        .and_then(|v| v.checked_div(PIT_DRAFT_BPS_DENOMINATOR))
+        .ok_or(GameplayStateError::ArithmeticOverflow)?;
+    let gauntlet_fee = total_pot
+        .checked_mul(PIT_DRAFT_GAUNTLET_FEE_BPS)
+        .and_then(|v| v.checked_div(PIT_DRAFT_BPS_DENOMINATOR))
+        .ok_or(GameplayStateError::ArithmeticOverflow)?;
+    let winner_payout = total_pot
+        .checked_mul(PIT_DRAFT_WINNER_BPS)
+        .and_then(|v| v.checked_div(PIT_DRAFT_BPS_DENOMINATOR))
+        .ok_or(GameplayStateError::ArithmeticOverflow)?;
+
+    let distributed = winner_payout
+        .checked_add(company_fee)
+        .and_then(|v| v.checked_add(gauntlet_fee))
+        .ok_or(GameplayStateError::ArithmeticOverflow)?;
+    require!(
+        distributed == total_pot,
+        GameplayStateError::ArithmeticOverflow
+    );
+
+    Ok((company_fee, gauntlet_fee, winner_payout))
 }
 
 fn compute_eliminated_unmatched_distribution(entry_lamports: u64) -> Result<(u64, u64)> {
@@ -2572,7 +2665,10 @@ fn build_bootstrap_echo(week: u8, index: u64) -> Result<GauntletEchoSnapshot> {
 }
 
 fn count_items_by_type(item_type: ItemType) -> usize {
-    ITEMS.iter().filter(|def| def.item_type == item_type).count()
+    ITEMS
+        .iter()
+        .filter(|def| def.item_type == item_type)
+        .count()
 }
 
 fn item_index_by_type(item_type: ItemType, nth: usize) -> Option<usize> {
@@ -2586,6 +2682,19 @@ fn item_index_by_type(item_type: ItemType, nth: usize) -> Option<usize> {
         }
     }
     None
+}
+
+fn should_resolve_weekly_boss(run_mode: RunMode, week: u8) -> bool {
+    match run_mode {
+        RunMode::Campaign => true,
+        // Duel mode uses bosses on week 1/2; week 3 is async PvP resolution in finalize_duel_run.
+        RunMode::Duel => week < 3,
+        RunMode::Gauntlet => false,
+    }
+}
+
+fn gauntlet_week_resolution_ready(game_state: &GameState) -> bool {
+    game_state.boss_fight_ready && game_state.phase.is_night3() && game_state.moves_remaining == 0
 }
 
 fn snapshot_to_inventory(
@@ -2637,8 +2746,14 @@ fn upsert_player_score(
         score.claimed = false;
         score.bump = bump;
     }
-    require!(score.player == *player, GameplayStateError::GauntletScoreMismatch);
-    require!(score.epoch_id == epoch_id, GameplayStateError::GauntletScoreMismatch);
+    require!(
+        score.player == *player,
+        GameplayStateError::GauntletScoreMismatch
+    );
+    require!(
+        score.epoch_id == epoch_id,
+        GameplayStateError::GauntletScoreMismatch
+    );
     score.points = score
         .points
         .checked_add(add_points)
@@ -2692,7 +2807,10 @@ fn add_pending_defender_points(
     Ok(())
 }
 
-fn take_pending_defender_points(epoch_pool: &mut Account<GauntletEpochPool>, player: Pubkey) -> u64 {
+fn take_pending_defender_points(
+    epoch_pool: &mut Account<GauntletEpochPool>,
+    player: Pubkey,
+) -> u64 {
     if let Some(index) = epoch_pool
         .pending_defender_points
         .iter()
@@ -2727,9 +2845,7 @@ fn maybe_insert_player_echo(
         .seen_player_echoes
         .checked_add(1)
         .ok_or(GameplayStateError::ArithmeticOverflow)?;
-    week_pool.player_echoes_added = week_pool
-        .player_echoes_added
-        .saturating_add(1);
+    week_pool.player_echoes_added = week_pool.player_echoes_added.saturating_add(1);
 
     if week_pool.entries.len() < GAUNTLET_MAX_WEEKLY_ECHOES {
         week_pool.entries.push(snapshot);
@@ -2871,12 +2987,16 @@ pub struct InitializeDuelQueue<'info> {
 
 #[derive(Accounts)]
 pub struct ConfigureRunMode<'info> {
-    #[account(
-        mut,
-        has_one = player @ GameplayStateError::Unauthorized,
-    )]
+    #[account(mut)]
     pub game_state: Account<'info, GameState>,
-    pub player: Signer<'info>,
+
+    #[account(
+        seeds = [SESSION_MANAGER_RUNMODE_AUTHORITY_SEED],
+        bump,
+        seeds::program = SESSION_MANAGER_PROGRAM_ID
+    )]
+    /// Must be the session-manager PDA signer used to authorize mode configuration.
+    pub session_manager_authority: Signer<'info>,
 }
 
 #[derive(Accounts)]
@@ -3783,8 +3903,12 @@ pub struct PitDraftCombatVisual {
     pub player_b_tool: Option<ItemInstance>,
     /// Drafted gear for player B (7 slots populated, one empty)
     pub player_b_gear: [Option<ItemInstance>; 12],
-    /// Full deterministic combat trace (same semantics as PvE CombatLog entries)
+    /// Combat trace (same semantics as PvE CombatLog entries), truncated when very large.
     pub combat_log: Vec<CombatLogEntry>,
+    /// True when `combat_log` is truncated to `MAX_PVP_VISUAL_LOG_ENTRIES`.
+    pub combat_log_truncated: bool,
+    /// Total number of log entries before truncation.
+    pub combat_log_total_entries: u16,
     /// True when player A wins (player B wins when false)
     pub player_a_won: bool,
     pub final_player_a_hp: i16,
@@ -3828,6 +3952,8 @@ pub struct DuelCombatVisual {
     pub player_b_tool: Option<ItemInstance>,
     pub player_b_gear: [Option<ItemInstance>; 12],
     pub combat_log: Vec<CombatLogEntry>,
+    pub combat_log_truncated: bool,
+    pub combat_log_total_entries: u16,
     pub player_a_won: bool,
     pub final_player_a_hp: i16,
     pub final_player_b_hp: i16,
@@ -3873,6 +3999,8 @@ pub struct GauntletCombatVisual {
     pub echo_tool: Option<ItemInstance>,
     pub echo_gear: [Option<ItemInstance>; 12],
     pub combat_log: Vec<CombatLogEntry>,
+    pub combat_log_truncated: bool,
+    pub combat_log_total_entries: u16,
     pub player_won: bool,
     pub final_player_hp: i16,
     pub final_echo_hp: i16,
@@ -4142,6 +4270,7 @@ mod hp_logic_tests {
                     loadout,
                 },
             ],
+            initialized: true,
             bump: 1,
         };
 
@@ -4166,11 +4295,105 @@ mod hp_logic_tests {
                 finished_slot: 1,
                 loadout,
             }],
+            initialized: true,
             bump: 1,
         };
 
         let idx = find_matching_creator_index(&queue, entrant, seed);
         assert_eq!(idx, None);
+    }
+
+    #[test]
+    fn test_cap_pvp_visual_log_no_truncation() {
+        let log = vec![
+            CombatLogEntry::attack(1, true, 3),
+            CombatLogEntry::heal(1, false, 2),
+        ];
+        let (capped, truncated, total_entries) = cap_pvp_visual_log(&log);
+        assert!(!truncated);
+        assert_eq!(total_entries, 2);
+        assert_eq!(capped.len(), 2);
+    }
+
+    #[test]
+    fn test_cap_pvp_visual_log_truncates_at_limit() {
+        let mut log = Vec::with_capacity(MAX_PVP_VISUAL_LOG_ENTRIES + 10);
+        for turn in 0..(MAX_PVP_VISUAL_LOG_ENTRIES + 10) {
+            log.push(CombatLogEntry::attack((turn % 50) as u8 + 1, true, 1));
+        }
+
+        let (capped, truncated, total_entries) = cap_pvp_visual_log(&log);
+        assert!(truncated);
+        assert_eq!(total_entries as usize, MAX_PVP_VISUAL_LOG_ENTRIES + 10);
+        assert_eq!(capped.len(), MAX_PVP_VISUAL_LOG_ENTRIES);
+    }
+
+    #[test]
+    fn test_should_resolve_weekly_boss_campaign_all_weeks() {
+        assert!(should_resolve_weekly_boss(RunMode::Campaign, 1));
+        assert!(should_resolve_weekly_boss(RunMode::Campaign, 2));
+        assert!(should_resolve_weekly_boss(RunMode::Campaign, 3));
+    }
+
+    #[test]
+    fn test_should_resolve_weekly_boss_duel_only_weeks_1_2() {
+        assert!(should_resolve_weekly_boss(RunMode::Duel, 1));
+        assert!(should_resolve_weekly_boss(RunMode::Duel, 2));
+        assert!(!should_resolve_weekly_boss(RunMode::Duel, 3));
+    }
+
+    #[test]
+    fn test_should_resolve_weekly_boss_gauntlet_never() {
+        assert!(!should_resolve_weekly_boss(RunMode::Gauntlet, 1));
+        assert!(!should_resolve_weekly_boss(RunMode::Gauntlet, 3));
+        assert!(!should_resolve_weekly_boss(RunMode::Gauntlet, 5));
+    }
+
+    fn make_gauntlet_gate_state() -> GameState {
+        GameState {
+            player: Pubkey::default(),
+            burner_wallet: Pubkey::default(),
+            session: Pubkey::default(),
+            position_x: 0,
+            position_y: 0,
+            map_width: 10,
+            map_height: 10,
+            hp: 10,
+            gear_slots: 4,
+            week: 1,
+            phase: Phase::Night3,
+            moves_remaining: 0,
+            total_moves: 0,
+            boss_fight_ready: true,
+            gold: 0,
+            bump: 1,
+            campaign_level: 20,
+            run_mode: RunMode::Gauntlet,
+            max_weeks: 5,
+            is_dead: false,
+            completed: false,
+        }
+    }
+
+    #[test]
+    fn test_gauntlet_week_resolution_ready_requires_night3_zero_moves_and_ready_flag() {
+        let state = make_gauntlet_gate_state();
+        assert!(gauntlet_week_resolution_ready(&state));
+    }
+
+    #[test]
+    fn test_gauntlet_week_resolution_ready_rejects_missing_gate_conditions() {
+        let mut state = make_gauntlet_gate_state();
+        state.boss_fight_ready = false;
+        assert!(!gauntlet_week_resolution_ready(&state));
+
+        state = make_gauntlet_gate_state();
+        state.phase = Phase::Night2;
+        assert!(!gauntlet_week_resolution_ready(&state));
+
+        state = make_gauntlet_gate_state();
+        state.moves_remaining = 1;
+        assert!(!gauntlet_week_resolution_ready(&state));
     }
 }
 

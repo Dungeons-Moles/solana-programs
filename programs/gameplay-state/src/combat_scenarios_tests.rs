@@ -2,8 +2,8 @@ use super::{build_player_combatant, preprocess_enemy_effects};
 use crate::stats::calculate_stats;
 use anchor_lang::prelude::Pubkey;
 use combat_system::{
-    resolve_combat_with_player_gold, CombatLogEntry, CombatOutcome, LogAction, STATUS_BLEED, STATUS_CHILL,
-    STATUS_RUST, STATUS_SHRAPNEL,
+    resolve_combat_with_player_gold, CombatLogEntry, CombatOutcome, LogAction, STATUS_BLEED,
+    STATUS_CHILL, STATUS_RUST, STATUS_SHRAPNEL,
 };
 use field_enemies::archetypes::{get_enemy_combatant_input, ids};
 use player_inventory::effects::generate_combat_effects;

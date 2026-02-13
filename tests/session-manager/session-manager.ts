@@ -95,6 +95,13 @@ describe("session-manager", () => {
     );
   };
 
+  const getSessionManagerAuthorityPDA = () => {
+    return anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("session_manager_authority")],
+      program.programId,
+    );
+  };
+
   let counterInitialized = false;
   const [counterPDA] = getCounterPDA();
   let mapConfigInitialized = false;
@@ -248,6 +255,7 @@ describe("session-manager", () => {
     const [mapEnemiesPDA] = getMapEnemiesPDA(sessionPDA);
     const [mapPoisPDA] = getMapPoisPDA(sessionPDA);
     const [inventoryPDA] = getInventoryPDA(sessionPDA);
+    const [sessionManagerAuthorityPDA] = getSessionManagerAuthorityPDA();
 
     await (program.methods as any)
       .startDuelSession(forcedSeed)
@@ -260,6 +268,7 @@ describe("session-manager", () => {
         mapGeneratorProgram: mapGeneratorProgram.programId,
         player: user.publicKey,
         burnerWallet: burnerWallet.publicKey,
+        sessionManagerAuthority: sessionManagerAuthorityPDA,
         gameState: gameStatePDA,
         mapEnemies: mapEnemiesPDA,
         mapPois: mapPoisPDA,

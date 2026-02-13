@@ -58,7 +58,8 @@ pub const DUEL_OPEN_QUEUE_SEED: &[u8] = b"duel_open_queue";
 pub const DUEL_ENTRY_SEED: &[u8] = b"duel_entry";
 /// Maximum number of finished creators buffered for async duel matching.
 // Must stay under Solana CPI account allocation limit (~10,240 bytes account data).
-// DuelCreatorEntry::INIT_SPACE is currently 199 bytes, so 50 entries keeps the queue account safely below the limit.
+// DuelCreatorEntry::INIT_SPACE is currently 201 bytes, so 50 entries keeps the queue account safely below the limit
+// (8-byte discriminator + DuelOpenQueue::INIT_SPACE = 10,063 bytes total).
 pub const DUEL_OPEN_QUEUE_CAPACITY: usize = 50;
 
 /// PDA seed prefix for gauntlet config account

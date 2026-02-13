@@ -55,6 +55,7 @@ pub const INITIALIZE_MAP_POIS_DISCRIMINATOR: [u8; 8] =
     [0xa8, 0xec, 0xff, 0x37, 0xee, 0xd2, 0x19, 0xfb];
 pub const DISCOVER_VISIBLE_WAYPOINTS_DISCRIMINATOR: [u8; 8] =
     [0x3b, 0x26, 0x6a, 0x00, 0x3a, 0xb1, 0x50, 0xfc];
+pub const SESSION_MANAGER_AUTHORITY_SEED: &[u8] = b"session_manager_authority";
 
 #[program]
 pub mod session_manager {
@@ -346,13 +347,21 @@ pub mod session_manager {
             start_y,
         )?;
 
+        let session_manager_authority_signer: &[&[&[u8]]] = &[&[
+            SESSION_MANAGER_AUTHORITY_SEED,
+            &[ctx.bumps.session_manager_authority],
+        ]];
         gameplay_state::cpi::configure_run_mode(
-            CpiContext::new(
+            CpiContext::new_with_signer(
                 ctx.accounts.gameplay_state_program.to_account_info(),
                 gameplay_state::cpi::accounts::ConfigureRunMode {
                     game_state: ctx.accounts.game_state.to_account_info(),
-                    player: ctx.accounts.player.to_account_info(),
+                    session_manager_authority: ctx
+                        .accounts
+                        .session_manager_authority
+                        .to_account_info(),
                 },
+                session_manager_authority_signer,
             ),
             gameplay_state::state::RunMode::Duel,
             3,
@@ -489,13 +498,21 @@ pub mod session_manager {
             start_y,
         )?;
 
+        let session_manager_authority_signer: &[&[&[u8]]] = &[&[
+            SESSION_MANAGER_AUTHORITY_SEED,
+            &[ctx.bumps.session_manager_authority],
+        ]];
         gameplay_state::cpi::configure_run_mode(
-            CpiContext::new(
+            CpiContext::new_with_signer(
                 ctx.accounts.gameplay_state_program.to_account_info(),
                 gameplay_state::cpi::accounts::ConfigureRunMode {
                     game_state: ctx.accounts.game_state.to_account_info(),
-                    player: ctx.accounts.player.to_account_info(),
+                    session_manager_authority: ctx
+                        .accounts
+                        .session_manager_authority
+                        .to_account_info(),
                 },
+                session_manager_authority_signer,
             ),
             gameplay_state::state::RunMode::Gauntlet,
             5,
@@ -938,6 +955,13 @@ pub struct StartDuelSession<'info> {
     #[account(mut)]
     pub burner_wallet: Signer<'info>,
 
+    #[account(
+        seeds = [SESSION_MANAGER_AUTHORITY_SEED],
+        bump
+    )]
+    /// CHECK: PDA signer used to authorize configure_run_mode CPI.
+    pub session_manager_authority: UncheckedAccount<'info>,
+
     pub map_config: Account<'info, MapConfigAccount>,
 
     #[account(mut)]
@@ -1000,6 +1024,13 @@ pub struct StartGauntletSession<'info> {
 
     #[account(mut)]
     pub burner_wallet: Signer<'info>,
+
+    #[account(
+        seeds = [SESSION_MANAGER_AUTHORITY_SEED],
+        bump
+    )]
+    /// CHECK: PDA signer used to authorize configure_run_mode CPI.
+    pub session_manager_authority: UncheckedAccount<'info>,
 
     pub map_config: Account<'info, MapConfigAccount>,
 
@@ -1254,19 +1285,13 @@ fn derive_pvp_seed(
         .wrapping_add(clock.unix_timestamp as u64);
 
     for byte in domain {
-        acc = acc
-            .wrapping_mul(0x100_0000_01B3)
-            .wrapping_add(*byte as u64);
+        acc = acc.wrapping_mul(0x100_0000_01B3).wrapping_add(*byte as u64);
     }
     for byte in player.as_ref() {
-        acc = acc
-            .wrapping_mul(0x100_0000_01B3)
-            .wrapping_add(*byte as u64);
+        acc = acc.wrapping_mul(0x100_0000_01B3).wrapping_add(*byte as u64);
     }
     for byte in burner_wallet.as_ref() {
-        acc = acc
-            .wrapping_mul(0x100_0000_01B3)
-            .wrapping_add(*byte as u64);
+        acc = acc.wrapping_mul(0x100_0000_01B3).wrapping_add(*byte as u64);
     }
 
     acc

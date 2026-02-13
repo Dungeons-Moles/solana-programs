@@ -183,6 +183,8 @@ pub struct PitDraftQueue {
     pub waiting_player: Option<Pubkey>,
     /// Waiting player's profile account.
     pub waiting_profile: Option<Pubkey>,
+    /// Explicit init sentinel (do not rely on bump value).
+    pub initialized: bool,
     /// PDA bump seed.
     pub bump: u8,
 }
@@ -191,6 +193,8 @@ pub struct PitDraftQueue {
 #[account]
 #[derive(InitSpace)]
 pub struct PitDraftVault {
+    /// Explicit init sentinel (do not rely on bump value).
+    pub initialized: bool,
     /// PDA bump seed.
     pub bump: u8,
 }
@@ -243,8 +247,7 @@ pub struct DuelParticipant {
 }
 
 impl DuelParticipant {
-    pub const INIT_SPACE: usize =
-        32 + 32 + 32 + 8 + 1 + 1 + DuelLoadoutSnapshot::INIT_SPACE;
+    pub const INIT_SPACE: usize = 32 + 32 + 32 + 8 + 1 + 1 + DuelLoadoutSnapshot::INIT_SPACE;
 }
 
 /// Seed-scoped duel queue state.
@@ -256,23 +259,28 @@ pub struct DuelQueue {
     pub player_a: Option<DuelParticipant>,
     /// Second participant.
     pub player_b: Option<DuelParticipant>,
+    /// Explicit init sentinel (do not rely on bump value).
+    pub initialized: bool,
     /// PDA bump seed.
     pub bump: u8,
 }
 
 impl DuelQueue {
-    pub const INIT_SPACE: usize = 8 + (1 + DuelParticipant::INIT_SPACE) + (1 + DuelParticipant::INIT_SPACE) + 1;
+    pub const INIT_SPACE: usize =
+        8 + (1 + DuelParticipant::INIT_SPACE) + (1 + DuelParticipant::INIT_SPACE) + 1 + 1;
 }
 
 /// Vault account holding duel stakes.
 #[account]
 pub struct DuelVault {
+    /// Explicit init sentinel (do not rely on bump value).
+    pub initialized: bool,
     /// PDA bump seed.
     pub bump: u8,
 }
 
 impl DuelVault {
-    pub const INIT_SPACE: usize = 1;
+    pub const INIT_SPACE: usize = 1 + 1;
 }
 
 /// Finished creator snapshot waiting for an async duel opponent.
@@ -293,11 +301,14 @@ impl DuelCreatorEntry {
 #[account]
 pub struct DuelOpenQueue {
     pub entries: Vec<DuelCreatorEntry>,
+    /// Explicit init sentinel (do not rely on bump value).
+    pub initialized: bool,
     pub bump: u8,
 }
 
 impl DuelOpenQueue {
-    pub const INIT_SPACE: usize = 4 + (DUEL_OPEN_QUEUE_CAPACITY * DuelCreatorEntry::INIT_SPACE) + 1;
+    pub const INIT_SPACE: usize =
+        4 + (DUEL_OPEN_QUEUE_CAPACITY * DuelCreatorEntry::INIT_SPACE) + 1 + 1;
 }
 
 /// Per-session duel staking/match state.
@@ -345,8 +356,7 @@ pub struct GauntletLoadoutSnapshot {
 
 impl GauntletLoadoutSnapshot {
     pub const ITEM_OPTION_SPACE: usize = 11;
-    pub const INIT_SPACE: usize =
-        Self::ITEM_OPTION_SPACE + (12 * Self::ITEM_OPTION_SPACE) + 2;
+    pub const INIT_SPACE: usize = Self::ITEM_OPTION_SPACE + (12 * Self::ITEM_OPTION_SPACE) + 2;
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -368,20 +378,24 @@ pub struct GauntletConfig {
     pub current_epoch_id: u64,
     pub current_epoch_start_ts: i64,
     pub epoch_duration_seconds: i64,
+    /// Explicit init sentinel (do not rely on bump value).
+    pub initialized: bool,
     pub bump: u8,
 }
 
 impl GauntletConfig {
-    pub const INIT_SPACE: usize = 8 + 2 + 2 + 8 + 8 + 8 + 1;
+    pub const INIT_SPACE: usize = 8 + 2 + 2 + 8 + 8 + 8 + 1 + 1;
 }
 
 #[account]
 pub struct GauntletPoolVault {
+    /// Explicit init sentinel (do not rely on bump value).
+    pub initialized: bool,
     pub bump: u8,
 }
 
 impl GauntletPoolVault {
-    pub const INIT_SPACE: usize = 1;
+    pub const INIT_SPACE: usize = 1 + 1;
 }
 
 #[account]
@@ -391,6 +405,8 @@ pub struct GauntletWeekPool {
     pub player_echoes_added: u16,
     pub seen_player_echoes: u64,
     pub entries: Vec<GauntletEchoSnapshot>,
+    /// Explicit init sentinel (do not rely on bump value).
+    pub initialized: bool,
     pub bump: u8,
 }
 
@@ -401,6 +417,7 @@ impl GauntletWeekPool {
         + 8
         + 4
         + (crate::constants::GAUNTLET_MAX_WEEKLY_ECHOES * GauntletEchoSnapshot::INIT_SPACE)
+        + 1
         + 1;
 }
 
@@ -410,14 +427,22 @@ pub struct GauntletEpochPool {
     pub total_pool_lamports: u64,
     pub total_points: u64,
     pub pending_defender_points: Vec<GauntletPendingPoints>,
+    /// Explicit init sentinel (do not rely on bump value).
+    pub initialized: bool,
     pub finalized: bool,
     pub bump: u8,
 }
 
 impl GauntletEpochPool {
     pub const MAX_PENDING_DEFENDERS: usize = 200;
-    pub const INIT_SPACE: usize =
-        8 + 8 + 8 + 4 + (Self::MAX_PENDING_DEFENDERS * GauntletPendingPoints::INIT_SPACE) + 1 + 1;
+    pub const INIT_SPACE: usize = 8
+        + 8
+        + 8
+        + 4
+        + (Self::MAX_PENDING_DEFENDERS * GauntletPendingPoints::INIT_SPACE)
+        + 1
+        + 1
+        + 1;
 }
 
 #[account]
@@ -441,4 +466,135 @@ pub struct GauntletPendingPoints {
 
 impl GauntletPendingPoints {
     pub const INIT_SPACE: usize = 32 + 8;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anchor_lang::{prelude::Pubkey, AnchorSerialize};
+    use player_inventory::state::Tier;
+
+    fn sample_item(seed: u8) -> ItemInstance {
+        ItemInstance {
+            item_id: [seed; 8],
+            tier: Tier::III,
+            tool_oil_flags: u8::MAX,
+        }
+    }
+
+    fn sample_duel_loadout(seed: u8) -> DuelLoadoutSnapshot {
+        DuelLoadoutSnapshot {
+            tool: Some(sample_item(seed)),
+            gear: [Some(sample_item(seed)); 12],
+            gold_at_battle_start: u16::MAX,
+        }
+    }
+
+    fn sample_duel_creator(seed: u8) -> DuelCreatorEntry {
+        DuelCreatorEntry {
+            player: Pubkey::new_from_array([seed; 32]),
+            seed: u64::from(seed),
+            entry_lamports: u64::MAX,
+            finished_slot: u64::MAX - 1,
+            loadout: sample_duel_loadout(seed),
+        }
+    }
+
+    fn sample_gauntlet_loadout(seed: u8) -> GauntletLoadoutSnapshot {
+        GauntletLoadoutSnapshot {
+            tool: Some(sample_item(seed)),
+            gear: [Some(sample_item(seed)); 12],
+            gold_at_battle_start: u16::MAX,
+        }
+    }
+
+    #[test]
+    fn duel_open_queue_init_space_matches_max_serialized_size() {
+        let entries = (0..DUEL_OPEN_QUEUE_CAPACITY)
+            .map(|idx| sample_duel_creator((idx % 255) as u8))
+            .collect::<Vec<_>>();
+        let queue = DuelOpenQueue {
+            entries,
+            initialized: true,
+            bump: 255,
+        };
+        let serialized_len = queue
+            .try_to_vec()
+            .expect("duel open queue should serialize")
+            .len();
+
+        assert_eq!(
+            serialized_len,
+            DuelOpenQueue::INIT_SPACE,
+            "DuelOpenQueue INIT_SPACE mismatch: serialized={}, init_space={}",
+            serialized_len,
+            DuelOpenQueue::INIT_SPACE
+        );
+    }
+
+    #[test]
+    fn gauntlet_week_pool_init_space_matches_max_serialized_size() {
+        let entries = (0..crate::constants::GAUNTLET_MAX_WEEKLY_ECHOES)
+            .map(|idx| GauntletEchoSnapshot {
+                week: 5,
+                // Use the largest enum variant for worst-case sizing.
+                source: GauntletEchoSource::Player(Pubkey::new_from_array([(idx % 255) as u8; 32])),
+                loadout: sample_gauntlet_loadout((idx % 255) as u8),
+            })
+            .collect::<Vec<_>>();
+
+        let pool = GauntletWeekPool {
+            week: 5,
+            bootstrap_active: true,
+            player_echoes_added: u16::MAX,
+            seen_player_echoes: u64::MAX,
+            entries,
+            initialized: true,
+            bump: 255,
+        };
+        let serialized_len = pool
+            .try_to_vec()
+            .expect("gauntlet week pool should serialize")
+            .len();
+
+        assert_eq!(
+            serialized_len,
+            GauntletWeekPool::INIT_SPACE,
+            "GauntletWeekPool INIT_SPACE mismatch: serialized={}, init_space={}",
+            serialized_len,
+            GauntletWeekPool::INIT_SPACE
+        );
+    }
+
+    #[test]
+    fn gauntlet_epoch_pool_init_space_matches_max_serialized_size() {
+        let pending_defender_points = (0..GauntletEpochPool::MAX_PENDING_DEFENDERS)
+            .map(|idx| GauntletPendingPoints {
+                player: Pubkey::new_from_array([(idx % 255) as u8; 32]),
+                points: u64::MAX - idx as u64,
+            })
+            .collect::<Vec<_>>();
+
+        let epoch_pool = GauntletEpochPool {
+            epoch_id: u64::MAX,
+            total_pool_lamports: u64::MAX - 1,
+            total_points: u64::MAX - 2,
+            pending_defender_points,
+            initialized: true,
+            finalized: true,
+            bump: 255,
+        };
+        let serialized_len = epoch_pool
+            .try_to_vec()
+            .expect("gauntlet epoch pool should serialize")
+            .len();
+
+        assert_eq!(
+            serialized_len,
+            GauntletEpochPool::INIT_SPACE,
+            "GauntletEpochPool INIT_SPACE mismatch: serialized={}, init_space={}",
+            serialized_len,
+            GauntletEpochPool::INIT_SPACE
+        );
+    }
 }

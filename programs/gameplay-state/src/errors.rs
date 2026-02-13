@@ -149,4 +149,10 @@ pub enum GameplayStateError {
 
     #[msg("Gauntlet entry already paid for this run")]
     GauntletAlreadyEntered,
+
+    #[msg("Run mode can only be configured at session start")]
+    RunModeConfigurationLocked,
+
+    #[msg("Invalid max weeks value for run mode")]
+    InvalidRunModeMaxWeeks,
 }

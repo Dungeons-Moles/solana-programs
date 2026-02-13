@@ -176,6 +176,13 @@ describe("gameplay-state", () => {
     );
   };
 
+  const getSessionManagerAuthorityPDA = () => {
+    return anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("session_manager_authority")],
+      sessionProgram.programId,
+    );
+  };
+
   // Helper to derive PlayerProfile PDA
   const getPlayerProfilePDA = (player: anchor.web3.PublicKey) => {
     return anchor.web3.PublicKey.findProgramAddressSync(
@@ -482,6 +489,7 @@ describe("gameplay-state", () => {
     const [mapPoisPDA] = getMapPoisPDA(sessionPDA);
     const [inventoryPDA] = getInventoryPDA(sessionPDA);
     const [generatedMapPDA] = getGeneratedMapPDA(sessionPDA);
+    const [sessionManagerAuthorityPDA] = getSessionManagerAuthorityPDA();
 
     await playerProfileProgram.methods
       .initializeProfile("TestDuelPlayer")
@@ -504,6 +512,7 @@ describe("gameplay-state", () => {
         mapGeneratorProgram: mapGeneratorProgram.programId,
         player: user.publicKey,
         burnerWallet: burnerWallet.publicKey,
+        sessionManagerAuthority: sessionManagerAuthorityPDA,
         gameState: gameStatePDA,
         mapEnemies: mapEnemiesPDA,
         mapPois: mapPoisPDA,
@@ -575,6 +584,11 @@ describe("gameplay-state", () => {
         gauntletSink,
         systemProgram: SystemProgram.programId,
       } as any)
+      .preInstructions([
+        anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+          units: 400000,
+        }),
+      ])
       .signers([janitor.user])
       .rpc();
 
@@ -657,6 +671,47 @@ describe("gameplay-state", () => {
       .signers([burnerWallet])
       .rpc();
     return { x: targetX, y: targetY };
+  };
+
+  const prepareGauntletWeekResolution = async (
+    burnerWallet: Keypair,
+    gameStatePDA: anchor.web3.PublicKey,
+    startX: number,
+    startY: number,
+    mapWidth: number,
+    mapHeight: number,
+  ): Promise<boolean> => {
+    try {
+      await gameplayProgram.methods
+        .setPhaseForTesting({ night3: {} }, 1)
+        .accounts({
+          gameState: gameStatePDA,
+          burnerWallet: burnerWallet.publicKey,
+        } as any)
+        .signers([burnerWallet])
+        .rpc();
+    } catch (error: any) {
+      if (error.toString().includes("TestOnlyInstructionDisabled")) {
+        return false;
+      }
+      throw error;
+    }
+
+    const target = await getAdjacentTargetByTile(
+      gameStatePDA,
+      startX,
+      startY,
+      mapWidth,
+      mapHeight,
+      false,
+    );
+    await movePlayer(burnerWallet, gameStatePDA, target.x, target.y);
+
+    const gs = await gameplayProgram.account.gameState.fetch(gameStatePDA);
+    expect(gs.bossFightReady).to.equal(true);
+    expect(gs.movesRemaining).to.equal(0);
+    expect(gs.phase).to.deep.equal({ night3: {} });
+    return true;
   };
 
   const isWalkableTile = (map: any, x: number, y: number) => {
@@ -1705,6 +1760,25 @@ describe("gameplay-state", () => {
           .signers([player.user])
           .rpc();
 
+        const ready = await prepareGauntletWeekResolution(
+          player.burnerWallet,
+          player.gameStatePDA,
+          player.startX,
+          player.startY,
+          player.mapWidth,
+          player.mapHeight,
+        );
+        if (!ready) {
+          await cleanup(
+            player.user,
+            player.burnerWallet,
+            player.sessionPDA,
+            player.gameStatePDA,
+            player.campaignLevel,
+          );
+          return;
+        }
+
         await (gameplayProgram.methods as any)
           .resolveGauntletWeek(new anchor.BN(0))
           .accounts({
@@ -1787,6 +1861,25 @@ describe("gameplay-state", () => {
           } as any)
           .signers([player.user])
           .rpc();
+
+        const ready = await prepareGauntletWeekResolution(
+          player.burnerWallet,
+          player.gameStatePDA,
+          player.startX,
+          player.startY,
+          player.mapWidth,
+          player.mapHeight,
+        );
+        if (!ready) {
+          await cleanup(
+            player.user,
+            player.burnerWallet,
+            player.sessionPDA,
+            player.gameStatePDA,
+            player.campaignLevel,
+          );
+          return;
+        }
 
         const companyAfter = await provider.connection.getBalance(companyTreasury);
         const vaultAfter = await provider.connection.getBalance(gauntletPoolVaultPDA);

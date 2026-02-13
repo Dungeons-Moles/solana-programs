@@ -84,9 +84,13 @@ pub fn get_boss_id(stage: u8, week: u8) -> Result<[u8; 12]> {
 
 /// Get duel week 1/2 boss combat input based on map seed.
 /// Week 3 has no weekly boss in duel mode and returns InvalidWeek.
-pub fn get_duel_boss_for_combat(seed: u64, week: u8) -> Result<combat_system::state::CombatantInput> {
+pub fn get_duel_boss_for_combat(
+    seed: u64,
+    week: u8,
+) -> Result<combat_system::state::CombatantInput> {
     let boss_week = to_boss_week(week)?;
-    let boss = boss_system::select_duel_week_boss(seed, boss_week).ok_or(GameplayStateError::InvalidWeek)?;
+    let boss = boss_system::select_duel_week_boss(seed, boss_week)
+        .ok_or(GameplayStateError::InvalidWeek)?;
     let scaled = boss_system::scale_boss(boss, 20, boss_week);
     Ok(boss_system::scaling::to_combatant_input(&scaled))
 }
@@ -95,7 +99,8 @@ pub fn get_duel_boss_for_combat(seed: u64, week: u8) -> Result<combat_system::st
 /// Week 3 has no weekly boss in duel mode and returns InvalidWeek.
 pub fn get_duel_boss_id(seed: u64, week: u8) -> Result<[u8; 12]> {
     let boss_week = to_boss_week(week)?;
-    let boss = boss_system::select_duel_week_boss(seed, boss_week).ok_or(GameplayStateError::InvalidWeek)?;
+    let boss = boss_system::select_duel_week_boss(seed, boss_week)
+        .ok_or(GameplayStateError::InvalidWeek)?;
     Ok(boss.id)
 }
 

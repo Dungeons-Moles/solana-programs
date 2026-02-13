@@ -315,8 +315,16 @@ pub mod poi_system {
         map_pois.seed = seed;
         map_pois.shop_state = ShopState::default();
 
+        // ABI NOTE:
+        // `generated_map_data` stores raw POI type IDs encoded by map-generator (1..=14).
+        // The ID mapping is a cross-program ABI and must remain stable between map-generator
+        // placement logic and poi-system POI definitions (`pois::L*_*.id` constants).
+        //
         // Counter Cache (L13) is boss-prep content and must not appear in PvP run modes.
-        let exclude_counter_cache = matches!(ctx.accounts.game_state.run_mode, RunMode::Duel | RunMode::Gauntlet);
+        let exclude_counter_cache = matches!(
+            ctx.accounts.game_state.run_mode,
+            RunMode::Duel | RunMode::Gauntlet
+        );
 
         // Copy POIs from generated map to MapPois
         let mut pois = Vec::with_capacity(poi_count);
@@ -327,7 +335,7 @@ pub mod poi_system {
             }
 
             let poi_type = generated_map_data[poi_start];
-            if exclude_counter_cache && poi_type == 13 {
+            if exclude_counter_cache && poi_type == pois::L13_COUNTER_CACHE.id {
                 continue;
             }
             let is_used = generated_map_data[poi_start + 1] != 0;
@@ -339,7 +347,7 @@ pub mod poi_system {
                 x,
                 y,
                 used: is_used,
-                discovered: poi_type == 1, // Mole Den (L1) is always discovered
+                discovered: poi_type == pois::L1_MOLE_DEN.id, // Mole Den (L1) is always discovered
                 week_spawned: week,
             });
         }

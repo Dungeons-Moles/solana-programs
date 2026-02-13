@@ -48,6 +48,13 @@ describe("gameplay-state", () => {
     );
   };
 
+  const getDuelSessionPDA = (player: anchor.web3.PublicKey) => {
+    return anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("duel_session"), player.toBuffer()],
+      sessionProgram.programId,
+    );
+  };
+
   const getMapEnemiesPDA = (sessionPda: anchor.web3.PublicKey) => {
     return anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("map_enemies"), sessionPda.toBuffer()],
@@ -218,9 +225,7 @@ describe("gameplay-state", () => {
   const companyTreasury = new anchor.web3.PublicKey(
     "5LvEA4tH5H5DtWCxa3FcauokxAycvafX9ruvcT2mEXt8",
   );
-  const gauntletSink = new anchor.web3.PublicKey(
-    "1nc1nerator11111111111111111111111111111111",
-  );
+  const gauntletPoolVault = gauntletPoolVaultPDA;
   let treasuryFunded = false;
 
   const ensureCounterExists = async () => {
@@ -265,6 +270,7 @@ describe("gameplay-state", () => {
 
   const ensurePitDraftExists = async () => {
     if (pitDraftInitialized) return;
+    await ensureGauntletExists();
     await ensureTreasuryAccountsFunded();
     const admin = provider.wallet;
     try {
@@ -287,6 +293,7 @@ describe("gameplay-state", () => {
 
   const ensureDuelsExists = async () => {
     if (duelsInitialized) return;
+    await ensureGauntletExists();
     await ensureTreasuryAccountsFunded();
     const admin = provider.wallet;
     try {
@@ -468,7 +475,6 @@ describe("gameplay-state", () => {
     const user = Keypair.generate();
     const burnerWallet = Keypair.generate();
     const duelCampaignLevel = 20;
-    const forcedSeed = new anchor.BN(0);
 
     const userAirdropSig = await provider.connection.requestAirdrop(
       user.publicKey,
@@ -483,7 +489,7 @@ describe("gameplay-state", () => {
     await provider.connection.confirmTransaction(burnerAirdropSig);
 
     const [playerProfilePDA] = getPlayerProfilePDA(user.publicKey);
-    const [sessionPDA] = getSessionPDA(user.publicKey, duelCampaignLevel);
+    const [sessionPDA] = getDuelSessionPDA(user.publicKey);
     const [gameStatePDA] = getGameStatePDA(sessionPDA);
     const [mapEnemiesPDA] = getMapEnemiesPDA(sessionPDA);
     const [mapPoisPDA] = getMapPoisPDA(sessionPDA);
@@ -502,7 +508,7 @@ describe("gameplay-state", () => {
       .rpc();
 
     await (sessionProgram.methods as any)
-      .startDuelSession(forcedSeed)
+      .startDuelSession()
       .accounts({
         gameSession: sessionPDA,
         sessionCounter: counterPDA,
@@ -551,7 +557,7 @@ describe("gameplay-state", () => {
 
   const ensureTreasuryAccountsFunded = async () => {
     if (treasuryFunded) return;
-    for (const recipient of [companyTreasury, gauntletSink]) {
+    for (const recipient of [companyTreasury]) {
       const balance = await provider.connection.getBalance(recipient);
       if (balance < 1_000_000) {
         const sig = await provider.connection.requestAirdrop(
@@ -581,7 +587,7 @@ describe("gameplay-state", () => {
         waitingProfile: queue.waitingProfile,
         waitingPlayerWallet: queue.waitingPlayer,
         companyTreasury,
-        gauntletSink,
+        gauntletPoolVault,
         systemProgram: SystemProgram.programId,
       } as any)
       .preInstructions([
@@ -1455,7 +1461,7 @@ describe("gameplay-state", () => {
             waitingProfile: null,
             waitingPlayerWallet: null,
             companyTreasury,
-            gauntletSink,
+            gauntletPoolVault,
             systemProgram: SystemProgram.programId,
           } as any)
           .signers([player.user])
@@ -1508,7 +1514,7 @@ describe("gameplay-state", () => {
           companyTreasury,
         );
         const gauntletBefore = await provider.connection.getBalance(
-          gauntletSink,
+          gauntletPoolVault,
         );
 
         await (gameplayProgram.methods as any)
@@ -1521,7 +1527,7 @@ describe("gameplay-state", () => {
             waitingProfile: null,
             waitingPlayerWallet: null,
             companyTreasury,
-            gauntletSink,
+            gauntletPoolVault,
             systemProgram: SystemProgram.programId,
           } as any)
           .preInstructions([
@@ -1556,7 +1562,7 @@ describe("gameplay-state", () => {
             waitingProfile: playerOne.playerProfilePDA,
             waitingPlayerWallet: playerOne.user.publicKey,
             companyTreasury,
-            gauntletSink,
+            gauntletPoolVault,
             systemProgram: SystemProgram.programId,
           } as any)
           .preInstructions([
@@ -1576,12 +1582,11 @@ describe("gameplay-state", () => {
           pitDraftVaultPDA,
         );
         const companyAfter = await provider.connection.getBalance(companyTreasury);
-        const gauntletAfter = await provider.connection.getBalance(gauntletSink);
+        const gauntletAfter = await provider.connection.getBalance(gauntletPoolVault);
 
         expect(vaultAfterSecond).to.equal(vaultBalanceBefore);
         expect(companyAfter - companyBefore).to.equal(PIT_DRAFT_COMPANY_FEE);
-        // Gauntlet sink uses the incinerator address in dev, so funds are burned.
-        expect(gauntletAfter - gauntletBefore).to.equal(0);
+        expect(gauntletAfter - gauntletBefore).to.equal(PIT_DRAFT_GAUNTLET_FEE);
 
         await cleanup(
           playerOne.user,
@@ -1621,7 +1626,7 @@ describe("gameplay-state", () => {
               gameState: player.gameStatePDA,
               generatedMap: generatedMapPDA,
               companyTreasury,
-              gauntletSink,
+              gauntletPoolVault,
               systemProgram: SystemProgram.programId,
             } as any)
             .signers([player.user])
@@ -1669,7 +1674,7 @@ describe("gameplay-state", () => {
             gameState: playerOne.gameStatePDA,
             generatedMap: generatedMapPDA,
             companyTreasury,
-            gauntletSink,
+            gauntletPoolVault,
             systemProgram: SystemProgram.programId,
           } as any)
           .signers([playerOne.user])
@@ -1685,7 +1690,7 @@ describe("gameplay-state", () => {
             gameState: playerTwo.gameStatePDA,
             generatedMap: generatedMapTwoPDA,
             companyTreasury,
-            gauntletSink,
+            gauntletPoolVault,
             systemProgram: SystemProgram.programId,
           } as any)
           .signers([playerTwo.user])

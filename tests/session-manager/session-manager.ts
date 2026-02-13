@@ -36,6 +36,13 @@ describe("session-manager", () => {
     );
   };
 
+  const getDuelSessionPDA = (player: anchor.web3.PublicKey) => {
+    return anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("duel_session"), player.toBuffer()],
+      program.programId,
+    );
+  };
+
   // Helper to derive counter PDA
   const getCounterPDA = () => {
     return anchor.web3.PublicKey.findProgramAddressSync(
@@ -243,13 +250,11 @@ describe("session-manager", () => {
     user: Keypair;
     burnerWallet: Keypair;
     playerProfilePDA: anchor.web3.PublicKey;
-    forcedSeed: anchor.BN;
   }) => {
-    const { user, burnerWallet, playerProfilePDA, forcedSeed } = params;
+    const { user, burnerWallet, playerProfilePDA } = params;
     await ensureMapConfigExists();
 
-    const duelCampaignLevel = 20;
-    const [sessionPDA] = getSessionPDA(user.publicKey, duelCampaignLevel);
+    const [sessionPDA] = getDuelSessionPDA(user.publicKey);
     const [generatedMapPDA] = getGeneratedMapPDA(sessionPDA);
     const [gameStatePDA] = getGameStatePDA(sessionPDA);
     const [mapEnemiesPDA] = getMapEnemiesPDA(sessionPDA);
@@ -258,7 +263,7 @@ describe("session-manager", () => {
     const [sessionManagerAuthorityPDA] = getSessionManagerAuthorityPDA();
 
     await (program.methods as any)
-      .startDuelSession(forcedSeed)
+      .startDuelSession()
       .accounts({
         gameSession: sessionPDA,
         sessionCounter: counterPDA,
@@ -278,6 +283,14 @@ describe("session-manager", () => {
         playerInventoryProgram: playerInventoryProgram.programId,
         systemProgram: SystemProgram.programId,
       } as any)
+      .preInstructions([
+        anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+          units: 1_400_000,
+        }),
+        anchor.web3.ComputeBudgetProgram.requestHeapFrame({
+          bytes: 256 * 1024,
+        }),
+      ])
       .signers([user, burnerWallet])
       .rpc();
   };
@@ -537,23 +550,47 @@ describe("session-manager", () => {
   });
 
   describe("Duel Seed Security", () => {
-    it("rejects externally provided forced seed", async () => {
+    it("always derives duel seed on-chain", async () => {
       await ensureCounterExists();
 
       const { user, burnerWallet, playerProfilePDA } =
-        await createUserWithProfile("DuelSeedReject");
+        await createUserWithProfile("DuelSeedDerived");
 
-      try {
-        await startDuelSession({
-          user,
-          burnerWallet,
-          playerProfilePDA,
-          forcedSeed: new anchor.BN(123456),
-        });
-        expect.fail("Expected forced duel seed to be rejected");
-      } catch (error: any) {
-        expect(error.toString()).to.include("ExternalDuelSeedNotAllowed");
-      }
+      await startDuelSession({
+        user,
+        burnerWallet,
+        playerProfilePDA,
+      });
+
+      const duelCampaignLevel = 20;
+      const [sessionPDA] = getDuelSessionPDA(user.publicKey);
+      const [generatedMapPDA] = getGeneratedMapPDA(sessionPDA);
+      const generatedMap = await mapGeneratorProgram.account.generatedMap.fetch(generatedMapPDA);
+      expect(Number(generatedMap.seed)).to.be.greaterThan(0);
+
+      const [inventoryPDA] = getInventoryPDA(sessionPDA);
+      const [gameStatePDA] = getGameStatePDA(sessionPDA);
+      const [mapEnemiesPDA] = getMapEnemiesPDA(sessionPDA);
+      const [mapPoisPDA] = getMapPoisPDA(sessionPDA);
+
+      await program.methods
+        .abandonSession(duelCampaignLevel)
+        .accounts({
+          gameSession: sessionPDA,
+          gameState: gameStatePDA,
+          mapEnemies: mapEnemiesPDA,
+          generatedMap: generatedMapPDA,
+          mapPois: mapPoisPDA,
+          player: user.publicKey,
+          burnerWallet: burnerWallet.publicKey,
+          inventory: inventoryPDA,
+          playerInventoryProgram: playerInventoryProgram.programId,
+          gameplayStateProgram: gameplayProgram.programId,
+          mapGeneratorProgram: mapGeneratorProgram.programId,
+          poiSystemProgram: poiSystemProgram.programId,
+        } as any)
+        .signers([user, burnerWallet])
+        .rpc();
     });
   });
 

@@ -62,4 +62,12 @@ pub enum PlayerProfileError {
     /// Burner wallet does not match the session's stored burner wallet
     #[msg("Burner wallet does not match session")]
     InvalidBurnerWallet,
+
+    /// Pit draft queue account is invalid or malformed
+    #[msg("Invalid pit draft queue account")]
+    InvalidPitDraftQueue,
+
+    /// Active item pool cannot be changed while queued in pit draft
+    #[msg("Cannot update active item pool while queued in pit draft")]
+    PitDraftQueueLocked,
 }

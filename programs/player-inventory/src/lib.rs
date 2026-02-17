@@ -88,24 +88,8 @@ pub mod player_inventory {
     ///
     /// These call equip_tool_authorized via CPI which properly handles HP updates.
     pub fn equip_tool(ctx: Context<EquipTool>, item_id: [u8; 8], tier: Tier) -> Result<()> {
-        // Validate item exists and is a tool
-        let item_def = get_item(&item_id).ok_or(InventoryError::InvalidItemId)?;
-        require!(
-            item_def.item_type == ItemType::Tool,
-            InventoryError::WrongItemType
-        );
-
-        let inventory = &mut ctx.accounts.inventory;
-        inventory.tool = Some(ItemInstance::new(item_id, tier));
-
-        emit!(ItemEquipped {
-            player: ctx.accounts.player.key(),
-            item_id,
-            tier,
-            slot: "tool".to_string(),
-        });
-
-        Ok(())
+        let _ = (ctx, item_id, tier);
+        err!(InventoryError::DirectMutationDisabled)
     }
 
     /// DEPRECATED: Use poi-system interactions (interact_pick_item, shop_purchase) instead.
@@ -120,30 +104,8 @@ pub mod player_inventory {
     ///
     /// These call equip_gear_authorized via CPI which properly handles HP updates.
     pub fn equip_gear(ctx: Context<EquipGear>, item_id: [u8; 8], tier: Tier) -> Result<()> {
-        // Validate item exists and is gear
-        let item_def = get_item(&item_id).ok_or(InventoryError::InvalidItemId)?;
-        require!(
-            item_def.item_type == ItemType::Gear,
-            InventoryError::WrongItemType
-        );
-
-        let inventory = &mut ctx.accounts.inventory;
-
-        // Find empty slot
-        let slot_index = inventory
-            .find_empty_gear_slot()
-            .ok_or(InventoryError::InventoryFull)?;
-
-        inventory.gear[slot_index] = Some(ItemInstance::new(item_id, tier));
-
-        emit!(ItemEquipped {
-            player: ctx.accounts.player.key(),
-            item_id,
-            tier,
-            slot: format!("gear[{}]", slot_index),
-        });
-
-        Ok(())
+        let _ = (ctx, item_id, tier);
+        err!(InventoryError::DirectMutationDisabled)
     }
 
     /// Removes a gear item from a specific slot.
@@ -153,6 +115,16 @@ pub mod player_inventory {
     /// also calls gameplay-state to remove the HP bonus and cap current HP
     /// at the new max.
     pub fn unequip_gear(ctx: Context<UnequipGear>, slot_index: u8) -> Result<()> {
+        let _ = (ctx, slot_index);
+        err!(InventoryError::DirectMutationDisabled)
+    }
+
+    /// Removes a gear item from a specific slot, authorized by poi-system via CPI.
+    /// Used by Scrap Chute to atomically remove gear and adjust HP bonuses.
+    pub fn unequip_gear_authorized(
+        ctx: Context<UnequipGearAuthorized>,
+        slot_index: u8,
+    ) -> Result<()> {
         let inventory = &mut ctx.accounts.inventory;
 
         require!(
@@ -193,7 +165,7 @@ pub mod player_inventory {
         }
 
         emit!(ItemUnequipped {
-            player: ctx.accounts.player.key(),
+            player: inventory.player,
             item_id: item.item_id,
             slot_index,
         });
@@ -205,44 +177,8 @@ pub mod player_inventory {
     /// Both items must have the same item_id and tier.
     /// For gear items, specify two gear slot indices.
     pub fn fuse_items(ctx: Context<FuseItems>, slot_a: u8, slot_b: u8) -> Result<()> {
-        let inventory = &mut ctx.accounts.inventory;
-
-        // Validate slot indices
-        require!(
-            (slot_a as usize) < MAX_GEAR_SLOTS as usize
-                && (slot_b as usize) < MAX_GEAR_SLOTS as usize,
-            InventoryError::InvalidSlotIndex
-        );
-        require!(slot_a != slot_b, InventoryError::FusionMismatch);
-
-        // Get items from slots
-        let item_a = inventory.gear[slot_a as usize]
-            .as_ref()
-            .ok_or(InventoryError::SlotEmpty)?;
-        let item_b = inventory.gear[slot_b as usize]
-            .as_ref()
-            .ok_or(InventoryError::SlotEmpty)?;
-
-        // Validate fusion
-        validate_fusion(item_a, item_b)?;
-
-        // Execute fusion
-        let old_tier = item_a.tier;
-        let new_tier = execute_fusion(old_tier)?;
-        let item_id = item_a.item_id;
-
-        // Update inventory: upgrade first slot, clear second slot
-        inventory.gear[slot_a as usize] = Some(ItemInstance::new(item_id, new_tier));
-        inventory.gear[slot_b as usize] = None;
-
-        emit!(ItemFused {
-            player: ctx.accounts.player.key(),
-            item_id,
-            old_tier,
-            new_tier,
-        });
-
-        Ok(())
+        let _ = (ctx, slot_a, slot_b);
+        err!(InventoryError::DirectMutationDisabled)
     }
 
     /// Upgrades the equipped tool to the next tier while preserving Tool Oil flags.
@@ -253,27 +189,8 @@ pub mod player_inventory {
         item_id: [u8; 8],
         current_tier: Tier,
     ) -> Result<()> {
-        let inventory = &mut ctx.accounts.inventory;
-
-        let tool = inventory
-            .tool
-            .as_mut()
-            .ok_or(InventoryError::NoToolEquipped)?;
-
-        require!(tool.item_id == item_id, InventoryError::InvalidItemId);
-        require!(tool.tier == current_tier, InventoryError::FusionMismatch);
-
-        let new_tier = current_tier.next().ok_or(InventoryError::AlreadyMaxTier)?;
-        tool.tier = new_tier;
-
-        emit!(ToolTierUpgraded {
-            player: ctx.accounts.player.key(),
-            item_id,
-            old_tier: current_tier,
-            new_tier,
-        });
-
-        Ok(())
+        let _ = (ctx, item_id, current_tier);
+        err!(InventoryError::DirectMutationDisabled)
     }
 
     /// Applies a Tool Oil modification to the equipped tool.
@@ -282,26 +199,8 @@ pub mod player_inventory {
         ctx: Context<ApplyToolOil>,
         modification: ToolOilModification,
     ) -> Result<()> {
-        let inventory = &mut ctx.accounts.inventory;
-
-        let tool = inventory
-            .tool
-            .as_mut()
-            .ok_or(InventoryError::NoToolEquipped)?;
-
-        require!(
-            !tool.has_oil(modification),
-            InventoryError::ToolOilAlreadyApplied
-        );
-
-        tool.apply_oil(modification);
-
-        emit!(ToolOilApplied {
-            player: ctx.accounts.player.key(),
-            modification,
-        });
-
-        Ok(())
+        let _ = (ctx, modification);
+        err!(InventoryError::DirectMutationDisabled)
     }
 
     /// DEPRECATED: Use expand_gear_slots_authorized via gameplay-state instead.
@@ -310,22 +209,8 @@ pub mod player_inventory {
     /// called directly. Gear slots should only expand after boss defeat, which is
     /// validated by gameplay-state before calling expand_gear_slots_authorized.
     pub fn expand_gear_slots(ctx: Context<ExpandGearSlots>) -> Result<()> {
-        let inventory = &mut ctx.accounts.inventory;
-
-        let old_capacity = inventory.gear_slot_capacity;
-
-        // Expand slots (this validates and returns error if already max)
-        inventory.expand_slots()?;
-
-        let new_capacity = inventory.gear_slot_capacity;
-
-        emit!(GearSlotsExpanded {
-            player: ctx.accounts.player.key(),
-            old_capacity,
-            new_capacity,
-        });
-
-        Ok(())
+        let _ = ctx;
+        err!(InventoryError::DirectMutationDisabled)
     }
 
     /// Increases gear slot capacity after defeating a boss, authorized by gameplay-state.
@@ -349,6 +234,60 @@ pub mod player_inventory {
             player: inventory.player,
             old_capacity,
             new_capacity,
+        });
+
+        Ok(())
+    }
+
+    /// Fuses two gear items, authorized by poi-system via CPI (Rune Kiln).
+    pub fn fuse_items_authorized(
+        ctx: Context<FuseItemsAuthorized>,
+        slot_a: u8,
+        slot_b: u8,
+    ) -> Result<()> {
+        let inventory = &mut ctx.accounts.inventory;
+        let (item_id, old_tier, new_tier) = fuse_items_internal(inventory, slot_a, slot_b)?;
+
+        emit!(ItemFused {
+            player: inventory.player,
+            item_id,
+            old_tier,
+            new_tier,
+        });
+
+        Ok(())
+    }
+
+    /// Upgrades tool tier, authorized by poi-system via CPI (Rusty Anvil).
+    pub fn upgrade_tool_tier_authorized(
+        ctx: Context<UpgradeToolTierAuthorized>,
+        item_id: [u8; 8],
+        current_tier: Tier,
+    ) -> Result<()> {
+        let inventory = &mut ctx.accounts.inventory;
+        let new_tier = upgrade_tool_tier_internal(inventory, item_id, current_tier)?;
+
+        emit!(ToolTierUpgraded {
+            player: inventory.player,
+            item_id,
+            old_tier: current_tier,
+            new_tier,
+        });
+
+        Ok(())
+    }
+
+    /// Applies tool oil, authorized by poi-system via CPI (Tool Oil Rack).
+    pub fn apply_tool_oil_authorized(
+        ctx: Context<ApplyToolOilAuthorized>,
+        modification: ToolOilModification,
+    ) -> Result<()> {
+        let inventory = &mut ctx.accounts.inventory;
+        apply_tool_oil_internal(inventory, modification)?;
+
+        emit!(ToolOilApplied {
+            player: inventory.player,
+            modification,
         });
 
         Ok(())
@@ -558,6 +497,71 @@ fn calculate_max_hp_from_inventory(inventory: &PlayerInventory) -> i16 {
     BASE_HP.saturating_add(hp_bonus)
 }
 
+fn fuse_items_internal(
+    inventory: &mut PlayerInventory,
+    slot_a: u8,
+    slot_b: u8,
+) -> Result<([u8; 8], Tier, Tier)> {
+    require!(
+        (slot_a as usize) < MAX_GEAR_SLOTS as usize && (slot_b as usize) < MAX_GEAR_SLOTS as usize,
+        InventoryError::InvalidSlotIndex
+    );
+    require!(slot_a != slot_b, InventoryError::FusionMismatch);
+
+    let item_a = inventory.gear[slot_a as usize]
+        .as_ref()
+        .ok_or(InventoryError::SlotEmpty)?;
+    let item_b = inventory.gear[slot_b as usize]
+        .as_ref()
+        .ok_or(InventoryError::SlotEmpty)?;
+
+    validate_fusion(item_a, item_b)?;
+
+    let old_tier = item_a.tier;
+    let new_tier = execute_fusion(old_tier)?;
+    let item_id = item_a.item_id;
+
+    inventory.gear[slot_a as usize] = Some(ItemInstance::new(item_id, new_tier));
+    inventory.gear[slot_b as usize] = None;
+
+    Ok((item_id, old_tier, new_tier))
+}
+
+fn upgrade_tool_tier_internal(
+    inventory: &mut PlayerInventory,
+    item_id: [u8; 8],
+    current_tier: Tier,
+) -> Result<Tier> {
+    let tool = inventory
+        .tool
+        .as_mut()
+        .ok_or(InventoryError::NoToolEquipped)?;
+
+    require!(tool.item_id == item_id, InventoryError::InvalidItemId);
+    require!(tool.tier == current_tier, InventoryError::FusionMismatch);
+
+    let new_tier = current_tier.next().ok_or(InventoryError::AlreadyMaxTier)?;
+    tool.tier = new_tier;
+    Ok(new_tier)
+}
+
+fn apply_tool_oil_internal(
+    inventory: &mut PlayerInventory,
+    modification: ToolOilModification,
+) -> Result<()> {
+    let tool = inventory
+        .tool
+        .as_mut()
+        .ok_or(InventoryError::NoToolEquipped)?;
+
+    require!(
+        !tool.has_oil(modification),
+        InventoryError::ToolOilAlreadyApplied
+    );
+    tool.apply_oil(modification);
+    Ok(())
+}
+
 /// CPI call to gameplay-state::add_hp_bonus_authorized
 fn add_hp_bonus_cpi<'info>(
     game_state: &AccountInfo<'info>,
@@ -706,6 +710,23 @@ pub struct UpgradeToolTier<'info> {
 }
 
 #[derive(Accounts)]
+pub struct UpgradeToolTierAuthorized<'info> {
+    #[account(
+        mut,
+        seeds = [b"inventory", inventory.session.as_ref()],
+        bump = inventory.bump,
+    )]
+    pub inventory: Account<'info, PlayerInventory>,
+
+    #[account(
+        seeds = [b"poi_authority"],
+        bump,
+        seeds::program = POI_SYSTEM_PROGRAM_ID,
+    )]
+    pub poi_authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
 pub struct UnequipGear<'info> {
     #[account(
         mut,
@@ -734,6 +755,42 @@ pub struct UnequipGear<'info> {
     pub gameplay_state_program: AccountInfo<'info>,
 
     pub player: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct UnequipGearAuthorized<'info> {
+    #[account(
+        mut,
+        seeds = [b"inventory", inventory.session.as_ref()],
+        bump = inventory.bump,
+    )]
+    pub inventory: Account<'info, PlayerInventory>,
+
+    /// Game state for HP bonus removal
+    /// CHECK: Validated by gameplay-state program
+    #[account(mut)]
+    pub game_state: AccountInfo<'info>,
+
+    /// Inventory authority PDA for signing CPI calls to gameplay-state
+    /// CHECK: This is a PDA derived from player-inventory program, validated by seeds
+    #[account(
+        seeds = [INVENTORY_AUTHORITY_SEED],
+        bump,
+    )]
+    pub inventory_authority: AccountInfo<'info>,
+
+    /// POI authority PDA from poi-system that must sign
+    #[account(
+        seeds = [b"poi_authority"],
+        bump,
+        seeds::program = POI_SYSTEM_PROGRAM_ID,
+    )]
+    pub poi_authority: Signer<'info>,
+
+    /// Gameplay state program for HP modification CPI
+    /// CHECK: Validated by program ID constant
+    #[account(address = GAMEPLAY_STATE_PROGRAM_ID)]
+    pub gameplay_state_program: AccountInfo<'info>,
 }
 
 /// Context for equipping gear via authorized CPI from poi-system.
@@ -828,6 +885,23 @@ pub struct FuseItems<'info> {
 }
 
 #[derive(Accounts)]
+pub struct FuseItemsAuthorized<'info> {
+    #[account(
+        mut,
+        seeds = [b"inventory", inventory.session.as_ref()],
+        bump = inventory.bump,
+    )]
+    pub inventory: Account<'info, PlayerInventory>,
+
+    #[account(
+        seeds = [b"poi_authority"],
+        bump,
+        seeds::program = POI_SYSTEM_PROGRAM_ID,
+    )]
+    pub poi_authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
 pub struct ApplyToolOil<'info> {
     #[account(
         mut,
@@ -838,6 +912,23 @@ pub struct ApplyToolOil<'info> {
     pub inventory: Account<'info, PlayerInventory>,
 
     pub player: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct ApplyToolOilAuthorized<'info> {
+    #[account(
+        mut,
+        seeds = [b"inventory", inventory.session.as_ref()],
+        bump = inventory.bump,
+    )]
+    pub inventory: Account<'info, PlayerInventory>,
+
+    #[account(
+        seeds = [b"poi_authority"],
+        bump,
+        seeds::program = POI_SYSTEM_PROGRAM_ID,
+    )]
+    pub poi_authority: Signer<'info>,
 }
 
 #[derive(Accounts)]

@@ -13,6 +13,47 @@ use state::PlayerProfile;
 
 declare_id!("29DPbP1zuCCRg63PiShMjxAmZos97BR5TmhpijUYQzze");
 
+fn is_player_queued_in_pit_draft(
+    pit_draft_queue: &AccountInfo<'_>,
+    player: Pubkey,
+) -> Result<bool> {
+    let gameplay_state_program = Pubkey::new_from_array(GAMEPLAY_STATE_PROGRAM_ID);
+    let (expected_queue, _) =
+        Pubkey::find_program_address(&[PIT_DRAFT_QUEUE_SEED], &gameplay_state_program);
+
+    require_keys_eq!(
+        pit_draft_queue.key(),
+        expected_queue,
+        PlayerProfileError::InvalidPitDraftQueue
+    );
+    require_keys_eq!(
+        *pit_draft_queue.owner,
+        gameplay_state_program,
+        PlayerProfileError::InvalidPitDraftQueue
+    );
+
+    let data = pit_draft_queue.try_borrow_data()?;
+    require!(data.len() >= 9, PlayerProfileError::InvalidPitDraftQueue);
+    let mut cursor = 8usize; // skip discriminator
+
+    let waiting_tag = data[cursor];
+    cursor += 1;
+
+    let waiting_player = if waiting_tag == 1 {
+        require!(
+            data.len() >= cursor + 32,
+            PlayerProfileError::InvalidPitDraftQueue
+        );
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(&data[cursor..cursor + 32]);
+        Some(Pubkey::new_from_array(bytes))
+    } else {
+        None
+    };
+
+    Ok(waiting_player == Some(player))
+}
+
 #[program]
 pub mod player_profile {
     use super::*;
@@ -70,6 +111,11 @@ pub mod player_profile {
         active_item_pool: [u8; ITEM_BITMASK_SIZE],
     ) -> Result<()> {
         let profile = &mut ctx.accounts.player_profile;
+
+        require!(
+            !is_player_queued_in_pit_draft(&ctx.accounts.pit_draft_queue, ctx.accounts.owner.key())?,
+            PlayerProfileError::PitDraftQueueLocked
+        );
 
         require!(
             bitmask::is_subset(active_item_pool, profile.unlocked_items),
@@ -383,6 +429,9 @@ pub struct UpdateActiveItemPool<'info> {
     pub player_profile: Account<'info, PlayerProfile>,
 
     pub owner: Signer<'info>,
+
+    /// CHECK: Validated in update_active_item_pool against gameplay-state PDA/owner.
+    pub pit_draft_queue: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]

@@ -77,6 +77,9 @@ pub enum PoiSystemError {
     #[msg("No POI interaction is currently active")]
     NoActiveInteraction,
 
+    #[msg("An offer is already active for this interaction; resolve it before regenerating")]
+    OfferAlreadyGenerated,
+
     #[msg("No items available for the selected tag and rarity")]
     NoItemsAvailable,
 

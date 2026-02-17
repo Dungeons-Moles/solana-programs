@@ -535,14 +535,16 @@ pub mod poi_system {
         let poi_type = poi.poi_type;
         let act = map_pois.act;
 
-        // Derive seed from on-chain Clock to prevent client manipulation
-        let clock = Clock::get()?;
-        let session_bytes = map_pois.session.to_bytes();
-        let seed = (clock.unix_timestamp as u64)
-            ^ (poi_index as u64)
-            ^ (act as u64) << 8
-            ^ (session_bytes[0] as u64) << 16
-            ^ (session_bytes[1] as u64) << 24;
+        require!(
+            map_pois.current_offer.is_none(),
+            PoiSystemError::OfferAlreadyGenerated
+        );
+
+        // Deterministic per-session/per-position seed prevents free timing rerolls.
+        let seed = map_pois.seed
+            ^ ((poi_index as u64) << 8)
+            ^ ((act as u64) << 16)
+            ^ ((game_state.total_moves as u64) << 32);
 
         // Fetch boss weaknesses on-chain
         let week = to_boss_week(game_state.week)?;
@@ -728,13 +730,16 @@ pub mod poi_system {
         // Validate it's a Tool Oil Rack (L4 = poi_type 4)
         require!(poi_type == 4, PoiSystemError::InvalidInteraction);
 
-        // Derive seed from on-chain Clock to prevent client manipulation
-        let clock = Clock::get()?;
-        let session_bytes = map_pois.session.to_bytes();
-        let seed = (clock.unix_timestamp as u64)
-            ^ (poi_index as u64)
-            ^ (session_bytes[0] as u64) << 16
-            ^ (session_bytes[1] as u64) << 24;
+        require!(
+            map_pois.current_oil_offer.is_none(),
+            PoiSystemError::OfferAlreadyGenerated
+        );
+
+        // Deterministic per-session/per-position seed prevents free timing rerolls.
+        let seed = map_pois.seed
+            ^ ((poi_index as u64) << 8)
+            ^ ((game_state.total_moves as u64) << 32)
+            ^ 0x4f494c_u64; // "OIL" domain separator
 
         // Generate oil offer
         let oil_offer = offers::create_oil_offer(poi_index, seed);
@@ -812,13 +817,15 @@ pub mod poi_system {
             is_night,
         )?;
 
-        player_inventory::cpi::apply_tool_oil(
-            CpiContext::new(
+        let seeds = &[POI_AUTHORITY_SEED, &[ctx.bumps.poi_authority]];
+        player_inventory::cpi::apply_tool_oil_authorized(
+            CpiContext::new_with_signer(
                 ctx.accounts.player_inventory_program.to_account_info(),
-                player_inventory::cpi::accounts::ApplyToolOil {
+                player_inventory::cpi::accounts::ApplyToolOilAuthorized {
                     inventory: ctx.accounts.inventory.to_account_info(),
-                    player: ctx.accounts.player.to_account_info(),
+                    poi_authority: ctx.accounts.poi_authority.to_account_info(),
                 },
+                &[&seeds[..]],
             ),
             oil_modification_from_flag(result.modification)?,
         )?;
@@ -872,14 +879,11 @@ pub mod poi_system {
 
         interactions::validate_shop_poi(poi, is_night)?;
 
-        // Derive seed from on-chain Clock to prevent client manipulation
-        let clock = Clock::get()?;
-        let session_bytes = map_pois.session.to_bytes();
-        let seed = (clock.unix_timestamp as u64)
-            ^ (poi_index as u64)
-            ^ (act as u64) << 8
-            ^ (session_bytes[0] as u64) << 16
-            ^ (session_bytes[1] as u64) << 24;
+        // Deterministic per-session/per-position seed prevents free timing rerolls.
+        let seed = map_pois.seed
+            ^ ((poi_index as u64) << 8)
+            ^ ((act as u64) << 16)
+            ^ ((game_state.total_moves as u64) << 32);
 
         // Fetch boss weaknesses on-chain
         let week = to_boss_week(game_state.week)?;
@@ -902,6 +906,7 @@ pub mod poi_system {
         map_pois.shop_state.active = true;
         map_pois.shop_state.poi_index = poi_index;
         map_pois.shop_state.reroll_count = 0;
+        map_pois.shop_state.rng_state = seed;
 
         copy_shop_offers(&mut map_pois.shop_state, &filtered, false);
 
@@ -1005,13 +1010,11 @@ pub mod poi_system {
         // Increment reroll count
         map_pois.shop_state.reroll_count = map_pois.shop_state.reroll_count.saturating_add(1);
 
-        // Derive seed from on-chain Clock + reroll_count to prevent manipulation
-        let clock = Clock::get()?;
-        let session_bytes = map_pois.session.to_bytes();
-        let seed = (clock.unix_timestamp as u64)
-            ^ (map_pois.shop_state.reroll_count as u64)
-            ^ (session_bytes[0] as u64) << 16
-            ^ (session_bytes[1] as u64) << 24;
+        // Deterministic reroll sequence anchored to entry seed.
+        let seed = map_pois.shop_state.rng_state
+            ^ ((map_pois.shop_state.reroll_count as u64) << 8)
+            ^ ((game_state.total_moves as u64) << 32);
+        map_pois.shop_state.rng_state = seed.rotate_left(13) ^ 0x9e37_79b9_7f4a_7c15_u64;
 
         // Fetch boss weaknesses on-chain
         let week = to_boss_week(game_state.week)?;
@@ -1120,13 +1123,14 @@ pub mod poi_system {
             -(result.cost as i16),
         )?;
 
-        player_inventory::cpi::upgrade_tool_tier(
-            CpiContext::new(
+        player_inventory::cpi::upgrade_tool_tier_authorized(
+            CpiContext::new_with_signer(
                 ctx.accounts.player_inventory_program.to_account_info(),
-                player_inventory::cpi::accounts::UpgradeToolTier {
+                player_inventory::cpi::accounts::UpgradeToolTierAuthorized {
                     inventory: ctx.accounts.inventory.to_account_info(),
-                    player: ctx.accounts.player.to_account_info(),
+                    poi_authority: ctx.accounts.poi_authority.to_account_info(),
                 },
+                &[&seeds[..]],
             ),
             item_id,
             expected_tier,
@@ -1174,13 +1178,15 @@ pub mod poi_system {
         let (slot_a, slot_b) = find_matching_gear_slots(&ctx.accounts.inventory, item1_id, tier)
             .ok_or(PoiSystemError::ItemNotInInventory)?;
 
-        player_inventory::cpi::fuse_items(
-            CpiContext::new(
+        let seeds = &[POI_AUTHORITY_SEED, &[ctx.bumps.poi_authority]];
+        player_inventory::cpi::fuse_items_authorized(
+            CpiContext::new_with_signer(
                 ctx.accounts.player_inventory_program.to_account_info(),
-                player_inventory::cpi::accounts::FuseItems {
+                player_inventory::cpi::accounts::FuseItemsAuthorized {
                     inventory: ctx.accounts.inventory.to_account_info(),
-                    player: ctx.accounts.player.to_account_info(),
+                    poi_authority: ctx.accounts.poi_authority.to_account_info(),
                 },
+                &[&seeds[..]],
             ),
             slot_a,
             slot_b,
@@ -1435,22 +1441,23 @@ pub mod poi_system {
 
         let result = interactions::execute_scrap_gear(poi, item_id, player_gold, act, is_night)?;
 
-        player_inventory::cpi::unequip_gear(
-            CpiContext::new(
+        let seeds = &[POI_AUTHORITY_SEED, &[ctx.bumps.poi_authority]];
+        player_inventory::cpi::unequip_gear_authorized(
+            CpiContext::new_with_signer(
                 ctx.accounts.player_inventory_program.to_account_info(),
-                player_inventory::cpi::accounts::UnequipGear {
+                player_inventory::cpi::accounts::UnequipGearAuthorized {
                     inventory: ctx.accounts.inventory.to_account_info(),
                     game_state: ctx.accounts.game_state.to_account_info(),
                     inventory_authority: ctx.accounts.inventory_authority.to_account_info(),
+                    poi_authority: ctx.accounts.poi_authority.to_account_info(),
                     gameplay_state_program: ctx.accounts.gameplay_state_program.to_account_info(),
-                    player: ctx.accounts.player.to_account_info(),
                 },
+                &[&seeds[..]],
             ),
             slot_index,
         )?;
 
         // CPI to gameplay-state to deduct gold atomically
-        let seeds = &[POI_AUTHORITY_SEED, &[ctx.bumps.poi_authority]];
         let gold_delta =
             i16::try_from(result.refund).unwrap_or(0) - i16::try_from(result.cost).unwrap_or(0);
         gameplay_state::cpi::modify_gold_authorized(
@@ -1724,6 +1731,14 @@ pub struct InteractToolOil<'info> {
     )]
     pub inventory: Account<'info, player_inventory::state::PlayerInventory>,
 
+    /// POI authority PDA for signing CPI calls
+    /// CHECK: PDA derived from this program, used as signer in CPI
+    #[account(
+        seeds = [POI_AUTHORITY_SEED],
+        bump,
+    )]
+    pub poi_authority: AccountInfo<'info>,
+
     /// Player inventory program for CPI (apply_tool_oil)
     pub player_inventory_program: Program<'info, player_inventory::program::PlayerInventory>,
 
@@ -1947,6 +1962,14 @@ pub struct InteractRuneKiln<'info> {
         has_one = player @ PoiSystemError::Unauthorized,
     )]
     pub inventory: Account<'info, player_inventory::state::PlayerInventory>,
+
+    /// POI authority PDA for signing CPI calls
+    /// CHECK: PDA derived from this program, used as signer in CPI
+    #[account(
+        seeds = [POI_AUTHORITY_SEED],
+        bump,
+    )]
+    pub poi_authority: AccountInfo<'info>,
 
     /// Player inventory program for CPI (fuse_items)
     pub player_inventory_program: Program<'info, player_inventory::program::PlayerInventory>,

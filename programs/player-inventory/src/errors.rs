@@ -47,4 +47,8 @@ pub enum InventoryError {
     /// Gear slots already at maximum capacity
     #[msg("Gear slots already at maximum capacity")]
     AlreadyMaxSlots,
+
+    /// Direct player mutation path is disabled; use authorized CPI flow
+    #[msg("Direct inventory mutation is disabled; use authorized CPI flow")]
+    DirectMutationDisabled,
 }

@@ -1896,7 +1896,41 @@ fn build_full_hp_combatant(stats: &PlayerStats) -> CombatantInput {
     }
 }
 
-fn is_pool_item_enabled(pool: &[u8; 10], index: usize) -> bool {
+fn item_pool_index_from_id(item_id: &[u8; 8]) -> Option<usize> {
+    // Expected IDs: T-XX-01..02 and G-XX-01..08 where XX in {ST,SC,GR,BL,FR,RU,BO,TE}
+    if item_id[1] != b'-' || item_id[4] != b'-' {
+        return None;
+    }
+
+    let kind = item_id[0];
+    let tag_code = match (item_id[2], item_id[3]) {
+        (b'S', b'T') => 0usize,
+        (b'S', b'C') => 1,
+        (b'G', b'R') => 2,
+        (b'B', b'L') => 3,
+        (b'F', b'R') => 4,
+        (b'R', b'U') => 5,
+        (b'B', b'O') => 6,
+        (b'T', b'E') => 7,
+        _ => return None,
+    };
+
+    if !(item_id[5].is_ascii_digit() && item_id[6].is_ascii_digit()) {
+        return None;
+    }
+    let item_num = ((item_id[5] - b'0') as usize) * 10 + (item_id[6] - b'0') as usize;
+
+    match kind {
+        b'G' if (1..=8).contains(&item_num) => Some(tag_code * 8 + (item_num - 1)),
+        b'T' if (1..=2).contains(&item_num) => Some(64 + tag_code * 2 + (item_num - 1)),
+        _ => None,
+    }
+}
+
+fn is_pool_item_enabled(pool: &[u8; 10], item_id: &[u8; 8]) -> bool {
+    let Some(index) = item_pool_index_from_id(item_id) else {
+        return false;
+    };
     if index >= 80 {
         return false;
     }
@@ -1969,7 +2003,7 @@ fn build_pit_draft_inventory(
     let mut gear_candidates = Vec::new();
 
     for (index, item_def) in ITEMS.iter().enumerate() {
-        if !is_pool_item_enabled(&active_pool, index) {
+        if !is_pool_item_enabled(&active_pool, item_def.id) {
             continue;
         }
 
@@ -4323,6 +4357,37 @@ mod hp_logic_tests {
         assert!(truncated);
         assert_eq!(total_entries as usize, MAX_PVP_VISUAL_LOG_ENTRIES + 10);
         assert_eq!(capped.len(), MAX_PVP_VISUAL_LOG_ENTRIES);
+    }
+
+    #[test]
+    fn test_item_pool_index_from_id_matches_profile_bitmask_scheme() {
+        assert_eq!(item_pool_index_from_id(b"G-ST-01\0"), Some(0));
+        assert_eq!(item_pool_index_from_id(b"G-ST-08\0"), Some(7));
+        assert_eq!(item_pool_index_from_id(b"G-SC-01\0"), Some(8));
+        assert_eq!(item_pool_index_from_id(b"G-TE-08\0"), Some(63));
+        assert_eq!(item_pool_index_from_id(b"T-ST-01\0"), Some(64));
+        assert_eq!(item_pool_index_from_id(b"T-GR-01\0"), Some(68));
+        assert_eq!(item_pool_index_from_id(b"T-TE-02\0"), Some(79));
+
+        // Starter-only special tool is intentionally outside pool indexing.
+        assert_eq!(item_pool_index_from_id(b"T-XX-00\0"), None);
+    }
+
+    #[test]
+    fn test_is_pool_item_enabled_respects_starter_pool() {
+        // Mirrors player-profile STARTER_ITEMS_BITMASK.
+        let starter_pool: [u8; 10] = [0x0F, 0x0F, 0x17, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x55, 0x55];
+
+        // Starter-enabled samples.
+        assert!(is_pool_item_enabled(&starter_pool, b"T-GR-01\0"));
+        assert!(is_pool_item_enabled(&starter_pool, b"G-GR-03\0"));
+        assert!(is_pool_item_enabled(&starter_pool, b"G-BL-01\0"));
+
+        // Non-starter samples that previously slipped through with ITEMS-indexed filtering.
+        assert!(!is_pool_item_enabled(&starter_pool, b"G-ST-07\0"));
+        assert!(!is_pool_item_enabled(&starter_pool, b"G-SC-06\0"));
+        assert!(!is_pool_item_enabled(&starter_pool, b"G-RU-07\0"));
+        assert!(!is_pool_item_enabled(&starter_pool, b"G-TE-07\0"));
     }
 
     #[test]

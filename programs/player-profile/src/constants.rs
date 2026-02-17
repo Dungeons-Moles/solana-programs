@@ -65,3 +65,6 @@ pub const GAMEPLAY_STATE_PROGRAM_ID: [u8; 32] = [
 
 /// Seed used by gameplay-state for the canonical gauntlet pool vault PDA.
 pub const GAUNTLET_POOL_VAULT_SEED: &[u8] = b"gauntlet_pool_vault";
+
+/// Seed used by gameplay-state for the global pit draft queue PDA.
+pub const PIT_DRAFT_QUEUE_SEED: &[u8] = b"pit_draft_queue";

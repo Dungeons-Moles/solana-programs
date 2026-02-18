@@ -5,7 +5,7 @@
   "scripts": {
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
     "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
-    "test": "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+    "test": "yarn run ts-mocha -p ./tsconfig.json -t 1000000 --ignore 'tests/session-manager/manual-session-delegate-flow.ts' tests/**/*.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.0",

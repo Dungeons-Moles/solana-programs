@@ -78,4 +78,12 @@ pub enum PlayerProfileError {
     /// Active item pool cannot be changed while queued in pit draft
     #[msg("Cannot update active item pool while queued in pit draft")]
     PitDraftQueueLocked,
+
+    /// Skin NFT asset is invalid (not a Metaplex Core AssetV1)
+    #[msg("Invalid skin NFT asset")]
+    InvalidSkinAsset,
+
+    /// Skin NFT is not owned by the player
+    #[msg("Skin NFT is not owned by the player")]
+    SkinNotOwned,
 }

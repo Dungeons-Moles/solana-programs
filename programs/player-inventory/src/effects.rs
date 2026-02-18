@@ -4,21 +4,32 @@
 
 use crate::items::get_item;
 use crate::itemsets::get_active_itemsets;
+use crate::special_items::get_special_item;
 use crate::state::{
     stat_bonus, EffectType, ItemEffect, ItemInstance, PlayerInventory, Tier, ToolOilModification,
 };
 
 /// Convert an item's effects to ItemEffect array with tier scaling
 pub fn generate_item_effects(item: &ItemInstance) -> Vec<ItemEffect> {
-    let Some(definition) = get_item(&item.item_id) else {
-        return Vec::new();
-    };
+    // Try base item registry first
+    if let Some(definition) = get_item(&item.item_id) {
+        return definition
+            .effects
+            .iter()
+            .map(|effect_def| effect_def.to_item_effect(item.tier))
+            .collect();
+    }
 
-    definition
-        .effects
-        .iter()
-        .map(|effect_def| effect_def.to_item_effect(item.tier))
-        .collect()
+    // Try special item registry
+    if let Some(definition) = get_special_item(&item.item_id) {
+        return definition
+            .effects
+            .iter()
+            .map(|effect_def| effect_def.to_item_effect(item.tier))
+            .collect();
+    }
+
+    Vec::new()
 }
 
 /// Generate effects for the equipped tool

@@ -791,6 +791,10 @@ pub mod session_manager {
             &ctx.accounts.map_pois,
         )?;
 
+        session.state_hash = state_hash;
+        session.last_activity = clock.unix_timestamp;
+        store_game_session_unchecked(&game_session_info, &session)?;
+
         let game_state_info = ctx.accounts.game_state.to_account_info();
         let map_enemies_info = ctx.accounts.map_enemies.to_account_info();
         let generated_map_info = ctx.accounts.generated_map.to_account_info();
@@ -809,10 +813,6 @@ pub mod session_manager {
             &ctx.accounts.magic_context,
             &ctx.accounts.magic_program.to_account_info(),
         )?;
-
-        session.state_hash = state_hash;
-        session.last_activity = clock.unix_timestamp;
-        store_game_session_unchecked(&game_session_info, &session)?;
 
         Ok(())
     }

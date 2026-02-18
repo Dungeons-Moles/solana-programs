@@ -8,6 +8,9 @@ pub mod spawn;
 pub mod state;
 
 use anchor_lang::context::CpiContext;
+use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
+use ephemeral_rollups_sdk::cpi::DelegateConfig;
+use ephemeral_rollups_sdk::ephem::commit_and_undelegate_accounts;
 use errors::PoiSystemError;
 use gameplay_state::state::{GameState, RunMode};
 pub use pois::PoiDefinition;
@@ -34,6 +37,14 @@ pub const MAP_GENERATOR_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     156, 174, 227, 192, 77, 77, 237, 57, 57, 229, 227, 42, 100, 51, 52, 5, 241, 68, 44, 141, 222,
     59, 35, 223, 249, 8, 30, 121, 140, 38, 69, 149,
 ]);
+pub const LOCAL_ER_VALIDATOR: Pubkey = pubkey!("mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev");
+
+fn local_delegate_config() -> DelegateConfig {
+    DelegateConfig {
+        validator: Some(LOCAL_ER_VALIDATOR),
+        ..DelegateConfig::default()
+    }
+}
 
 /// Validates POI index, retrieves POI and definition, and validates interaction.
 /// Use `skip_usage_check` for Repeatable/RepeatablePerTool POIs.
@@ -72,7 +83,7 @@ fn get_and_validate_poi<'a>(
 
 fn require_player_owns_game_state(game_state: &GameState, player: &Signer<'_>) -> Result<()> {
     require_keys_eq!(
-        game_state.burner_wallet,
+        game_state.session_signer,
         player.key(),
         PoiSystemError::Unauthorized
     );
@@ -263,6 +274,7 @@ fn copy_shop_offers(shop_state: &mut ShopState, filtered: &[state::ItemOffer], r
     }
 }
 
+#[ephemeral]
 #[program]
 pub mod poi_system {
     use super::*;
@@ -364,6 +376,70 @@ pub mod poi_system {
         Ok(())
     }
 
+    /// Delegates map-pois PDA to MagicBlock from poi-system (its owner program).
+    pub fn delegate_map_pois(ctx: Context<DelegateMapPois>) -> Result<()> {
+        let session_key = ctx.accounts.game_session.key();
+        let (expected_map_pois, _) =
+            Pubkey::find_program_address(&[MAP_POIS_SEED, session_key.as_ref()], &crate::ID);
+        require_keys_eq!(
+            ctx.accounts.map_pois.key(),
+            expected_map_pois,
+            PoiSystemError::Unauthorized
+        );
+        let map_pois_seeds: &[&[u8]] = &[MAP_POIS_SEED, session_key.as_ref()];
+        ctx.accounts.delegate_map_pois(
+            &ctx.accounts.player,
+            map_pois_seeds,
+            local_delegate_config(),
+        )?;
+        Ok(())
+    }
+
+    /// Commits and undelegates map-pois PDA from ER back to base layer.
+    pub fn undelegate_map_pois(ctx: Context<UndelegateMapPois>) -> Result<()> {
+        use session_manager::state::GameSession;
+
+        let session_key = ctx.accounts.game_session.key();
+        let (expected_map_pois, _) =
+            Pubkey::find_program_address(&[MAP_POIS_SEED, session_key.as_ref()], &crate::ID);
+        require_keys_eq!(
+            ctx.accounts.map_pois.key(),
+            expected_map_pois,
+            PoiSystemError::Unauthorized
+        );
+        require_keys_eq!(
+            ctx.accounts.map_pois.session,
+            session_key,
+            PoiSystemError::Unauthorized
+        );
+
+        let session_signer_end = GameSession::SESSION_SIGNER_OFFSET + 32;
+        let session_data = ctx.accounts.game_session.try_borrow_data()?;
+        require!(
+            session_data.len() >= session_signer_end,
+            PoiSystemError::InvalidSession
+        );
+        let stored_session_signer = Pubkey::from(
+            <[u8; 32]>::try_from(&session_data[GameSession::SESSION_SIGNER_OFFSET..session_signer_end])
+                .unwrap(),
+        );
+        require_keys_eq!(
+            stored_session_signer,
+            ctx.accounts.session_signer.key(),
+            PoiSystemError::Unauthorized
+        );
+        drop(session_data);
+
+        let map_pois_info = ctx.accounts.map_pois.to_account_info();
+        commit_and_undelegate_accounts(
+            &ctx.accounts.session_signer.to_account_info(),
+            vec![&map_pois_info],
+            &ctx.accounts.magic_context,
+            &ctx.accounts.magic_program.to_account_info(),
+        )?;
+        Ok(())
+    }
+
     /// Close MapPois account, returning rent to the session owner.
     pub fn close_map_pois(ctx: Context<CloseMapPois>) -> Result<()> {
         use session_manager::state::GameSession;
@@ -385,30 +461,30 @@ pub mod poi_system {
         Ok(())
     }
 
-    /// Close MapPois account via burner wallet authorization.
+    /// Close MapPois account via session key signer authorization.
     /// Used by session-manager CPI during end_session to clean up.
     /// Rent is returned to the player wallet.
-    pub fn close_map_pois_via_burner(ctx: Context<CloseMapPoisViaBurner>) -> Result<()> {
+    pub fn close_map_pois_via_session_signer(ctx: Context<CloseMapPoisViaSessionSigner>) -> Result<()> {
         use session_manager::state::GameSession;
         let player_end = GameSession::PLAYER_OFFSET + 32;
-        let burner_end = GameSession::BURNER_WALLET_OFFSET + 32;
+        let session_signer_end = GameSession::SESSION_SIGNER_OFFSET + 32;
 
         let session_data = ctx.accounts.game_session.try_borrow_data()?;
         require!(
-            session_data.len() >= burner_end,
+            session_data.len() >= session_signer_end,
             PoiSystemError::InvalidSession
         );
 
         let stored_player = Pubkey::from(
             <[u8; 32]>::try_from(&session_data[GameSession::PLAYER_OFFSET..player_end]).unwrap(),
         );
-        let stored_burner = Pubkey::from(
-            <[u8; 32]>::try_from(&session_data[GameSession::BURNER_WALLET_OFFSET..burner_end])
+        let stored_session_signer = Pubkey::from(
+            <[u8; 32]>::try_from(&session_data[GameSession::SESSION_SIGNER_OFFSET..session_signer_end])
                 .unwrap(),
         );
 
         require!(
-            stored_burner == ctx.accounts.burner_wallet.key(),
+            stored_session_signer == ctx.accounts.session_signer.key(),
             PoiSystemError::Unauthorized
         );
         require!(
@@ -1486,6 +1562,27 @@ pub mod poi_system {
 // Account Contexts
 // =============================================================================
 
+#[delegate]
+#[derive(Accounts)]
+pub struct DelegateMapPois<'info> {
+    #[account(mut, del)]
+    /// CHECK: PDA is validated in handler.
+    pub map_pois: AccountInfo<'info>,
+    /// CHECK: Session PDA owned by session-manager; used only for seed derivation.
+    pub game_session: UncheckedAccount<'info>,
+    pub player: Signer<'info>,
+}
+
+#[commit]
+#[derive(Accounts)]
+pub struct UndelegateMapPois<'info> {
+    #[account(mut)]
+    pub map_pois: Account<'info, MapPois>,
+    /// CHECK: Session account is read for session signer authorization.
+    pub game_session: UncheckedAccount<'info>,
+    pub session_signer: Signer<'info>,
+}
+
 #[derive(Accounts)]
 pub struct InitializeMapPois<'info> {
     #[account(
@@ -1544,9 +1641,9 @@ pub struct CloseMapPois<'info> {
     pub player: Signer<'info>,
 }
 
-/// Context for closing MapPois via burner wallet (for session-manager CPI)
+/// Context for closing MapPois via session key signer (for session-manager CPI)
 #[derive(Accounts)]
-pub struct CloseMapPoisViaBurner<'info> {
+pub struct CloseMapPoisViaSessionSigner<'info> {
     #[account(
         mut,
         close = player,
@@ -1557,7 +1654,7 @@ pub struct CloseMapPoisViaBurner<'info> {
 
     /// The session that owns this MapPois.
     /// CHECK: Validated by constraint (address match) and owner check (session-manager program).
-    /// Burner wallet and player fields are extracted in instruction body.
+    /// Session key signer and player fields are extracted in instruction body.
     #[account(
         constraint = game_session.key() == map_pois.session @ PoiSystemError::Unauthorized,
         owner = SESSION_MANAGER_PROGRAM_ID @ PoiSystemError::InvalidSessionOwner,
@@ -1569,8 +1666,8 @@ pub struct CloseMapPoisViaBurner<'info> {
     #[account(mut)]
     pub player: AccountInfo<'info>,
 
-    /// Burner wallet must sign to authorize closure.
-    pub burner_wallet: Signer<'info>,
+    /// Session key signer must sign to authorize closure.
+    pub session_signer: Signer<'info>,
 }
 
 /// Context for querying POI definition (view instruction)

@@ -137,60 +137,11 @@ pub mod player_profile {
     /// Note: available_runs is NOT decremented here - it's already done by consume_run
     /// at session start via CPI from session-manager.
     pub fn record_run_result(
-        ctx: Context<RecordRunResult>,
-        level_completed: u8,
-        victory: bool,
+        _ctx: Context<RecordRunResult>,
+        _level_completed: u8,
+        _victory: bool,
     ) -> Result<()> {
-        let profile = &mut ctx.accounts.player_profile;
-        let clock = Clock::get()?;
-
-        // Note: available_runs already decremented by consume_run at session start
-
-        // Increment total runs
-        profile.total_runs = profile
-            .total_runs
-            .checked_add(1)
-            .ok_or(PlayerProfileError::ArithmeticOverflow)?;
-
-        // On first-time victory (completing highest unlocked level), advance and unlock item
-        if victory && level_completed == profile.highest_level_unlocked {
-            // Increment highest level unlocked (cap at MAX_CAMPAIGN_LEVEL)
-            if profile.highest_level_unlocked < MAX_CAMPAIGN_LEVEL {
-                profile.highest_level_unlocked = profile
-                    .highest_level_unlocked
-                    .checked_add(1)
-                    .ok_or(PlayerProfileError::ArithmeticOverflow)?;
-            }
-
-            // Unlock a random item from the locked pool (indices 40-92)
-            if let Some(item_index) = bitmask::select_random_locked_item(
-                profile.unlocked_items,
-                &profile.owner,
-                level_completed,
-                clock.slot,
-            ) {
-                bitmask::set_bit(&mut profile.unlocked_items, item_index);
-                bitmask::set_bit(&mut profile.active_item_pool, item_index);
-
-                emit!(ItemUnlocked {
-                    owner: profile.owner,
-                    item_index,
-                    level_completed,
-                    timestamp: clock.unix_timestamp,
-                });
-            }
-        }
-
-        emit!(RunCompleted {
-            owner: profile.owner,
-            total_runs: profile.total_runs,
-            available_runs: profile.available_runs,
-            level_reached: level_completed,
-            victory,
-            timestamp: clock.unix_timestamp,
-        });
-
-        Ok(())
+        err!(PlayerProfileError::DirectMutationDisabled)
     }
 
     /// Consumes one available run from the player's profile.
@@ -218,12 +169,12 @@ pub mod player_profile {
 
     /// Records the result of a completed dungeon run via CPI from session-manager.
     /// Uses session account for authorization instead of requiring player signature.
-    /// This allows the burner wallet to trigger run result recording without user interaction.
+    /// This allows the session key signer to trigger run result recording without user interaction.
     ///
     /// Authorization: The session account proves player ownership. We verify:
     /// 1. Session account is owned by the session-manager program
     /// 2. Session's player field matches the profile's owner
-    /// 3. Burner wallet signer matches the session's stored burner_wallet
+    /// 3. Session key signer signer matches the session's stored session_signer
     pub fn record_run_result_cpi(
         ctx: Context<RecordRunResultCpi>,
         level_completed: u8,
@@ -241,7 +192,7 @@ pub mod player_profile {
         let session_data = session_info.try_borrow_data()?;
         let clock = Clock::get()?;
 
-        // Verify session account has enough data to read through burner_wallet
+        // Verify session account has enough data to read through session_signer
         require!(
             session_data.len() >= SESSION_MIN_DATA_LEN,
             PlayerProfileError::InvalidSession
@@ -257,15 +208,21 @@ pub mod player_profile {
             PlayerProfileError::Unauthorized
         );
 
-        // Read burner_wallet from session account and verify it matches the signer
-        let session_burner = Pubkey::try_from(
-            &session_data[SESSION_BURNER_WALLET_OFFSET..SESSION_BURNER_WALLET_OFFSET + 32],
+        // Verify level_completed matches the session's campaign_level.
+        require!(
+            session_data[SESSION_CAMPAIGN_LEVEL_OFFSET] == level_completed,
+            PlayerProfileError::LevelNotUnlocked
+        );
+
+        // Read session_signer from session account and verify it matches the signer
+        let session_signer_key = Pubkey::try_from(
+            &session_data[SESSION_SESSION_SIGNER_OFFSET..SESSION_SESSION_SIGNER_OFFSET + 32],
         )
         .map_err(|_| PlayerProfileError::InvalidSession)?;
 
         require!(
-            session_burner == ctx.accounts.burner_wallet.key(),
-            PlayerProfileError::InvalidBurnerWallet
+            session_signer_key == ctx.accounts.session_signer.key(),
+            PlayerProfileError::InvalidSessionSigner
         );
 
         // Increment total runs
@@ -454,14 +411,23 @@ pub struct RecordRunResultCpi<'info> {
     #[account(mut)]
     pub player_profile: Account<'info, PlayerProfile>,
 
-    /// CHECK: All three checks performed in record_run_result_cpi handler:
+    /// CHECK: All checks performed in record_run_result_cpi handler:
     /// 1. Account owner == session-manager program ID
     /// 2. session.player == player_profile.owner
-    /// 3. session.burner_wallet == burner_wallet signer
+    /// 3. session.campaign_level == level_completed input
+    /// 4. session.session_signer == session_signer signer
     pub session: AccountInfo<'info>,
 
-    /// Burner wallet signer - verified against session's stored burner_wallet field.
-    pub burner_wallet: Signer<'info>,
+    /// Session key signer signer - verified against session's stored session_signer field.
+    pub session_signer: Signer<'info>,
+
+    #[account(
+        seeds = [SESSION_MANAGER_AUTHORITY_SEED],
+        bump,
+        seeds::program = Pubkey::new_from_array(SESSION_MANAGER_PROGRAM_ID),
+    )]
+    /// CHECK: PDA signer proving CPI originates from session-manager program.
+    pub session_manager_authority: Signer<'info>,
 }
 
 #[derive(Accounts)]

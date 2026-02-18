@@ -25,7 +25,4 @@ gameplay-state = { path = "../gameplay-state", features = ["cpi"] }
 map-generator = { path = "../map-generator", features = ["cpi"] }
 player-inventory = { path = "../player-inventory", features = ["cpi"] }
 # NOTE: poi-system dependency removed to avoid cyclic dependency
-# NOTE: ephemeral-rollups-sdk is temporarily disabled due to blake3 v1.8.3 requiring
-# edition2024 which is not supported by the Solana platform tools bundled cargo (1.84.0).
-# The SDK will be added once Anchor tooling is updated.
-# ephemeral-rollups-sdk = { version = "0.8.0", features = ["anchor"] }
+ephemeral-rollups-sdk = { version = "0.7.3", features = ["anchor", "disable-realloc"] }

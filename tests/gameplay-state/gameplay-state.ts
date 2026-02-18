@@ -352,7 +352,7 @@ describe("gameplay-state", () => {
     await ensureMapConfigExists();
 
     const user = Keypair.generate();
-    const burnerWallet = Keypair.generate();
+    const sessionSigner = Keypair.generate();
     const campaignLevel = 1;
 
     // Airdrop SOL
@@ -362,11 +362,11 @@ describe("gameplay-state", () => {
     );
     await provider.connection.confirmTransaction(airdropSig);
 
-    const burnerAirdropSig = await provider.connection.requestAirdrop(
-      burnerWallet.publicKey,
+    const sessionSignerAirdropSig = await provider.connection.requestAirdrop(
+      sessionSigner.publicKey,
       5 * LAMPORTS_PER_SOL,
     );
-    await provider.connection.confirmTransaction(burnerAirdropSig);
+    await provider.connection.confirmTransaction(sessionSignerAirdropSig);
 
     const [playerProfilePDA] = getPlayerProfilePDA(user.publicKey);
     const [sessionPDA] = getSessionPDA(user.publicKey, campaignLevel);
@@ -405,7 +405,7 @@ describe("gameplay-state", () => {
         generatedMap: generatedMapPDA,
         mapGeneratorProgram: mapGeneratorProgram.programId,
         player: user.publicKey,
-        burnerWallet: burnerWallet.publicKey,
+        sessionSigner: sessionSigner.publicKey,
         gameState: gameStatePDA,
         mapEnemies: mapEnemiesPDA,
         mapPois: mapPoisPDA,
@@ -424,7 +424,7 @@ describe("gameplay-state", () => {
           bytes: 256 * 1024,
         }),
       ])
-      .signers([user, burnerWallet])
+      .signers([user, sessionSigner])
       .rpc();
 
     try {
@@ -455,7 +455,8 @@ describe("gameplay-state", () => {
 
     return {
       user,
-      burnerWallet,
+      sessionSigner,
+      sessionSigner: sessionSigner,
       sessionPDA,
       gameStatePDA,
       inventoryPDA,
@@ -473,7 +474,7 @@ describe("gameplay-state", () => {
     await ensureMapConfigExists();
 
     const user = Keypair.generate();
-    const burnerWallet = Keypair.generate();
+    const sessionSigner = Keypair.generate();
     const duelCampaignLevel = 20;
 
     const userAirdropSig = await provider.connection.requestAirdrop(
@@ -482,11 +483,11 @@ describe("gameplay-state", () => {
     );
     await provider.connection.confirmTransaction(userAirdropSig);
 
-    const burnerAirdropSig = await provider.connection.requestAirdrop(
-      burnerWallet.publicKey,
+    const sessionSignerAirdropSig = await provider.connection.requestAirdrop(
+      sessionSigner.publicKey,
       5 * LAMPORTS_PER_SOL,
     );
-    await provider.connection.confirmTransaction(burnerAirdropSig);
+    await provider.connection.confirmTransaction(sessionSignerAirdropSig);
 
     const [playerProfilePDA] = getPlayerProfilePDA(user.publicKey);
     const [sessionPDA] = getDuelSessionPDA(user.publicKey);
@@ -517,7 +518,7 @@ describe("gameplay-state", () => {
         generatedMap: generatedMapPDA,
         mapGeneratorProgram: mapGeneratorProgram.programId,
         player: user.publicKey,
-        burnerWallet: burnerWallet.publicKey,
+        sessionSigner: sessionSigner.publicKey,
         sessionManagerAuthority: sessionManagerAuthorityPDA,
         gameState: gameStatePDA,
         mapEnemies: mapEnemiesPDA,
@@ -536,13 +537,14 @@ describe("gameplay-state", () => {
           bytes: 256 * 1024,
         }),
       ])
-      .signers([user, burnerWallet])
+      .signers([user, sessionSigner])
       .rpc();
 
     const gameState = await gameplayProgram.account.gameState.fetch(gameStatePDA);
     return {
       user,
-      burnerWallet,
+      sessionSigner,
+      sessionSigner: sessionSigner,
       sessionPDA,
       gameStatePDA,
       inventoryPDA,
@@ -600,7 +602,7 @@ describe("gameplay-state", () => {
 
     await cleanup(
       janitor.user,
-      janitor.burnerWallet,
+      janitor.sessionSigner,
       janitor.sessionPDA,
       janitor.gameStatePDA,
       janitor.campaignLevel,
@@ -610,7 +612,7 @@ describe("gameplay-state", () => {
   // Cleanup helper - abandonSession now closes all sub-accounts via CPI
   const cleanup = async (
     user: Keypair,
-    burnerWallet: Keypair,
+    sessionSigner: Keypair,
     sessionPDA: anchor.web3.PublicKey,
     gameStatePDA: anchor.web3.PublicKey,
     campaignLevel: number = 1,
@@ -629,14 +631,14 @@ describe("gameplay-state", () => {
           generatedMap: generatedMapPDA,
           mapPois: mapPoisPDA,
           player: user.publicKey,
-          burnerWallet: burnerWallet.publicKey,
+          sessionSigner: sessionSigner.publicKey,
           inventory: inventoryPDA,
           playerInventoryProgram: playerInventoryProgram.programId,
           gameplayStateProgram: gameplayProgram.programId,
           mapGeneratorProgram: mapGeneratorProgram.programId,
           poiSystemProgram: poiSystemProgram.programId,
         } as any)
-        .signers([user, burnerWallet])
+        .signers([user, sessionSigner])
         .rpc();
     } catch (e) {
       // Ignore if already closed
@@ -644,9 +646,9 @@ describe("gameplay-state", () => {
   };
 
   // Helper to move player with position tracking
-  // burnerWallet: the keypair that signs gameplay transactions
+  // sessionSigner: the keypair that signs gameplay transactions
   const movePlayer = async (
-    burnerWallet: Keypair,
+    sessionSigner: Keypair,
     gameStatePDA: anchor.web3.PublicKey,
     targetX: number,
     targetY: number,
@@ -672,15 +674,15 @@ describe("gameplay-state", () => {
         mapGeneratorProgram: mapGeneratorProgram.programId,
         mapPois: mapPoisPDA,
         poiSystemProgram: poiSystemProgram.programId,
-        player: burnerWallet.publicKey,
+        player: sessionSigner.publicKey,
       } as any)
-      .signers([burnerWallet])
+      .signers([sessionSigner])
       .rpc();
     return { x: targetX, y: targetY };
   };
 
   const prepareGauntletWeekResolution = async (
-    burnerWallet: Keypair,
+    sessionSigner: Keypair,
     gameStatePDA: anchor.web3.PublicKey,
     startX: number,
     startY: number,
@@ -692,9 +694,9 @@ describe("gameplay-state", () => {
         .setPhaseForTesting({ night3: {} }, 1)
         .accounts({
           gameState: gameStatePDA,
-          burnerWallet: burnerWallet.publicKey,
+          sessionSigner: sessionSigner.publicKey,
         } as any)
-        .signers([burnerWallet])
+        .signers([sessionSigner])
         .rpc();
     } catch (error: any) {
       if (error.toString().includes("TestOnlyInstructionDisabled")) {
@@ -711,7 +713,7 @@ describe("gameplay-state", () => {
       mapHeight,
       false,
     );
-    await movePlayer(burnerWallet, gameStatePDA, target.x, target.y);
+    await movePlayer(sessionSigner, gameStatePDA, target.x, target.y);
 
     const gs = await gameplayProgram.account.gameState.fetch(gameStatePDA);
     expect(gs.bossFightReady).to.equal(true);
@@ -784,10 +786,10 @@ describe("gameplay-state", () => {
   };
 
   // Helper to move back and forth
-  // burnerWallet: the keypair that signs gameplay transactions
+  // sessionSigner: the keypair that signs gameplay transactions
   // Returns the final position, or null if the player died during movement
   const moveBackAndForth = async (
-    burnerWallet: Keypair,
+    sessionSigner: Keypair,
     gameStatePDA: anchor.web3.PublicKey,
     startX: number,
     startY: number,
@@ -811,7 +813,7 @@ describe("gameplay-state", () => {
           ? target
           : { x: startX, y: startY };
       try {
-        await movePlayer(burnerWallet, gameStatePDA, next.x, next.y);
+        await movePlayer(sessionSigner, gameStatePDA, next.x, next.y);
       } catch (e: any) {
         if (e.toString().includes("PlayerDead")) {
           return null;
@@ -829,7 +831,7 @@ describe("gameplay-state", () => {
       it("creates game state with correct initial values", async () => {
         const {
           user,
-          burnerWallet,
+          sessionSigner,
           sessionPDA,
           gameStatePDA,
           campaignLevel,
@@ -843,8 +845,8 @@ describe("gameplay-state", () => {
           await gameplayProgram.account.gameState.fetch(gameStatePDA);
 
         expect(gameState.player.toString()).to.equal(user.publicKey.toString());
-        expect(gameState.burnerWallet.toString()).to.equal(
-          burnerWallet.publicKey.toString(),
+        expect(gameState.sessionSigner.toString()).to.equal(
+          sessionSigner.publicKey.toString(),
         );
         expect(gameState.positionX).to.equal(startX);
         expect(gameState.positionY).to.equal(startY);
@@ -863,7 +865,7 @@ describe("gameplay-state", () => {
 
         await cleanup(
           user,
-          burnerWallet,
+          sessionSigner,
           sessionPDA,
           gameStatePDA,
           campaignLevel,
@@ -875,7 +877,7 @@ describe("gameplay-state", () => {
       it("deducts 1 move for floor tile movement", async () => {
         const {
           user,
-          burnerWallet,
+          sessionSigner,
           sessionPDA,
           gameStatePDA,
           campaignLevel,
@@ -893,7 +895,7 @@ describe("gameplay-state", () => {
           false,
         );
 
-        await movePlayer(burnerWallet, gameStatePDA, target.x, target.y);
+        await movePlayer(sessionSigner, gameStatePDA, target.x, target.y);
 
         const gameState =
           await gameplayProgram.account.gameState.fetch(gameStatePDA);
@@ -904,7 +906,7 @@ describe("gameplay-state", () => {
 
         await cleanup(
           user,
-          burnerWallet,
+          sessionSigner,
           sessionPDA,
           gameStatePDA,
           campaignLevel,
@@ -916,7 +918,7 @@ describe("gameplay-state", () => {
       it("deducts correct wall dig cost with default DIG stat", async () => {
         const {
           user,
-          burnerWallet,
+          sessionSigner,
           sessionPDA,
           gameStatePDA,
           campaignLevel,
@@ -934,7 +936,7 @@ describe("gameplay-state", () => {
           true,
         );
 
-        await movePlayer(burnerWallet, gameStatePDA, target.x, target.y);
+        await movePlayer(sessionSigner, gameStatePDA, target.x, target.y);
 
         const gameState =
           await gameplayProgram.account.gameState.fetch(gameStatePDA);
@@ -943,7 +945,7 @@ describe("gameplay-state", () => {
 
         await cleanup(
           user,
-          burnerWallet,
+          sessionSigner,
           sessionPDA,
           gameStatePDA,
           campaignLevel,
@@ -962,7 +964,7 @@ describe("gameplay-state", () => {
       it("rejects movement outside map boundaries", async () => {
         const {
           user,
-          burnerWallet,
+          sessionSigner,
           sessionPDA,
           gameStatePDA,
           campaignLevel,
@@ -971,7 +973,7 @@ describe("gameplay-state", () => {
         } = await setupUserWithGameState();
 
         try {
-          await movePlayer(burnerWallet, gameStatePDA, mapWidth, 0);
+          await movePlayer(sessionSigner, gameStatePDA, mapWidth, 0);
           expect.fail("Should have thrown an error");
         } catch (error: any) {
           expect(error.toString()).to.include("OutOfBounds");
@@ -979,7 +981,7 @@ describe("gameplay-state", () => {
 
         await cleanup(
           user,
-          burnerWallet,
+          sessionSigner,
           sessionPDA,
           gameStatePDA,
           campaignLevel,
@@ -991,7 +993,7 @@ describe("gameplay-state", () => {
       it("rejects wall dig when not enough moves remaining", async () => {
         const {
           user,
-          burnerWallet,
+          sessionSigner,
           sessionPDA,
           gameStatePDA,
           campaignLevel,
@@ -1009,15 +1011,15 @@ describe("gameplay-state", () => {
             .setPhaseForTesting({ night3: {} }, 2)
             .accounts({
               gameState: gameStatePDA,
-              burnerWallet: burnerWallet.publicKey,
+              sessionSigner: sessionSigner.publicKey,
             } as any)
-            .signers([burnerWallet])
+            .signers([sessionSigner])
             .rpc();
         } catch (error: any) {
           if (error.toString().includes("TestOnlyInstructionDisabled")) {
             await cleanup(
               user,
-              burnerWallet,
+              sessionSigner,
               sessionPDA,
               gameStatePDA,
               campaignLevel,
@@ -1042,7 +1044,7 @@ describe("gameplay-state", () => {
           true,
         );
         try {
-          await movePlayer(burnerWallet, gameStatePDA, target.x, target.y); // wall needs 6 (DIG=0), but we only have 2
+          await movePlayer(sessionSigner, gameStatePDA, target.x, target.y); // wall needs 6 (DIG=0), but we only have 2
           expect.fail("Should have thrown an error");
         } catch (error: any) {
           expect(error.toString()).to.include("InsufficientMoves");
@@ -1050,7 +1052,7 @@ describe("gameplay-state", () => {
 
         await cleanup(
           user,
-          burnerWallet,
+          sessionSigner,
           sessionPDA,
           gameStatePDA,
           campaignLevel,
@@ -1062,7 +1064,7 @@ describe("gameplay-state", () => {
       it("rejects movement to non-adjacent tile", async () => {
         const {
           user,
-          burnerWallet,
+          sessionSigner,
           sessionPDA,
           gameStatePDA,
           campaignLevel,
@@ -1083,14 +1085,14 @@ describe("gameplay-state", () => {
         };
 
         try {
-          await movePlayer(burnerWallet, gameStatePDA, target.x, target.y);
+          await movePlayer(sessionSigner, gameStatePDA, target.x, target.y);
           expect.fail("Should have thrown an error");
         } catch (error: any) {
           expect(error.toString()).to.include("NotAdjacent");
         }
 
         try {
-          await movePlayer(burnerWallet, gameStatePDA, diagonal.x, diagonal.y);
+          await movePlayer(sessionSigner, gameStatePDA, diagonal.x, diagonal.y);
           expect.fail("Should have thrown an error");
         } catch (error: any) {
           expect(error.toString()).to.include("NotAdjacent");
@@ -1098,7 +1100,7 @@ describe("gameplay-state", () => {
 
         await cleanup(
           user,
-          burnerWallet,
+          sessionSigner,
           sessionPDA,
           gameStatePDA,
           campaignLevel,
@@ -1110,7 +1112,7 @@ describe("gameplay-state", () => {
   describe("Time and Phase Progression", () => {
     describe("Day phase has 50 moves", () => {
       it("initializes with 50 moves in Day1", async () => {
-        const { user, burnerWallet, sessionPDA, gameStatePDA, campaignLevel } =
+        const { user, sessionSigner, sessionPDA, gameStatePDA, campaignLevel } =
           await setupUserWithGameState();
 
         const gameState =
@@ -1120,7 +1122,7 @@ describe("gameplay-state", () => {
 
         await cleanup(
           user,
-          burnerWallet,
+          sessionSigner,
           sessionPDA,
           gameStatePDA,
           campaignLevel,
@@ -1133,7 +1135,7 @@ describe("gameplay-state", () => {
         // Day1 has no enemy chasing, so player death is not expected here
         const {
           user,
-          burnerWallet,
+          sessionSigner,
           sessionPDA,
           gameStatePDA,
           campaignLevel,
@@ -1145,7 +1147,7 @@ describe("gameplay-state", () => {
 
         // Exhaust Day1 moves
         await moveBackAndForth(
-          burnerWallet,
+          sessionSigner,
           gameStatePDA,
           startX,
           startY,
@@ -1161,7 +1163,7 @@ describe("gameplay-state", () => {
 
         await cleanup(
           user,
-          burnerWallet,
+          sessionSigner,
           sessionPDA,
           gameStatePDA,
           campaignLevel,
@@ -1173,7 +1175,7 @@ describe("gameplay-state", () => {
       it("advances from Day1 to Night1 to Day2", async () => {
         const {
           user,
-          burnerWallet,
+          sessionSigner,
           sessionPDA,
           gameStatePDA,
           campaignLevel,
@@ -1185,7 +1187,7 @@ describe("gameplay-state", () => {
 
         // Day1 -> Night1
         let pos = await moveBackAndForth(
-          burnerWallet,
+          sessionSigner,
           gameStatePDA,
           startX,
           startY,
@@ -1198,7 +1200,7 @@ describe("gameplay-state", () => {
 
         // Night1 -> Day2
         await moveBackAndForth(
-          burnerWallet,
+          sessionSigner,
           gameStatePDA,
           pos!.x,
           pos!.y,
@@ -1211,7 +1213,7 @@ describe("gameplay-state", () => {
 
         await cleanup(
           user,
-          burnerWallet,
+          sessionSigner,
           sessionPDA,
           gameStatePDA,
           campaignLevel,
@@ -1228,7 +1230,7 @@ describe("gameplay-state", () => {
     describe("Boss fight and week transitions", () => {
       it("verifies phase transition logic constants", async () => {
         // Test that the Phase enum and moves_allowed work correctly
-        const { user, burnerWallet, sessionPDA, gameStatePDA, campaignLevel } =
+        const { user, sessionSigner, sessionPDA, gameStatePDA, campaignLevel } =
           await setupUserWithGameState();
 
         const gameState =
@@ -1239,7 +1241,7 @@ describe("gameplay-state", () => {
 
         await cleanup(
           user,
-          burnerWallet,
+          sessionSigner,
           sessionPDA,
           gameStatePDA,
           campaignLevel,
@@ -1255,7 +1257,7 @@ describe("gameplay-state", () => {
   describe("Player Stats Management", () => {
     describe("HP initialized correctly", () => {
       it("has correct initial HP (base 10)", async () => {
-        const { user, burnerWallet, sessionPDA, gameStatePDA, campaignLevel } =
+        const { user, sessionSigner, sessionPDA, gameStatePDA, campaignLevel } =
           await setupUserWithGameState();
 
         const gameState =
@@ -1264,7 +1266,7 @@ describe("gameplay-state", () => {
 
         await cleanup(
           user,
-          burnerWallet,
+          sessionSigner,
           sessionPDA,
           gameStatePDA,
           campaignLevel,
@@ -1293,7 +1295,7 @@ describe("gameplay-state", () => {
   describe("Gear Slots Progression", () => {
     describe("gear_slots initialized to 4", () => {
       it("starts with 4 gear slots", async () => {
-        const { user, burnerWallet, sessionPDA, gameStatePDA, campaignLevel } =
+        const { user, sessionSigner, sessionPDA, gameStatePDA, campaignLevel } =
           await setupUserWithGameState();
 
         const gs = await gameplayProgram.account.gameState.fetch(gameStatePDA);
@@ -1301,7 +1303,7 @@ describe("gameplay-state", () => {
 
         await cleanup(
           user,
-          burnerWallet,
+          sessionSigner,
           sessionPDA,
           gameStatePDA,
           campaignLevel,
@@ -1326,61 +1328,44 @@ describe("gameplay-state", () => {
 
   describe("Session Integration & Cleanup", () => {
     describe("GameState requires valid GameSession PDA", () => {
-      it("rejects non-session account", async () => {
+      it("rejects non-session account at map generation boundary", async () => {
         const user = Keypair.generate();
-        const burner = Keypair.generate();
         const airdropSig = await provider.connection.requestAirdrop(
           user.publicKey,
           LAMPORTS_PER_SOL,
         );
         await provider.connection.confirmTransaction(airdropSig);
 
-        const [gameStatePDA] = getGameStatePDA(user.publicKey);
         const [generatedMapPDA] = getGeneratedMapPDA(user.publicKey);
-        const [mapEnemiesPDA] = getMapEnemiesPDA(user.publicKey);
 
         await ensureMapConfigExists();
 
-        await mapGeneratorProgram.methods
-          .generateMap(1)
-          .accounts({
-            payer: user.publicKey,
-            session: user.publicKey,
-            mapConfig: mapConfigPDA,
-            generatedMap: generatedMapPDA,
-            mapGeneratorProgram: mapGeneratorProgram.programId,
-            systemProgram: SystemProgram.programId,
-          } as any)
-          .preInstructions([
-            anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
-              units: 1400000,
-            }),
-          ])
-          .signers([user])
-          .rpc();
-
         try {
-          await gameplayProgram.methods
-            .initializeGameState(1, 10, 10, 0, 0)
+          await mapGeneratorProgram.methods
+            .generateMap(1)
             .accounts({
-              gameState: gameStatePDA,
-              gameSession: user.publicKey,
+              payer: user.publicKey,
+              session: user.publicKey,
+              mapConfig: mapConfigPDA,
               generatedMap: generatedMapPDA,
-              mapEnemies: mapEnemiesPDA,
-              player: user.publicKey,
-              burnerWallet: burner.publicKey,
+              mapGeneratorProgram: mapGeneratorProgram.programId,
               systemProgram: SystemProgram.programId,
             } as any)
+            .preInstructions([
+              anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+                units: 1400000,
+              }),
+            ])
             .signers([user])
             .rpc();
-          expect.fail("Should have thrown InvalidSessionOwner error");
+          expect.fail("Should have thrown InvalidSessionOwner");
         } catch (error: any) {
           expect(error.toString()).to.include("InvalidSessionOwner");
         }
       });
 
       it("creates GameState linked to session", async () => {
-        const { user, burnerWallet, sessionPDA, gameStatePDA, campaignLevel } =
+        const { user, sessionSigner, sessionPDA, gameStatePDA, campaignLevel } =
           await setupUserWithGameState();
 
         const gs = await gameplayProgram.account.gameState.fetch(gameStatePDA);
@@ -1388,7 +1373,7 @@ describe("gameplay-state", () => {
 
         await cleanup(
           user,
-          burnerWallet,
+          sessionSigner,
           sessionPDA,
           gameStatePDA,
           campaignLevel,
@@ -1398,7 +1383,7 @@ describe("gameplay-state", () => {
 
     describe("Only session owner can modify game state", () => {
       it("rejects modification from non-owner", async () => {
-        const { user, burnerWallet, sessionPDA, gameStatePDA, campaignLevel } =
+        const { user, sessionSigner, sessionPDA, gameStatePDA, campaignLevel } =
           await setupUserWithGameState();
 
         const otherUser = Keypair.generate();
@@ -1438,7 +1423,7 @@ describe("gameplay-state", () => {
 
         await cleanup(
           user,
-          burnerWallet,
+          sessionSigner,
           sessionPDA,
           gameStatePDA,
           campaignLevel,
@@ -1493,7 +1478,7 @@ describe("gameplay-state", () => {
 
         await cleanup(
           player.user,
-          player.burnerWallet,
+          player.sessionSigner,
           player.sessionPDA,
           player.gameStatePDA,
           player.campaignLevel,
@@ -1590,14 +1575,14 @@ describe("gameplay-state", () => {
 
         await cleanup(
           playerOne.user,
-          playerOne.burnerWallet,
+          playerOne.sessionSigner,
           playerOne.sessionPDA,
           playerOne.gameStatePDA,
           playerOne.campaignLevel,
         );
         await cleanup(
           playerTwo.user,
-          playerTwo.burnerWallet,
+          playerTwo.sessionSigner,
           playerTwo.sessionPDA,
           playerTwo.gameStatePDA,
           playerTwo.campaignLevel,
@@ -1638,7 +1623,7 @@ describe("gameplay-state", () => {
 
         await cleanup(
           player.user,
-          player.burnerWallet,
+          player.sessionSigner,
           player.sessionPDA,
           player.gameStatePDA,
           player.campaignLevel,
@@ -1726,14 +1711,14 @@ describe("gameplay-state", () => {
 
         await cleanup(
           playerOne.user,
-          playerOne.burnerWallet,
+          playerOne.sessionSigner,
           playerOne.sessionPDA,
           playerOne.gameStatePDA,
           playerOne.campaignLevel,
         );
         await cleanup(
           playerTwo.user,
-          playerTwo.burnerWallet,
+          playerTwo.sessionSigner,
           playerTwo.sessionPDA,
           playerTwo.gameStatePDA,
           playerTwo.campaignLevel,
@@ -1766,7 +1751,7 @@ describe("gameplay-state", () => {
           .rpc();
 
         const ready = await prepareGauntletWeekResolution(
-          player.burnerWallet,
+          player.sessionSigner,
           player.gameStatePDA,
           player.startX,
           player.startY,
@@ -1776,7 +1761,7 @@ describe("gameplay-state", () => {
         if (!ready) {
           await cleanup(
             player.user,
-            player.burnerWallet,
+            player.sessionSigner,
             player.sessionPDA,
             player.gameStatePDA,
             player.campaignLevel,
@@ -1829,7 +1814,7 @@ describe("gameplay-state", () => {
 
         await cleanup(
           player.user,
-          player.burnerWallet,
+          player.sessionSigner,
           player.sessionPDA,
           player.gameStatePDA,
           player.campaignLevel,
@@ -1868,7 +1853,7 @@ describe("gameplay-state", () => {
           .rpc();
 
         const ready = await prepareGauntletWeekResolution(
-          player.burnerWallet,
+          player.sessionSigner,
           player.gameStatePDA,
           player.startX,
           player.startY,
@@ -1878,7 +1863,7 @@ describe("gameplay-state", () => {
         if (!ready) {
           await cleanup(
             player.user,
-            player.burnerWallet,
+            player.sessionSigner,
             player.sessionPDA,
             player.gameStatePDA,
             player.campaignLevel,
@@ -1926,7 +1911,7 @@ describe("gameplay-state", () => {
 
         await cleanup(
           player.user,
-          player.burnerWallet,
+          player.sessionSigner,
           player.sessionPDA,
           player.gameStatePDA,
           player.campaignLevel,
@@ -1936,7 +1921,7 @@ describe("gameplay-state", () => {
 
     describe("close_game_state returns rent to player", () => {
       it("closes game state and returns rent", async () => {
-        const { user, burnerWallet, sessionPDA, gameStatePDA, campaignLevel } =
+        const { user, sessionSigner, sessionPDA, gameStatePDA, campaignLevel } =
           await setupUserWithGameState();
 
         const balanceBefore = await provider.connection.getBalance(

@@ -9,6 +9,9 @@
 //! - Combat effect integration
 
 use anchor_lang::prelude::*;
+use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
+use ephemeral_rollups_sdk::cpi::DelegateConfig;
+use ephemeral_rollups_sdk::ephem::commit_and_undelegate_accounts;
 
 pub mod constants;
 pub mod effects;
@@ -49,7 +52,16 @@ pub const GAMEPLAY_STATE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     66, 165, 213, 208, 125, 103, 44, 88, 115, 217, 192, 197, 1, 117, 7, 170, 78, 32, 208, 143, 119,
     94, 47, 124, 229, 196, 47, 149, 235, 227, 237, 31,
 ]);
+pub const LOCAL_ER_VALIDATOR: Pubkey = pubkey!("mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev");
 
+fn local_delegate_config() -> DelegateConfig {
+    DelegateConfig {
+        validator: Some(LOCAL_ER_VALIDATOR),
+        ..DelegateConfig::default()
+    }
+}
+
+#[ephemeral]
 #[program]
 pub mod player_inventory {
     use super::*;
@@ -73,6 +85,56 @@ pub mod player_inventory {
             session: ctx.accounts.session.key(),
         });
 
+        Ok(())
+    }
+
+    /// Delegates inventory PDA to MagicBlock from player-inventory (its owner program).
+    pub fn delegate_inventory(ctx: Context<DelegateInventory>) -> Result<()> {
+        let session_key = ctx.accounts.session.key();
+        let (expected_inventory, _) =
+            Pubkey::find_program_address(&[b"inventory", session_key.as_ref()], &crate::ID);
+        require_keys_eq!(
+            ctx.accounts.inventory.key(),
+            expected_inventory,
+            InventoryError::Unauthorized
+        );
+        let inventory_seeds: &[&[u8]] = &[b"inventory", session_key.as_ref()];
+        ctx.accounts.delegate_inventory(
+            &ctx.accounts.player,
+            inventory_seeds,
+            local_delegate_config(),
+        )?;
+        Ok(())
+    }
+
+    /// Commits and undelegates inventory PDA from ER back to base layer.
+    pub fn undelegate_inventory(ctx: Context<UndelegateInventory>) -> Result<()> {
+        let session_key = ctx.accounts.session.key();
+        let (expected_inventory, _) =
+            Pubkey::find_program_address(&[b"inventory", session_key.as_ref()], &crate::ID);
+        require_keys_eq!(
+            ctx.accounts.inventory.key(),
+            expected_inventory,
+            InventoryError::Unauthorized
+        );
+        require_keys_eq!(
+            ctx.accounts.inventory.session,
+            session_key,
+            InventoryError::Unauthorized
+        );
+        require_keys_eq!(
+            ctx.accounts.inventory.player,
+            ctx.accounts.session_signer.key(),
+            InventoryError::Unauthorized
+        );
+
+        let inventory_info = ctx.accounts.inventory.to_account_info();
+        commit_and_undelegate_accounts(
+            &ctx.accounts.session_signer.to_account_info(),
+            vec![&inventory_info],
+            &ctx.accounts.magic_context,
+            &ctx.accounts.magic_program.to_account_info(),
+        )?;
         Ok(())
     }
 
@@ -646,6 +708,27 @@ fn remove_hp_bonus_cpi<'info>(
 // =============================================================================
 // Account Contexts
 // =============================================================================
+
+#[delegate]
+#[derive(Accounts)]
+pub struct DelegateInventory<'info> {
+    #[account(mut, del)]
+    /// CHECK: PDA is validated in handler.
+    pub inventory: AccountInfo<'info>,
+    /// CHECK: Session PDA owned by session-manager; used only for seed derivation.
+    pub session: UncheckedAccount<'info>,
+    pub player: Signer<'info>,
+}
+
+#[commit]
+#[derive(Accounts)]
+pub struct UndelegateInventory<'info> {
+    #[account(mut)]
+    pub inventory: Account<'info, PlayerInventory>,
+    /// CHECK: Session PDA used only for deterministic PDA validation.
+    pub session: UncheckedAccount<'info>,
+    pub session_signer: Signer<'info>,
+}
 
 #[derive(Accounts)]
 pub struct InitializeInventory<'info> {

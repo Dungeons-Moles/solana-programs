@@ -238,7 +238,7 @@ describe("player-profile", () => {
   // ==========================================================================
 
   describe("Run Completion (US5)", () => {
-    it("records run completion", async () => {
+    it("rejects direct record_run_result mutation", async () => {
       const user = Keypair.generate();
 
       // Airdrop SOL
@@ -261,178 +261,22 @@ describe("player-profile", () => {
         .signers([user])
         .rpc();
 
-      // Record a run (level 0, defeat)
-      await program.methods
-        .recordRunResult(0, false)
-        .accounts({
-          playerProfile: profilePDA,
-          owner: user.publicKey,
-        } as any)
-        .signers([user])
-        .rpc();
-
-      const profile = await program.account.playerProfile.fetch(profilePDA);
-      expect(profile.totalRuns).to.equal(1);
-      // availableRuns is NOT decremented by record_run_result anymore
-      // It's decremented by consume_run at session start instead
-      expect((profile as any).availableRuns).to.equal(20);
-    });
-
-    it("increments total_runs on completion", async () => {
-      const user = Keypair.generate();
-
-      // Airdrop SOL
-      const airdropSig = await provider.connection.requestAirdrop(
-        user.publicKey,
-        2 * LAMPORTS_PER_SOL,
-      );
-      await provider.connection.confirmTransaction(airdropSig);
-
-      const [profilePDA] = getProfilePDA(user.publicKey);
-
-      // Create profile
-      await program.methods
-        .initializeProfile("RunCountTest")
-        .accounts({
-          playerProfile: profilePDA,
-          owner: user.publicKey,
-          systemProgram: SystemProgram.programId,
-        } as any)
-        .signers([user])
-        .rpc();
-
-      // Record multiple runs
-      for (let i = 0; i < 5; i++) {
+      try {
         await program.methods
-          .recordRunResult(i, i % 2 === 0) // alternating wins/losses
+          .recordRunResult(1, false)
           .accounts({
             playerProfile: profilePDA,
             owner: user.publicKey,
           } as any)
           .signers([user])
           .rpc();
+        expect.fail("Should have thrown DirectMutationDisabled");
+      } catch (error: any) {
+        expect(error.toString()).to.include("DirectMutationDisabled");
       }
 
       const profile = await program.account.playerProfile.fetch(profilePDA);
-      expect(profile.totalRuns).to.equal(5);
-      // availableRuns is NOT decremented by record_run_result anymore
-      // It's decremented by consume_run at session start instead
-      expect((profile as any).availableRuns).to.equal(20);
-    });
-
-    it("advances level on victory", async () => {
-      const user = Keypair.generate();
-
-      // Airdrop SOL
-      const airdropSig = await provider.connection.requestAirdrop(
-        user.publicKey,
-        2 * LAMPORTS_PER_SOL,
-      );
-      await provider.connection.confirmTransaction(airdropSig);
-
-      const [profilePDA] = getProfilePDA(user.publicKey);
-
-      // Create profile
-      await program.methods
-        .initializeProfile("LevelAdvanceTest")
-        .accounts({
-          playerProfile: profilePDA,
-          owner: user.publicKey,
-          systemProgram: SystemProgram.programId,
-        } as any)
-        .signers([user])
-        .rpc();
-
-      // Verify starting level (field renamed: currentLevel -> highestLevelUnlocked, starts at 1)
-      let profile = await program.account.playerProfile.fetch(profilePDA);
-      expect((profile as any).highestLevelUnlocked).to.equal(1);
-
-      // Record a victory at level 1
-      await program.methods
-        .recordRunResult(1, true)
-        .accounts({
-          playerProfile: profilePDA,
-          owner: user.publicKey,
-        } as any)
-        .signers([user])
-        .rpc();
-
-      // Verify level advanced to 2
-      profile = await program.account.playerProfile.fetch(profilePDA);
-      expect((profile as any).highestLevelUnlocked).to.equal(2);
-      // availableRuns is NOT decremented by record_run_result anymore
-      expect((profile as any).availableRuns).to.equal(20);
-
-      // Record another victory at level 2
-      await program.methods
-        .recordRunResult(2, true)
-        .accounts({
-          playerProfile: profilePDA,
-          owner: user.publicKey,
-        } as any)
-        .signers([user])
-        .rpc();
-
-      profile = await program.account.playerProfile.fetch(profilePDA);
-      expect((profile as any).highestLevelUnlocked).to.equal(3);
-      // availableRuns is NOT decremented by record_run_result anymore
-      expect((profile as any).availableRuns).to.equal(20);
-    });
-
-    it("does not advance level on defeat", async () => {
-      const user = Keypair.generate();
-
-      // Airdrop SOL
-      const airdropSig = await provider.connection.requestAirdrop(
-        user.publicKey,
-        2 * LAMPORTS_PER_SOL,
-      );
-      await provider.connection.confirmTransaction(airdropSig);
-
-      const [profilePDA] = getProfilePDA(user.publicKey);
-
-      // Create profile
-      await program.methods
-        .initializeProfile("NoAdvanceOnDefeat")
-        .accounts({
-          playerProfile: profilePDA,
-          owner: user.publicKey,
-          systemProgram: SystemProgram.programId,
-        } as any)
-        .signers([user])
-        .rpc();
-
-      // Advance to level 6 (start at 1, win 5 times to get to level 6)
-      for (let i = 1; i <= 5; i++) {
-        await program.methods
-          .recordRunResult(i, true)
-          .accounts({
-            playerProfile: profilePDA,
-            owner: user.publicKey,
-          } as any)
-          .signers([user])
-          .rpc();
-      }
-
-      let profile = await program.account.playerProfile.fetch(profilePDA);
-      expect((profile as any).highestLevelUnlocked).to.equal(6);
-
-      // Record a defeat at level 6
-      await program.methods
-        .recordRunResult(6, false)
-        .accounts({
-          playerProfile: profilePDA,
-          owner: user.publicKey,
-        } as any)
-        .signers([user])
-        .rpc();
-
-      // Verify level did NOT advance
-      profile = await program.account.playerProfile.fetch(profilePDA);
-      expect((profile as any).highestLevelUnlocked).to.equal(6);
-      expect(profile.totalRuns).to.equal(6);
-      // availableRuns is NOT decremented by record_run_result anymore
-      // It's decremented by consume_run at session start instead
+      expect(profile.totalRuns).to.equal(0);
       expect((profile as any).availableRuns).to.equal(20);
     });
   });

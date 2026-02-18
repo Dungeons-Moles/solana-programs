@@ -321,8 +321,10 @@ mod tests {
     fn test_select_random_locked_item_returns_none_when_all_unlocked() {
         let mut all_unlocked: [u8; ITEM_BITMASK_SIZE] = [0xFF; ITEM_BITMASK_SIZE];
         // Reserve non-unlockable indices as "unlocked" to avoid being considered by selection.
-        for i in UNLOCKABLE_ITEMS..TOTAL_ITEMS {
+        let mut i = UNLOCKABLE_ITEMS;
+        while i < TOTAL_ITEMS {
             set_bit(&mut all_unlocked, i);
+            i = i.saturating_add(1);
         }
         let player = Pubkey::new_unique();
         let level = 5u8;

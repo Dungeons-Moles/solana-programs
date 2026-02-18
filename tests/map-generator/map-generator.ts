@@ -10,6 +10,9 @@ describe("map-generator", () => {
   anchor.setProvider(provider);
 
   const program = anchor.workspace.MapGenerator as Program<MapGenerator>;
+  const SESSION_MANAGER_PROGRAM_ID = new anchor.web3.PublicKey(
+    "FcMT7MzBLVQGaMATEMws3fjsL2Q77QSHmoEPdowTMxJa",
+  );
 
   // Helper to derive map config PDA
   const getMapConfigPDA = () => {
@@ -96,13 +99,30 @@ describe("map-generator", () => {
     );
   };
 
+  const createMockSessionAccount = async (): Promise<Keypair> => {
+    const session = Keypair.generate();
+    const space = 8;
+    const lamports =
+      await provider.connection.getMinimumBalanceForRentExemption(space);
+    const tx = new anchor.web3.Transaction().add(
+      SystemProgram.createAccount({
+        fromPubkey: provider.wallet.publicKey,
+        newAccountPubkey: session.publicKey,
+        lamports,
+        space,
+        programId: SESSION_MANAGER_PROGRAM_ID,
+      }),
+    );
+    await provider.sendAndConfirm(tx, [session]);
+    return session;
+  };
+
   describe("Generate Map", () => {
     it("generates a map for campaign level 1", async () => {
       await ensureConfigExists();
 
       const payer = provider.wallet;
-      // Create a mock session keypair (just needs to be a unique pubkey for PDA derivation)
-      const session = Keypair.generate();
+      const session = await createMockSessionAccount();
       const [generatedMapPDA] = getGeneratedMapPDA(session.publicKey);
 
       await program.methods
@@ -184,7 +204,7 @@ describe("map-generator", () => {
       const payer = provider.wallet;
 
       // Generate map for level 2
-      const session2 = Keypair.generate();
+      const session2 = await createMockSessionAccount();
       const [generatedMapPDA2] = getGeneratedMapPDA(session2.publicKey);
 
       await program.methods
@@ -200,7 +220,7 @@ describe("map-generator", () => {
         .rpc();
 
       // Generate map for level 3
-      const session3 = Keypair.generate();
+      const session3 = await createMockSessionAccount();
       const [generatedMapPDA3] = getGeneratedMapPDA(session3.publicKey);
 
       await program.methods
@@ -234,8 +254,8 @@ describe("map-generator", () => {
       const payer = provider.wallet;
 
       // Generate two maps for the same level (but different sessions)
-      const session1 = Keypair.generate();
-      const session2 = Keypair.generate();
+      const session1 = await createMockSessionAccount();
+      const session2 = await createMockSessionAccount();
       const [generatedMapPDA1] = getGeneratedMapPDA(session1.publicKey);
       const [generatedMapPDA2] = getGeneratedMapPDA(session2.publicKey);
 
@@ -280,7 +300,7 @@ describe("map-generator", () => {
       await ensureConfigExists();
 
       const payer = provider.wallet;
-      const session = Keypair.generate();
+      const session = await createMockSessionAccount();
       const [generatedMapPDA] = getGeneratedMapPDA(session.publicKey);
 
       try {
@@ -305,7 +325,7 @@ describe("map-generator", () => {
       await ensureConfigExists();
 
       const payer = provider.wallet;
-      const session = Keypair.generate();
+      const session = await createMockSessionAccount();
       const [generatedMapPDA] = getGeneratedMapPDA(session.publicKey);
 
       try {
@@ -330,7 +350,7 @@ describe("map-generator", () => {
       await ensureConfigExists();
 
       const payer = provider.wallet;
-      const session = Keypair.generate();
+      const session = await createMockSessionAccount();
       const [generatedMapPDA] = getGeneratedMapPDA(session.publicKey);
 
       // First map generation should succeed
@@ -372,7 +392,7 @@ describe("map-generator", () => {
       await ensureConfigExists();
 
       const payer = provider.wallet;
-      const session = Keypair.generate();
+      const session = await createMockSessionAccount();
       const [generatedMapPDA] = getGeneratedMapPDA(session.publicKey);
 
       await program.methods
@@ -409,7 +429,7 @@ describe("map-generator", () => {
       await ensureConfigExists();
 
       const payer = provider.wallet;
-      const session = Keypair.generate();
+      const session = await createMockSessionAccount();
       const [generatedMapPDA] = getGeneratedMapPDA(session.publicKey);
 
       await program.methods

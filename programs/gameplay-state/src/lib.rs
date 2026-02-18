@@ -3,6 +3,9 @@ use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::program::invoke;
 use anchor_lang::system_program;
 use core::str::FromStr;
+use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
+use ephemeral_rollups_sdk::cpi::DelegateConfig;
+use ephemeral_rollups_sdk::ephem::commit_and_undelegate_accounts;
 
 pub mod constants;
 pub mod errors;
@@ -71,6 +74,7 @@ pub const PIT_DRAFT_MAX_START_GOLD: u16 = 30;
 pub const MAX_PVP_VISUAL_LOG_ENTRIES: usize = 512;
 pub const DISCOVER_VISIBLE_WAYPOINTS_DISCRIMINATOR: [u8; 8] =
     [0x3b, 0x26, 0x6a, 0x00, 0x3a, 0xb1, 0x50, 0xfc];
+pub const LOCAL_ER_VALIDATOR: Pubkey = pubkey!("mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev");
 
 /// Player inventory program ID for authorized HP modifications via CPI
 /// Derived from "5BtqiWegvVAgEnTRUofB9oUoQvPztYqSkMPwRpYQacP8"
@@ -79,6 +83,14 @@ pub const PLAYER_INVENTORY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     133, 58, 191, 234, 132, 254, 214, 152, 21, 230, 167,
 ]);
 
+fn local_delegate_config() -> DelegateConfig {
+    DelegateConfig {
+        validator: Some(LOCAL_ER_VALIDATOR),
+        ..DelegateConfig::default()
+    }
+}
+
+#[ephemeral]
 #[program]
 pub mod gameplay_state {
     use super::*;
@@ -105,7 +117,7 @@ pub mod gameplay_state {
 
         let game_state = &mut ctx.accounts.game_state;
         game_state.player = ctx.accounts.player.key();
-        game_state.burner_wallet = ctx.accounts.burner_wallet.key();
+        game_state.session_signer = ctx.accounts.session_signer.key();
         game_state.session = ctx.accounts.game_session.key();
         game_state.position_x = start_x;
         game_state.position_y = start_y;
@@ -153,6 +165,88 @@ pub mod gameplay_state {
             map_height,
         });
 
+        Ok(())
+    }
+
+    /// Delegates GameState and MapEnemies PDAs to MagicBlock from gameplay-state.
+    pub fn delegate_gameplay_accounts(ctx: Context<DelegateGameplayAccounts>) -> Result<()> {
+        let session_key = ctx.accounts.game_session.key();
+        let (expected_game_state, _) =
+            Pubkey::find_program_address(&[b"game_state", session_key.as_ref()], &crate::ID);
+        require_keys_eq!(
+            ctx.accounts.game_state.key(),
+            expected_game_state,
+            GameplayStateError::Unauthorized
+        );
+        let (expected_map_enemies, _) = Pubkey::find_program_address(
+            &[MapEnemies::SEED_PREFIX, session_key.as_ref()],
+            &crate::ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.map_enemies.key(),
+            expected_map_enemies,
+            GameplayStateError::Unauthorized
+        );
+
+        let game_state_seeds: &[&[u8]] = &[b"game_state", session_key.as_ref()];
+        ctx.accounts.delegate_game_state(
+            &ctx.accounts.player,
+            game_state_seeds,
+            local_delegate_config(),
+        )?;
+
+        let map_enemies_seeds: &[&[u8]] = &[MapEnemies::SEED_PREFIX, session_key.as_ref()];
+        ctx.accounts.delegate_map_enemies(
+            &ctx.accounts.player,
+            map_enemies_seeds,
+            local_delegate_config(),
+        )?;
+        Ok(())
+    }
+
+    /// Commits and undelegates gameplay runtime accounts from ER back to base layer.
+    pub fn undelegate_gameplay_accounts(ctx: Context<UndelegateGameplayAccounts>) -> Result<()> {
+        let session_key = ctx.accounts.game_session.key();
+        let (expected_game_state, _) =
+            Pubkey::find_program_address(&[b"game_state", session_key.as_ref()], &crate::ID);
+        require_keys_eq!(
+            ctx.accounts.game_state.key(),
+            expected_game_state,
+            GameplayStateError::Unauthorized
+        );
+        let (expected_map_enemies, _) = Pubkey::find_program_address(
+            &[MapEnemies::SEED_PREFIX, session_key.as_ref()],
+            &crate::ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.map_enemies.key(),
+            expected_map_enemies,
+            GameplayStateError::Unauthorized
+        );
+        require_keys_eq!(
+            ctx.accounts.game_state.session,
+            session_key,
+            GameplayStateError::Unauthorized
+        );
+        require_keys_eq!(
+            ctx.accounts.map_enemies.session,
+            session_key,
+            GameplayStateError::Unauthorized
+        );
+        require_keys_eq!(
+            ctx.accounts.game_state.session_signer,
+            ctx.accounts.session_signer.key(),
+            GameplayStateError::Unauthorized
+        );
+
+        let game_state_info = ctx.accounts.game_state.to_account_info();
+        let map_enemies_info = ctx.accounts.map_enemies.to_account_info();
+        commit_and_undelegate_accounts(
+            &ctx.accounts.session_signer.to_account_info(),
+            vec![&game_state_info, &map_enemies_info],
+            &ctx.accounts.magic_context,
+            &ctx.accounts.magic_program.to_account_info(),
+        )?;
         Ok(())
     }
 
@@ -1182,10 +1276,10 @@ pub mod gameplay_state {
         Ok(())
     }
 
-    /// Closes the GameState account via burner wallet authorization.
+    /// Closes the GameState account via session key signer authorization.
     /// Used by session-manager CPI during end_session to clean up game state.
     /// Rent is returned to the player wallet.
-    pub fn close_game_state_via_burner(ctx: Context<CloseGameStateViaBurner>) -> Result<()> {
+    pub fn close_game_state_via_session_signer(ctx: Context<CloseGameStateViaSessionSigner>) -> Result<()> {
         let game_state = &ctx.accounts.game_state;
 
         emit!(GameStateClosed {
@@ -1198,7 +1292,7 @@ pub mod gameplay_state {
         Ok(())
     }
 
-    /// Closes the MapEnemies account via burner wallet authorization.
+    /// Closes the MapEnemies account via session key signer authorization.
     /// Used by session-manager CPI during end_session to clean up.
     /// Rent is returned to the player wallet.
     pub fn close_map_enemies(ctx: Context<CloseMapEnemies>) -> Result<()> {
@@ -1832,14 +1926,40 @@ pub mod gameplay_state {
     }
 }
 
+#[delegate]
+#[derive(Accounts)]
+pub struct DelegateGameplayAccounts<'info> {
+    #[account(mut, del)]
+    /// CHECK: PDA is validated in handler.
+    pub game_state: AccountInfo<'info>,
+    #[account(mut, del)]
+    /// CHECK: PDA is validated in handler.
+    pub map_enemies: AccountInfo<'info>,
+    /// CHECK: Session PDA owned by session-manager; used only for seed derivation.
+    pub game_session: UncheckedAccount<'info>,
+    pub player: Signer<'info>,
+}
+
+#[commit]
+#[derive(Accounts)]
+pub struct UndelegateGameplayAccounts<'info> {
+    #[account(mut)]
+    pub game_state: Account<'info, GameState>,
+    #[account(mut)]
+    pub map_enemies: Account<'info, MapEnemies>,
+    /// CHECK: Session PDA used only for deterministic PDA validation.
+    pub game_session: UncheckedAccount<'info>,
+    pub session_signer: Signer<'info>,
+}
+
 #[derive(Accounts)]
 pub struct SetPhaseForTesting<'info> {
     #[account(
         mut,
-        has_one = burner_wallet,
+        has_one = session_signer,
     )]
     pub game_state: Account<'info, GameState>,
-    pub burner_wallet: Signer<'info>,
+    pub session_signer: Signer<'info>,
 }
 
 fn find_enemy_index(map_enemies: &MapEnemies, x: u8, y: u8) -> Option<usize> {
@@ -2927,9 +3047,9 @@ pub struct InitializeGameState<'info> {
     #[account(mut)]
     pub player: Signer<'info>,
 
-    /// CHECK: Burner wallet whose pubkey is stored in game_state.burner_wallet
+    /// CHECK: Session key signer whose pubkey is stored in game_state.session_signer
     /// for authorizing gameplay transactions (move, boss fight).
-    pub burner_wallet: AccountInfo<'info>,
+    pub session_signer: AccountInfo<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -3431,12 +3551,12 @@ pub struct CloseGameState<'info> {
     pub player: Signer<'info>,
 }
 
-/// Context for closing GameState via burner wallet (for session-manager CPI).
+/// Context for closing GameState via session key signer (for session-manager CPI).
 #[derive(Accounts)]
-pub struct CloseGameStateViaBurner<'info> {
+pub struct CloseGameStateViaSessionSigner<'info> {
     #[account(
         mut,
-        has_one = burner_wallet @ GameplayStateError::Unauthorized,
+        has_one = session_signer @ GameplayStateError::Unauthorized,
         close = player,
     )]
     pub game_state: Account<'info, GameState>,
@@ -3446,11 +3566,11 @@ pub struct CloseGameStateViaBurner<'info> {
     #[account(mut)]
     pub player: AccountInfo<'info>,
 
-    /// Burner wallet must sign to authorize closure
-    pub burner_wallet: Signer<'info>,
+    /// Session key signer must sign to authorize closure
+    pub session_signer: Signer<'info>,
 }
 
-/// Context for closing MapEnemies account via burner wallet.
+/// Context for closing MapEnemies account via session key signer.
 #[derive(Accounts)]
 pub struct CloseMapEnemies<'info> {
     #[account(
@@ -3462,9 +3582,9 @@ pub struct CloseMapEnemies<'info> {
     )]
     pub map_enemies: Account<'info, MapEnemies>,
 
-    /// GameState to verify burner_wallet authorization
+    /// GameState to verify session_signer authorization
     #[account(
-        has_one = burner_wallet @ GameplayStateError::Unauthorized,
+        has_one = session_signer @ GameplayStateError::Unauthorized,
     )]
     pub game_state: Account<'info, GameState>,
 
@@ -3473,8 +3593,8 @@ pub struct CloseMapEnemies<'info> {
     #[account(mut, address = game_state.player @ GameplayStateError::Unauthorized)]
     pub player: AccountInfo<'info>,
 
-    /// Burner wallet must sign to authorize closure
-    pub burner_wallet: Signer<'info>,
+    /// Session key signer must sign to authorize closure
+    pub session_signer: Signer<'info>,
 }
 
 /// Context for healing the player, authorized by poi-system CPI.
@@ -3614,12 +3734,11 @@ pub struct SetPositionAuthorized<'info> {
 pub struct Move<'info> {
     #[account(
         mut,
-        constraint = game_state.burner_wallet == player.key() @ GameplayStateError::Unauthorized,
+        constraint = game_state.session_signer == player.key() @ GameplayStateError::Unauthorized,
     )]
     pub game_state: Account<'info, GameState>,
 
     #[account(
-        mut,
         constraint = game_state.session == game_session.key() @ GameplayStateError::InvalidSession
     )]
     /// CHECK: Validated by game_state.session match.
@@ -3670,7 +3789,6 @@ pub struct Move<'info> {
     #[account(address = POI_SYSTEM_PROGRAM_ID)]
     pub poi_system_program: AccountInfo<'info>,
 
-    #[account(mut)]
     pub player: Signer<'info>,
 }
 
@@ -3678,7 +3796,7 @@ pub struct Move<'info> {
 pub struct TriggerBossFight<'info> {
     #[account(
         mut,
-        constraint = game_state.burner_wallet == player.key() @ GameplayStateError::Unauthorized,
+        constraint = game_state.session_signer == player.key() @ GameplayStateError::Unauthorized,
     )]
     pub game_state: Account<'info, GameState>,
 
@@ -4414,7 +4532,7 @@ mod hp_logic_tests {
     fn make_gauntlet_gate_state() -> GameState {
         GameState {
             player: Pubkey::default(),
-            burner_wallet: Pubkey::default(),
+            session_signer: Pubkey::default(),
             session: Pubkey::default(),
             position_x: 0,
             position_y: 0,

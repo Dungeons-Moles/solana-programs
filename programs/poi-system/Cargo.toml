@@ -21,6 +21,7 @@ sha2 = "0.10"
 
 [dependencies]
 anchor-lang = "0.32.0"
+ephemeral-rollups-sdk = { version = "0.7.3", features = ["anchor", "disable-realloc"] }
 player-inventory = { path = "../player-inventory", features = ["cpi"] }
 boss-system = { path = "../../crates/boss-system" }
 gameplay-state = { path = "../gameplay-state", features = ["cpi"] }

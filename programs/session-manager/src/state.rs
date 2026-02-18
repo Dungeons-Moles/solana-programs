@@ -28,9 +28,9 @@ pub struct GameSession {
     /// Snapshot of player's active_item_pool at session start
     /// Determines which items can appear in POI offers during this session
     pub active_item_pool: [u8; SESSION_ITEM_BITMASK_SIZE],
-    /// Burner wallet pubkey for gameplay transactions
+    /// Session key signer pubkey for gameplay transactions
     /// SOL is transferred to this wallet at session start
-    pub burner_wallet: Pubkey,
+    pub session_signer: Pubkey,
     /// Hash of the current game state (for validation)
     pub state_hash: [u8; 32],
 }
@@ -46,13 +46,13 @@ impl GameSession {
     /// Account space calculation
     /// 8 (discriminator) + 32 (player) + 8 (session_id) + 1 (campaign_level) +
     /// 8 (started_at) + 8 (last_activity) + 1 (is_delegated) + 1 (bump) +
-    /// 10 (active_item_pool) + 32 (burner_wallet) + 32 (state_hash)
+    /// 10 (active_item_pool) + 32 (session_signer) + 32 (state_hash)
     pub const INIT_SPACE: usize = 32 + 8 + 1 + 8 + 8 + 1 + 1 + 10 + 32 + 32;
 
     /// Byte offset of `player` field in serialized account data (after 8-byte discriminator).
     pub const PLAYER_OFFSET: usize = 8;
-    /// Byte offset of `burner_wallet` field in serialized account data.
-    pub const BURNER_WALLET_OFFSET: usize = 77;
+    /// Byte offset of `session_signer` field in serialized account data.
+    pub const SESSION_SIGNER_OFFSET: usize = 77;
 }
 
 /// Global counter for generating unique session IDs

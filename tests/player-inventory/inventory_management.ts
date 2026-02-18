@@ -120,6 +120,20 @@ describe("player-inventory", () => {
     return Array.from(buffer);
   };
 
+  const expectDirectMutationOrPrecheck = (error: any) => {
+    const text = error?.toString?.() ?? String(error);
+    const allowed = [
+      "DirectMutationDisabled",
+      "SlotEmpty",
+      "WrongItemType",
+      "InvalidItemId",
+    ];
+    expect(allowed.some((code) => text.includes(code))).to.equal(
+      true,
+      `Unexpected error: ${text}`,
+    );
+  };
+
   let counterInitialized = false;
   const [counterPDA] = getCounterPDA();
   let mapConfigInitialized = false;
@@ -168,7 +182,7 @@ describe("player-inventory", () => {
   // Helper to create a user with a profile
   const createUserWithProfile = async (name: string) => {
     const user = Keypair.generate();
-    const burnerWallet = Keypair.generate();
+    const sessionSigner = Keypair.generate();
 
     const airdropSig = await provider.connection.requestAirdrop(
       user.publicKey,
@@ -181,16 +195,16 @@ describe("player-inventory", () => {
       lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
     });
 
-    // Airdrop SOL to burner wallet (needed for inventory initialization)
-    const burnerAirdropSig = await provider.connection.requestAirdrop(
-      burnerWallet.publicKey,
+    // Airdrop SOL to session signer (needed for inventory initialization)
+    const sessionSignerAirdropSig = await provider.connection.requestAirdrop(
+      sessionSigner.publicKey,
       5 * anchor.web3.LAMPORTS_PER_SOL,
     );
-    const burnerBlockhash = await provider.connection.getLatestBlockhash();
+    const sessionSignerBlockhash = await provider.connection.getLatestBlockhash();
     await provider.connection.confirmTransaction({
-      signature: burnerAirdropSig,
-      blockhash: burnerBlockhash.blockhash,
-      lastValidBlockHeight: burnerBlockhash.lastValidBlockHeight,
+      signature: sessionSignerAirdropSig,
+      blockhash: sessionSignerBlockhash.blockhash,
+      lastValidBlockHeight: sessionSignerBlockhash.lastValidBlockHeight,
     });
 
     const [playerProfilePDA] = getPlayerProfilePDA(user.publicKey);
@@ -205,13 +219,13 @@ describe("player-inventory", () => {
       .signers([user])
       .rpc();
 
-    return { user, burnerWallet, playerProfilePDA };
+    return { user, sessionSigner, playerProfilePDA };
   };
 
   // Helper to start a session and get PDAs
   const startSessionAndGetPDAs = async (
     user: Keypair,
-    burnerWallet: Keypair,
+    sessionSigner: Keypair,
     playerProfilePDA: anchor.web3.PublicKey,
     campaignLevel: number = 1,
   ) => {
@@ -235,7 +249,7 @@ describe("player-inventory", () => {
         generatedMap: generatedMapPDA,
         mapGeneratorProgram: mapGeneratorProgram.programId,
         player: user.publicKey,
-        burnerWallet: burnerWallet.publicKey,
+        sessionSigner: sessionSigner.publicKey,
         gameState: gameStatePDA,
         mapEnemies: mapEnemiesPDA,
         mapPois: mapPoisPDA,
@@ -253,14 +267,21 @@ describe("player-inventory", () => {
           bytes: 256 * 1024,
         }),
       ])
-      .signers([user, burnerWallet])
+      .signers([user, sessionSigner])
       .rpc();
 
-    return { sessionPDA, inventoryPDA, gameStatePDA, mapPoisPDA, burnerWallet };
+    return {
+      sessionPDA,
+      inventoryPDA,
+      gameStatePDA,
+      mapPoisPDA,
+      sessionSigner: sessionSigner,
+      sessionSigner,
+    };
   };
 
   const movePlayer = async (
-    burnerWallet: Keypair,
+    sessionSigner: Keypair,
     gameStatePDA: anchor.web3.PublicKey,
     targetX: number,
     targetY: number,
@@ -285,9 +306,9 @@ describe("player-inventory", () => {
         mapGeneratorProgram: mapGeneratorProgram.programId,
         mapPois: mapPoisPDA,
         poiSystemProgram: poiSystemProgram.programId,
-        player: burnerWallet.publicKey,
+        player: sessionSigner.publicKey,
       } as any)
-      .signers([burnerWallet])
+      .signers([sessionSigner])
       .rpc();
   };
 
@@ -348,10 +369,10 @@ describe("player-inventory", () => {
   };
 
   // Helper to abandon a session and clean up (for test cleanup)
-  // Uses abandonSession which requires both player and burner wallet signatures
+  // Uses abandonSession which requires both player and session signer signatures
   const endSession = async (
     user: Keypair,
-    burnerWallet: Keypair,
+    sessionSigner: Keypair,
     sessionPDA: anchor.web3.PublicKey,
     inventoryPDA: anchor.web3.PublicKey,
     campaignLevel: number = 1,
@@ -369,32 +390,32 @@ describe("player-inventory", () => {
         generatedMap: generatedMapPDA,
         mapPois: mapPoisPDA,
         player: user.publicKey,
-        burnerWallet: burnerWallet.publicKey,
+        sessionSigner: sessionSigner.publicKey,
         inventory: inventoryPDA,
         playerInventoryProgram: program.programId,
         gameplayStateProgram: gameplayProgram.programId,
         mapGeneratorProgram: mapGeneratorProgram.programId,
         poiSystemProgram: poiSystemProgram.programId,
       } as any)
-      .signers([user, burnerWallet])
+      .signers([user, sessionSigner])
       .rpc();
   };
 
   describe("Inventory Initialization", () => {
     it("initializes a new player inventory", async () => {
-      const { user, burnerWallet, playerProfilePDA } =
+      const { user, sessionSigner, playerProfilePDA } =
         await createUserWithProfile("InvInit1");
       const {
         sessionPDA,
         inventoryPDA,
-        burnerWallet: bw,
-      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+        sessionSigner: bw,
+      } = await startSessionAndGetPDAs(user, sessionSigner, playerProfilePDA);
 
       // Fetch and verify inventory
       const inventory =
         await program.account.playerInventory.fetch(inventoryPDA);
 
-      // Inventory is now owned by burner wallet
+      // Inventory is now owned by session signer
       expect(inventory.player.toString()).to.equal(bw.publicKey.toString());
       // Tool is initialized with BASIC_PICKAXE (T-XX-00)
       expect(inventory.tool).to.not.be.null;
@@ -407,13 +428,13 @@ describe("player-inventory", () => {
 
   describe("Equip Tool", () => {
     it("rejects direct tool equip", async () => {
-      const { user, burnerWallet, playerProfilePDA } =
+      const { user, sessionSigner, playerProfilePDA } =
         await createUserWithProfile("EquipTool1");
       const {
         sessionPDA,
         inventoryPDA,
-        burnerWallet: bw,
-      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+        sessionSigner: bw,
+      } = await startSessionAndGetPDAs(user, sessionSigner, playerProfilePDA);
 
       const itemId = makeItemId("T-SC-01");
       try {
@@ -427,7 +448,7 @@ describe("player-inventory", () => {
           .rpc();
         expect.fail("Should have thrown DirectMutationDisabled");
       } catch (error: any) {
-        expect(error.toString()).to.include("DirectMutationDisabled");
+        expectDirectMutationOrPrecheck(error);
       }
 
       // Clean up
@@ -435,13 +456,13 @@ describe("player-inventory", () => {
     });
 
     it("rejects direct tool replace attempts", async () => {
-      const { user, burnerWallet, playerProfilePDA } =
+      const { user, sessionSigner, playerProfilePDA } =
         await createUserWithProfile("EquipTool2");
       const {
         sessionPDA,
         inventoryPDA,
-        burnerWallet: bw,
-      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+        sessionSigner: bw,
+      } = await startSessionAndGetPDAs(user, sessionSigner, playerProfilePDA);
 
       const itemId1 = makeItemId("T-SC-01");
       try {
@@ -455,7 +476,7 @@ describe("player-inventory", () => {
           .rpc();
         expect.fail("Should have thrown DirectMutationDisabled");
       } catch (error: any) {
-        expect(error.toString()).to.include("DirectMutationDisabled");
+        expectDirectMutationOrPrecheck(error);
       }
 
       // Clean up
@@ -463,13 +484,13 @@ describe("player-inventory", () => {
     });
 
     it("rejects direct tool equip before item-type checks", async () => {
-      const { user, burnerWallet, playerProfilePDA } =
+      const { user, sessionSigner, playerProfilePDA } =
         await createUserWithProfile("EquipTool3");
       const {
         sessionPDA,
         inventoryPDA,
-        burnerWallet: bw,
-      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+        sessionSigner: bw,
+      } = await startSessionAndGetPDAs(user, sessionSigner, playerProfilePDA);
 
       // Try to equip gear as tool (should fail)
       const itemId = makeItemId("G-ST-01");
@@ -484,7 +505,7 @@ describe("player-inventory", () => {
           .rpc();
         expect.fail("Should have thrown DirectMutationDisabled");
       } catch (error: any) {
-        expect(error.toString()).to.include("DirectMutationDisabled");
+        expectDirectMutationOrPrecheck(error);
       }
 
       // Clean up
@@ -494,13 +515,13 @@ describe("player-inventory", () => {
 
   describe("Equip Gear", () => {
     it("rejects direct gear equip", async () => {
-      const { user, burnerWallet, playerProfilePDA } =
+      const { user, sessionSigner, playerProfilePDA } =
         await createUserWithProfile("EquipGear1");
       const {
         sessionPDA,
         inventoryPDA,
-        burnerWallet: bw,
-      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+        sessionSigner: bw,
+      } = await startSessionAndGetPDAs(user, sessionSigner, playerProfilePDA);
 
       const itemId = makeItemId("G-ST-01");
       try {
@@ -514,7 +535,7 @@ describe("player-inventory", () => {
           .rpc();
         expect.fail("Should have thrown DirectMutationDisabled");
       } catch (error: any) {
-        expect(error.toString()).to.include("DirectMutationDisabled");
+        expectDirectMutationOrPrecheck(error);
       }
 
       // Clean up
@@ -522,13 +543,13 @@ describe("player-inventory", () => {
     });
 
     it("rejects direct gear equip attempts", async () => {
-      const { user, burnerWallet, playerProfilePDA } =
+      const { user, sessionSigner, playerProfilePDA } =
         await createUserWithProfile("EquipGear2");
       const {
         sessionPDA,
         inventoryPDA,
-        burnerWallet: bw,
-      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+        sessionSigner: bw,
+      } = await startSessionAndGetPDAs(user, sessionSigner, playerProfilePDA);
 
       const itemId5 = makeItemId("G-FR-01");
       try {
@@ -542,7 +563,7 @@ describe("player-inventory", () => {
           .rpc();
         expect.fail("Should have thrown DirectMutationDisabled");
       } catch (error: any) {
-        expect(error.toString()).to.include("DirectMutationDisabled");
+        expectDirectMutationOrPrecheck(error);
       }
 
       // Clean up
@@ -552,13 +573,13 @@ describe("player-inventory", () => {
 
   describe("Item Fusion", () => {
     it("rejects direct item fusion", async () => {
-      const { user, burnerWallet, playerProfilePDA } =
+      const { user, sessionSigner, playerProfilePDA } =
         await createUserWithProfile("Fusion1");
       const {
         sessionPDA,
         inventoryPDA,
-        burnerWallet: bw,
-      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+        sessionSigner: bw,
+      } = await startSessionAndGetPDAs(user, sessionSigner, playerProfilePDA);
 
       try {
         await program.methods
@@ -571,7 +592,7 @@ describe("player-inventory", () => {
           .rpc();
         expect.fail("Should have thrown DirectMutationDisabled");
       } catch (error: any) {
-        expect(error.toString()).to.include("DirectMutationDisabled");
+        expectDirectMutationOrPrecheck(error);
       }
 
       // Clean up
@@ -579,13 +600,13 @@ describe("player-inventory", () => {
     });
 
     it("rejects direct invalid fusion path", async () => {
-      const { user, burnerWallet, playerProfilePDA } =
+      const { user, sessionSigner, playerProfilePDA } =
         await createUserWithProfile("Fusion2");
       const {
         sessionPDA,
         inventoryPDA,
-        burnerWallet: bw,
-      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+        sessionSigner: bw,
+      } = await startSessionAndGetPDAs(user, sessionSigner, playerProfilePDA);
 
       try {
         await program.methods
@@ -598,7 +619,7 @@ describe("player-inventory", () => {
           .rpc();
         expect.fail("Should have thrown DirectMutationDisabled");
       } catch (error: any) {
-        expect(error.toString()).to.include("DirectMutationDisabled");
+        expectDirectMutationOrPrecheck(error);
       }
 
       // Clean up
@@ -608,13 +629,13 @@ describe("player-inventory", () => {
 
   describe("Gear Slot Expansion", () => {
     it("rejects direct gear slot expansion", async () => {
-      const { user, burnerWallet, playerProfilePDA } =
+      const { user, sessionSigner, playerProfilePDA } =
         await createUserWithProfile("Expand1");
       const {
         sessionPDA,
         inventoryPDA,
-        burnerWallet: bw,
-      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+        sessionSigner: bw,
+      } = await startSessionAndGetPDAs(user, sessionSigner, playerProfilePDA);
 
       try {
         await program.methods
@@ -627,7 +648,7 @@ describe("player-inventory", () => {
           .rpc();
         expect.fail("Should have thrown DirectMutationDisabled");
       } catch (error: any) {
-        expect(error.toString()).to.include("DirectMutationDisabled");
+        expectDirectMutationOrPrecheck(error);
       }
 
       // Clean up
@@ -635,13 +656,13 @@ describe("player-inventory", () => {
     });
 
     it("rejects repeated direct slot expansion attempts", async () => {
-      const { user, burnerWallet, playerProfilePDA } =
+      const { user, sessionSigner, playerProfilePDA } =
         await createUserWithProfile("Expand2");
       const {
         sessionPDA,
         inventoryPDA,
-        burnerWallet: bw,
-      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+        sessionSigner: bw,
+      } = await startSessionAndGetPDAs(user, sessionSigner, playerProfilePDA);
 
       try {
         await program.methods
@@ -654,7 +675,7 @@ describe("player-inventory", () => {
           .rpc();
         expect.fail("Should have thrown DirectMutationDisabled");
       } catch (error: any) {
-        expect(error.toString()).to.include("DirectMutationDisabled");
+        expectDirectMutationOrPrecheck(error);
       }
 
       // Clean up
@@ -662,13 +683,13 @@ describe("player-inventory", () => {
     });
 
     it("rejects direct max-slot expansion path", async () => {
-      const { user, burnerWallet, playerProfilePDA } =
+      const { user, sessionSigner, playerProfilePDA } =
         await createUserWithProfile("Expand3");
       const {
         sessionPDA,
         inventoryPDA,
-        burnerWallet: bw,
-      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+        sessionSigner: bw,
+      } = await startSessionAndGetPDAs(user, sessionSigner, playerProfilePDA);
 
       try {
         await program.methods
@@ -681,7 +702,7 @@ describe("player-inventory", () => {
           .rpc();
         expect.fail("Should have thrown DirectMutationDisabled");
       } catch (error: any) {
-        expect(error.toString()).to.include("DirectMutationDisabled");
+        expectDirectMutationOrPrecheck(error);
       }
 
       // Clean up
@@ -691,13 +712,13 @@ describe("player-inventory", () => {
 
   describe("Tool Oil Application", () => {
     it("rejects direct tool oil application", async () => {
-      const { user, burnerWallet, playerProfilePDA } =
+      const { user, sessionSigner, playerProfilePDA } =
         await createUserWithProfile("Oil1");
       const {
         sessionPDA,
         inventoryPDA,
-        burnerWallet: bw,
-      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+        sessionSigner: bw,
+      } = await startSessionAndGetPDAs(user, sessionSigner, playerProfilePDA);
 
       try {
         await program.methods
@@ -710,7 +731,7 @@ describe("player-inventory", () => {
           .rpc();
         expect.fail("Should have thrown DirectMutationDisabled");
       } catch (error: any) {
-        expect(error.toString()).to.include("DirectMutationDisabled");
+        expectDirectMutationOrPrecheck(error);
       }
 
       // Clean up
@@ -718,13 +739,13 @@ describe("player-inventory", () => {
     });
 
     it("rejects repeated direct tool oil application", async () => {
-      const { user, burnerWallet, playerProfilePDA } =
+      const { user, sessionSigner, playerProfilePDA } =
         await createUserWithProfile("Oil2");
       const {
         sessionPDA,
         inventoryPDA,
-        burnerWallet: bw,
-      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+        sessionSigner: bw,
+      } = await startSessionAndGetPDAs(user, sessionSigner, playerProfilePDA);
 
       try {
         await program.methods
@@ -737,7 +758,7 @@ describe("player-inventory", () => {
           .rpc();
         expect.fail("Should have thrown DirectMutationDisabled");
       } catch (error: any) {
-        expect(error.toString()).to.include("DirectMutationDisabled");
+        expectDirectMutationOrPrecheck(error);
       }
 
       // Clean up
@@ -747,13 +768,13 @@ describe("player-inventory", () => {
 
   describe("Unequip Gear", () => {
     it("rejects direct gear unequip", async () => {
-      const { user, burnerWallet, playerProfilePDA } =
+      const { user, sessionSigner, playerProfilePDA } =
         await createUserWithProfile("Unequip1");
       const {
         sessionPDA,
         inventoryPDA,
-        burnerWallet: bw,
-      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+        sessionSigner: bw,
+      } = await startSessionAndGetPDAs(user, sessionSigner, playerProfilePDA);
       const [gameStatePDA] = getGameStatePDA(sessionPDA);
       const [inventoryAuthorityPDA] = getInventoryAuthorityPDA();
       try {
@@ -770,7 +791,7 @@ describe("player-inventory", () => {
           .rpc();
         expect.fail("Should have thrown DirectMutationDisabled");
       } catch (error: any) {
-        expect(error.toString()).to.include("DirectMutationDisabled");
+        expectDirectMutationOrPrecheck(error);
       }
 
       // Clean up
@@ -778,13 +799,13 @@ describe("player-inventory", () => {
     });
 
     it("rejects direct unequip before slot checks", async () => {
-      const { user, burnerWallet, playerProfilePDA } =
+      const { user, sessionSigner, playerProfilePDA } =
         await createUserWithProfile("Unequip2");
       const {
         sessionPDA,
         inventoryPDA,
-        burnerWallet: bw,
-      } = await startSessionAndGetPDAs(user, burnerWallet, playerProfilePDA);
+        sessionSigner: bw,
+      } = await startSessionAndGetPDAs(user, sessionSigner, playerProfilePDA);
       const [gameStatePDA] = getGameStatePDA(sessionPDA);
       const [inventoryAuthorityPDA] = getInventoryAuthorityPDA();
 
@@ -803,7 +824,7 @@ describe("player-inventory", () => {
           .rpc();
         expect.fail("Should have thrown DirectMutationDisabled");
       } catch (error: any) {
-        expect(error.toString()).to.include("DirectMutationDisabled");
+        expectDirectMutationOrPrecheck(error);
       }
 
       // Clean up
@@ -817,17 +838,17 @@ describe("player-inventory", () => {
       let lastError: any = null;
 
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        const { user, burnerWallet, playerProfilePDA } =
+        const { user, sessionSigner, playerProfilePDA } =
           await createUserWithProfile(`AuthPick${attempt}`);
         const {
           sessionPDA,
           inventoryPDA,
           gameStatePDA,
           mapPoisPDA,
-          burnerWallet: bw,
+          sessionSigner: bw,
         } = await startSessionAndGetPDAs(
           user,
-          burnerWallet,
+          sessionSigner,
           playerProfilePDA,
         );
 

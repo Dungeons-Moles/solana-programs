@@ -673,6 +673,93 @@ pub mod poi_system {
             }
         }
 
+        // Deterministic fallback: if normal generation+pool filtering could not fill all 3
+        // slots (e.g., very restrictive active item pool), backfill from the active pool
+        // with POI-compatible items so frontend always receives 3 visible options.
+        if count < 3 {
+            let matches_weakness = |item_id: &[u8; 8], weakness: offers::WeaknessTag| -> bool {
+                match weakness {
+                    offers::WeaknessTag::Stone => item_id[2] == b'S' && item_id[3] == b'T',
+                    offers::WeaknessTag::Scout => item_id[2] == b'S' && item_id[3] == b'C',
+                    offers::WeaknessTag::Greed => item_id[2] == b'G' && item_id[3] == b'R',
+                    offers::WeaknessTag::Blast => item_id[2] == b'B' && item_id[3] == b'L',
+                    offers::WeaknessTag::Frost => item_id[2] == b'F' && item_id[3] == b'R',
+                    offers::WeaknessTag::Rust => item_id[2] == b'R' && item_id[3] == b'U',
+                    offers::WeaknessTag::Blood => item_id[2] == b'B' && item_id[3] == b'O',
+                    offers::WeaknessTag::Tempo => item_id[2] == b'T' && item_id[3] == b'E',
+                }
+            };
+
+            let accepts_for_poi = |item_id: &[u8; 8]| -> bool {
+                match poi_type {
+                    2 => item_id[0] == b'G', // Supply Cache: gear
+                    3 => item_id[0] == b'T', // Tool Crate: tools
+                    12 => item_id[0] == b'G' && offers::rarity_from_item_id(item_id) >= 2, // Geode: Heroic+
+                    13 => {
+                        item_id[0] == b'G'
+                            && (matches_weakness(item_id, w1) || matches_weakness(item_id, w2))
+                    } // Counter: weakness-tagged gear
+                    _ => false,
+                }
+            };
+
+            let mut fallback_candidates: Vec<[u8; 8]> = Vec::new();
+            for (index, item) in player_inventory::items::ITEMS.iter().enumerate() {
+                let pool_index = index as u8;
+                if !offers::is_item_in_pool(pool, pool_index) {
+                    continue;
+                }
+                let item_id = *item.id;
+                if !accepts_for_poi(&item_id) {
+                    continue;
+                }
+                if used_ids[..count].contains(&item_id) {
+                    continue;
+                }
+                fallback_candidates.push(item_id);
+            }
+
+            if !fallback_candidates.is_empty() {
+                let mut cursor = (seed as usize) % fallback_candidates.len();
+                let mut scanned = 0usize;
+                while count < 3 && scanned < fallback_candidates.len() {
+                    let item_id = fallback_candidates[cursor];
+                    if !used_ids[..count].contains(&item_id) {
+                        used_ids[count] = item_id;
+                        items[count] = state::OfferItem {
+                            item_id,
+                            rarity: offers::rarity_from_item_id(&item_id),
+                            tier: 0,
+                        };
+                        count += 1;
+                    }
+                    cursor = (cursor + 1) % fallback_candidates.len();
+                    scanned += 1;
+                }
+            }
+
+            // Absolute last resort: duplicate a valid offer so UI still gets 3 choices.
+            if count < 3 {
+                let fallback_id = if count > 0 {
+                    used_ids[0]
+                } else if poi_type == 3 {
+                    *b"T-ST-01\0"
+                } else {
+                    *b"G-ST-01\0"
+                };
+
+                while count < 3 {
+                    used_ids[count] = fallback_id;
+                    items[count] = state::OfferItem {
+                        item_id: fallback_id,
+                        rarity: offers::rarity_from_item_id(&fallback_id),
+                        tier: 0,
+                    };
+                    count += 1;
+                }
+            }
+        }
+
         map_pois.current_offer = Some(state::CacheOffer {
             poi_index,
             items,

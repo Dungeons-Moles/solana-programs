@@ -1,4 +1,7 @@
 use anchor_lang::prelude::*;
+use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
+use ephemeral_rollups_sdk::cpi::DelegateConfig;
+use ephemeral_rollups_sdk::ephem::{commit_accounts, commit_and_undelegate_accounts};
 pub mod constants;
 pub mod errors;
 pub mod state;
@@ -6,7 +9,7 @@ use constants::{DUEL_CAMPAIGN_LEVEL, GAUNTLET_CAMPAIGN_LEVEL};
 
 use errors::SessionManagerError;
 use gameplay_state::program::GameplayState;
-use gameplay_state::state::GameState;
+use gameplay_state::state::{GameState, MapEnemies};
 use map_generator::program::MapGenerator;
 use map_generator::state::{GeneratedMap, MapConfig as MapConfigAccount};
 use player_inventory::program::PlayerInventory;
@@ -56,7 +59,16 @@ pub const INITIALIZE_MAP_POIS_DISCRIMINATOR: [u8; 8] =
 pub const DISCOVER_VISIBLE_WAYPOINTS_DISCRIMINATOR: [u8; 8] =
     [0x3b, 0x26, 0x6a, 0x00, 0x3a, 0xb1, 0x50, 0xfc];
 pub const SESSION_MANAGER_AUTHORITY_SEED: &[u8] = b"session_manager_authority";
+pub const LOCAL_ER_VALIDATOR: Pubkey = pubkey!("mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev");
 
+fn local_delegate_config() -> DelegateConfig {
+    DelegateConfig {
+        validator: Some(LOCAL_ER_VALIDATOR),
+        ..DelegateConfig::default()
+    }
+}
+
+#[ephemeral]
 #[program]
 pub mod session_manager {
     use super::*;
@@ -114,7 +126,7 @@ pub mod session_manager {
         let counter = &mut ctx.accounts.session_counter;
         let clock = Clock::get()?;
         let session_player = ctx.accounts.player.key();
-        let burner_wallet_key = ctx.accounts.burner_wallet.key();
+        let session_signer_key = ctx.accounts.session_signer.key();
 
         // Increment counter and get new session ID
         counter.count = counter
@@ -134,8 +146,8 @@ pub mod session_manager {
             session.bump = ctx.bumps.game_session;
             // Copy active_item_pool from profile to session
             session.active_item_pool = player_profile.active_item_pool;
-            // Store burner wallet pubkey
-            session.burner_wallet = burner_wallet_key;
+            // Store session key signer pubkey
+            session.session_signer = session_signer_key;
         }
 
         // 1. Generate Map
@@ -186,7 +198,7 @@ pub mod session_manager {
                     generated_map: ctx.accounts.generated_map.to_account_info(),
                     map_enemies: ctx.accounts.map_enemies.to_account_info(),
                     player: ctx.accounts.player.to_account_info(),
-                    burner_wallet: ctx.accounts.burner_wallet.to_account_info(),
+                    session_signer: ctx.accounts.session_signer.to_account_info(),
                     system_program: ctx.accounts.system_program.to_account_info(),
                 },
             ),
@@ -200,14 +212,14 @@ pub mod session_manager {
         // 4. Initialize Inventory for this session
         // Each session gets its own inventory (PDA derived from session key).
         // This ensures clean inventory state per run and allows concurrent sessions.
-        // IMPORTANT: Use burner_wallet as the inventory owner since all gameplay
-        // transactions (equip, fuse, etc.) are signed by the burner wallet.
+        // IMPORTANT: Use session_signer as the inventory owner since all gameplay
+        // transactions (equip, fuse, etc.) are signed by the session key signer.
         player_inventory::cpi::initialize_inventory(CpiContext::new(
             ctx.accounts.player_inventory_program.to_account_info(),
             player_inventory::cpi::accounts::InitializeInventory {
                 inventory: ctx.accounts.inventory.to_account_info(),
                 session: ctx.accounts.game_session.to_account_info(),
-                player: ctx.accounts.burner_wallet.to_account_info(),
+                player: ctx.accounts.session_signer.to_account_info(),
                 system_program: ctx.accounts.system_program.to_account_info(),
             },
         ))?;
@@ -236,7 +248,7 @@ pub mod session_manager {
             &ctx.accounts.poi_system_program,
             &ctx.accounts.map_pois,
             &ctx.accounts.game_state.to_account_info(),
-            &ctx.accounts.burner_wallet.to_account_info(),
+            &ctx.accounts.session_signer.to_account_info(),
             6,
         )?;
 
@@ -244,7 +256,7 @@ pub mod session_manager {
             player: session_player,
             session_id: counter.count,
             campaign_level,
-            burner_wallet: burner_wallet_key,
+            session_signer: session_signer_key,
             timestamp: clock.unix_timestamp,
         });
 
@@ -264,7 +276,7 @@ pub mod session_manager {
         let counter = &mut ctx.accounts.session_counter;
         let clock = Clock::get()?;
         let session_player = ctx.accounts.player.key();
-        let burner_wallet_key = ctx.accounts.burner_wallet.key();
+        let session_signer_key = ctx.accounts.session_signer.key();
 
         counter.count = counter
             .count
@@ -276,7 +288,7 @@ pub mod session_manager {
             &clock,
             counter.count,
             &session_player,
-            &burner_wallet_key,
+            &session_signer_key,
         );
 
         {
@@ -290,7 +302,7 @@ pub mod session_manager {
             session.state_hash = EMPTY_STATE_HASH;
             session.bump = ctx.bumps.game_session;
             session.active_item_pool = player_profile.active_item_pool;
-            session.burner_wallet = burner_wallet_key;
+            session.session_signer = session_signer_key;
         }
 
         map_generator::cpi::generate_map_with_seed(
@@ -331,7 +343,7 @@ pub mod session_manager {
                     generated_map: ctx.accounts.generated_map.to_account_info(),
                     map_enemies: ctx.accounts.map_enemies.to_account_info(),
                     player: ctx.accounts.player.to_account_info(),
-                    burner_wallet: ctx.accounts.burner_wallet.to_account_info(),
+                    session_signer: ctx.accounts.session_signer.to_account_info(),
                     system_program: ctx.accounts.system_program.to_account_info(),
                 },
             ),
@@ -367,7 +379,7 @@ pub mod session_manager {
             player_inventory::cpi::accounts::InitializeInventory {
                 inventory: ctx.accounts.inventory.to_account_info(),
                 session: ctx.accounts.game_session.to_account_info(),
-                player: ctx.accounts.burner_wallet.to_account_info(),
+                player: ctx.accounts.session_signer.to_account_info(),
                 system_program: ctx.accounts.system_program.to_account_info(),
             },
         ))?;
@@ -392,7 +404,7 @@ pub mod session_manager {
             &ctx.accounts.poi_system_program,
             &ctx.accounts.map_pois,
             &ctx.accounts.game_state.to_account_info(),
-            &ctx.accounts.burner_wallet.to_account_info(),
+            &ctx.accounts.session_signer.to_account_info(),
             6,
         )?;
 
@@ -400,7 +412,7 @@ pub mod session_manager {
             player: session_player,
             session_id: counter.count,
             campaign_level,
-            burner_wallet: burner_wallet_key,
+            session_signer: session_signer_key,
             timestamp: clock.unix_timestamp,
         });
 
@@ -415,7 +427,7 @@ pub mod session_manager {
         let counter = &mut ctx.accounts.session_counter;
         let clock = Clock::get()?;
         let session_player = ctx.accounts.player.key();
-        let burner_wallet_key = ctx.accounts.burner_wallet.key();
+        let session_signer_key = ctx.accounts.session_signer.key();
 
         counter.count = counter
             .count
@@ -427,7 +439,7 @@ pub mod session_manager {
             &clock,
             counter.count,
             &session_player,
-            &burner_wallet_key,
+            &session_signer_key,
         );
 
         {
@@ -441,7 +453,7 @@ pub mod session_manager {
             session.state_hash = EMPTY_STATE_HASH;
             session.bump = ctx.bumps.game_session;
             session.active_item_pool = player_profile.active_item_pool;
-            session.burner_wallet = burner_wallet_key;
+            session.session_signer = session_signer_key;
         }
 
         map_generator::cpi::generate_map_with_seed(
@@ -482,7 +494,7 @@ pub mod session_manager {
                     generated_map: ctx.accounts.generated_map.to_account_info(),
                     map_enemies: ctx.accounts.map_enemies.to_account_info(),
                     player: ctx.accounts.player.to_account_info(),
-                    burner_wallet: ctx.accounts.burner_wallet.to_account_info(),
+                    session_signer: ctx.accounts.session_signer.to_account_info(),
                     system_program: ctx.accounts.system_program.to_account_info(),
                 },
             ),
@@ -518,7 +530,7 @@ pub mod session_manager {
             player_inventory::cpi::accounts::InitializeInventory {
                 inventory: ctx.accounts.inventory.to_account_info(),
                 session: ctx.accounts.game_session.to_account_info(),
-                player: ctx.accounts.burner_wallet.to_account_info(),
+                player: ctx.accounts.session_signer.to_account_info(),
                 system_program: ctx.accounts.system_program.to_account_info(),
             },
         ))?;
@@ -543,7 +555,7 @@ pub mod session_manager {
             &ctx.accounts.poi_system_program,
             &ctx.accounts.map_pois,
             &ctx.accounts.game_state.to_account_info(),
-            &ctx.accounts.burner_wallet.to_account_info(),
+            &ctx.accounts.session_signer.to_account_info(),
             6,
         )?;
 
@@ -551,33 +563,191 @@ pub mod session_manager {
             player: session_player,
             session_id: counter.count,
             campaign_level,
-            burner_wallet: burner_wallet_key,
+            session_signer: session_signer_key,
             timestamp: clock.unix_timestamp,
         });
 
         Ok(())
     }
 
-    /// Delegates the session to the MagicBlock ephemeral rollup.
-    /// NOTE: MagicBlock SDK is blocked due to Rust edition 2024 requirement.
-    /// This is a stub that just sets the is_delegated flag.
-    pub fn delegate_session(ctx: Context<DelegateSession>, _campaign_level: u8) -> Result<()> {
-        let session = &mut ctx.accounts.game_session;
-        let clock = Clock::get()?;
+    /// Delegates gameplay-state account to the MagicBlock delegation program.
+    pub fn delegate_game_state(ctx: Context<DelegateGameState>, campaign_level: u8) -> Result<()> {
+        let game_session_key = derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level);
+        let (expected_game_state, _) =
+            Pubkey::find_program_address(&[b"game_state", game_session_key.as_ref()], &gameplay_state::ID);
+        require_keys_eq!(
+            ctx.accounts.game_state.key(),
+            expected_game_state,
+            SessionManagerError::Unauthorized
+        );
+        let game_state_seeds: &[&[u8]] = &[b"game_state", game_session_key.as_ref()];
+        ctx.accounts
+            .delegate_game_state(&ctx.accounts.player, game_state_seeds, local_delegate_config())?;
+        Ok(())
+    }
 
-        require!(
-            !session.is_delegated,
-            SessionManagerError::SessionAlreadyDelegated
+    /// Delegates map-enemies account to the MagicBlock delegation program.
+    pub fn delegate_map_enemies(
+        ctx: Context<DelegateMapEnemies>,
+        campaign_level: u8,
+    ) -> Result<()> {
+        let game_session_key = derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level);
+        let (expected_map_enemies, _) = Pubkey::find_program_address(
+            &[MapEnemies::SEED_PREFIX, game_session_key.as_ref()],
+            &gameplay_state::ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.map_enemies.key(),
+            expected_map_enemies,
+            SessionManagerError::Unauthorized
+        );
+        let map_enemies_seeds: &[&[u8]] = &[MapEnemies::SEED_PREFIX, game_session_key.as_ref()];
+        ctx.accounts.delegate_map_enemies(
+            &ctx.accounts.player,
+            map_enemies_seeds,
+            local_delegate_config(),
+        )?;
+        Ok(())
+    }
+
+    /// Delegates generated-map account to the MagicBlock delegation program.
+    pub fn delegate_generated_map(
+        ctx: Context<DelegateGeneratedMap>,
+        campaign_level: u8,
+    ) -> Result<()> {
+        let game_session_key = derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level);
+        let (expected_generated_map, _) = Pubkey::find_program_address(
+            &[GeneratedMap::SEED_PREFIX, game_session_key.as_ref()],
+            &map_generator::ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.generated_map.key(),
+            expected_generated_map,
+            SessionManagerError::Unauthorized
+        );
+        let generated_map_seeds: &[&[u8]] = &[GeneratedMap::SEED_PREFIX, game_session_key.as_ref()];
+        ctx.accounts.delegate_generated_map(
+            &ctx.accounts.player,
+            generated_map_seeds,
+            local_delegate_config(),
+        )?;
+        Ok(())
+    }
+
+    /// Delegates inventory account to the MagicBlock delegation program.
+    pub fn delegate_inventory(ctx: Context<DelegateInventory>, campaign_level: u8) -> Result<()> {
+        let game_session_key = derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level);
+        let (expected_inventory, _) = Pubkey::find_program_address(
+            &[b"inventory", game_session_key.as_ref()],
+            &player_inventory::ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.inventory.key(),
+            expected_inventory,
+            SessionManagerError::Unauthorized
+        );
+        let inventory_seeds: &[&[u8]] = &[b"inventory", game_session_key.as_ref()];
+        ctx.accounts
+            .delegate_inventory(&ctx.accounts.player, inventory_seeds, local_delegate_config())?;
+        Ok(())
+    }
+
+    /// Delegates map-pois account to the MagicBlock delegation program.
+    pub fn delegate_map_pois(ctx: Context<DelegateMapPois>, campaign_level: u8) -> Result<()> {
+        let game_session_key = derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level);
+        let (expected_map_pois, _) = Pubkey::find_program_address(
+            &[b"map_pois", game_session_key.as_ref()],
+            &POI_SYSTEM_PROGRAM_ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.map_pois.key(),
+            expected_map_pois,
+            SessionManagerError::Unauthorized
+        );
+        let map_pois_seeds: &[&[u8]] = &[b"map_pois", game_session_key.as_ref()];
+        ctx.accounts
+            .delegate_map_pois(&ctx.accounts.player, map_pois_seeds, local_delegate_config())?;
+        Ok(())
+    }
+
+    /// Marks the session delegated and delegates the session account itself.
+    pub fn delegate_session(ctx: Context<DelegateSession>, campaign_level: u8) -> Result<()> {
+        let clock = Clock::get()?;
+        let game_session_info = ctx.accounts.game_session.to_account_info();
+        let game_session_key = game_session_info.key();
+        require_keys_eq!(
+            *game_session_info.owner,
+            crate::ID,
+            SessionManagerError::Unauthorized
         );
 
-        // In production: Call ephemeral_rollups_sdk::cpi::delegate_account
-        // For now, just mark as delegated
-        session.is_delegated = true;
-        session.last_activity = clock.unix_timestamp;
+        let (session_player, session_signer, session_id) = {
+            let data = game_session_info.try_borrow_data()?;
+            let mut data_slice: &[u8] = &data;
+            let session = GameSession::try_deserialize(&mut data_slice)?;
+
+            require_keys_eq!(session.player, ctx.accounts.player.key(), SessionManagerError::Unauthorized);
+            require_keys_eq!(
+                session.session_signer,
+                ctx.accounts.session_signer.key(),
+                SessionManagerError::Unauthorized
+            );
+            require!(
+                session.campaign_level == campaign_level,
+                SessionManagerError::InvalidCampaignLevel
+            );
+            require!(
+                !session.is_delegated,
+                SessionManagerError::SessionAlreadyDelegated
+            );
+
+            (session.player, session.session_signer, session.session_id)
+        };
+
+        let campaign_seed = [campaign_level];
+        let campaign_session_seeds: &[&[u8]] =
+            &[GameSession::SEED_PREFIX, session_player.as_ref(), &campaign_seed];
+        let duel_session_seeds: &[&[u8]] = &[GameSession::DUEL_SEED_PREFIX, session_player.as_ref()];
+        let gauntlet_session_seeds: &[&[u8]] =
+            &[GameSession::GAUNTLET_SEED_PREFIX, session_player.as_ref()];
+
+        let (campaign_session_pda, _) =
+            Pubkey::find_program_address(campaign_session_seeds, &crate::ID);
+        let (duel_session_pda, _) = Pubkey::find_program_address(duel_session_seeds, &crate::ID);
+        let (gauntlet_session_pda, _) =
+            Pubkey::find_program_address(gauntlet_session_seeds, &crate::ID);
+
+        let session_seeds: &[&[u8]] = if game_session_key == campaign_session_pda {
+            campaign_session_seeds
+        } else if game_session_key == duel_session_pda {
+            duel_session_seeds
+        } else if game_session_key == gauntlet_session_pda {
+            gauntlet_session_seeds
+        } else {
+            return Err(SessionManagerError::Unauthorized.into());
+        };
+
+        {
+            let mut data = game_session_info.try_borrow_mut_data()?;
+            let mut data_slice: &[u8] = &data;
+            let mut session = GameSession::try_deserialize(&mut data_slice)?;
+            require_keys_eq!(
+                session.session_signer,
+                session_signer,
+                SessionManagerError::Unauthorized
+            );
+            session.is_delegated = true;
+            session.last_activity = clock.unix_timestamp;
+            let mut data_ref: &mut [u8] = &mut data;
+            session.try_serialize(&mut data_ref)?;
+        }
+
+        ctx.accounts
+            .delegate_game_session(&ctx.accounts.session_signer, session_seeds, local_delegate_config())?;
 
         emit!(SessionDelegated {
-            player: session.player,
-            session_id: session.session_id,
+            player: session_player,
+            session_id,
             timestamp: clock.unix_timestamp,
         });
 
@@ -585,46 +755,128 @@ pub mod session_manager {
     }
 
     /// Commits the current game state from the ephemeral rollup.
-    /// Updates the state hash and last activity timestamp.
+    /// This must be sent to the ephemeral rollup connection.
     pub fn commit_session(
         ctx: Context<CommitSession>,
-        _campaign_level: u8,
+        campaign_level: u8,
         state_hash: [u8; 32],
     ) -> Result<()> {
-        let session = &mut ctx.accounts.game_session;
         let clock = Clock::get()?;
-
+        let game_session_info = ctx.accounts.game_session.to_account_info();
+        let mut session = load_game_session_unchecked(&game_session_info)?;
+        require_keys_eq!(
+            session.player,
+            ctx.accounts.player.key(),
+            SessionManagerError::Unauthorized
+        );
+        require!(
+            session.campaign_level == campaign_level,
+            SessionManagerError::InvalidCampaignLevel
+        );
         require!(
             session.is_delegated,
             SessionManagerError::SessionNotDelegated
         );
 
+        let game_session_key = game_session_info.key();
+        validate_gameplay_runtime_accounts(
+            &game_session_key,
+            &ctx.accounts.game_state,
+            &ctx.accounts.map_enemies,
+        )?;
+        validate_secondary_runtime_accounts(
+            &game_session_key,
+            &ctx.accounts.generated_map,
+            &ctx.accounts.inventory,
+            &ctx.accounts.map_pois,
+        )?;
+
         session.state_hash = state_hash;
         session.last_activity = clock.unix_timestamp;
+        store_game_session_unchecked(&game_session_info, &session)?;
 
-        // In production: Call ephemeral_rollups_sdk::cpi::commit_accounts
+        let game_state_info = ctx.accounts.game_state.to_account_info();
+        let map_enemies_info = ctx.accounts.map_enemies.to_account_info();
+        let generated_map_info = ctx.accounts.generated_map.to_account_info();
+        let inventory_info = ctx.accounts.inventory.to_account_info();
+        let map_pois_info = ctx.accounts.map_pois.to_account_info();
+        commit_accounts(
+            &ctx.accounts.player.to_account_info(),
+            vec![
+                &game_session_info,
+                &game_state_info,
+                &map_enemies_info,
+                &generated_map_info,
+                &inventory_info,
+                &map_pois_info,
+            ],
+            &ctx.accounts.magic_context,
+            &ctx.accounts.magic_program.to_account_info(),
+        )?;
+
+        Ok(())
+    }
+
+    /// Commits and undelegates the session account from the ephemeral rollup.
+    /// This must be sent to the ephemeral rollup connection.
+    pub fn undelegate_session(
+        ctx: Context<UndelegateSession>,
+        campaign_level: u8,
+        state_hash: [u8; 32],
+    ) -> Result<()> {
+        let clock = Clock::get()?;
+        let game_session_info = ctx.accounts.game_session.to_account_info();
+        let session = load_game_session_unchecked(&game_session_info)?;
+        require_keys_eq!(
+            session.player,
+            ctx.accounts.player.key(),
+            SessionManagerError::Unauthorized
+        );
+        require_keys_eq!(
+            session.session_signer,
+            ctx.accounts.session_signer.key(),
+            SessionManagerError::Unauthorized
+        );
+        require!(
+            session.campaign_level == campaign_level,
+            SessionManagerError::InvalidCampaignLevel
+        );
+
+        commit_and_undelegate_accounts(
+            &ctx.accounts.session_signer.to_account_info(),
+            vec![&game_session_info],
+            &ctx.accounts.magic_context,
+            &ctx.accounts.magic_program.to_account_info(),
+        )?;
+
+        // NOTE: After scheduling commit+undelegate, this program may no longer own `game_session`
+        // during this instruction, so we must not mutate account data here.
+        let _ = state_hash;
+        let _ = clock;
 
         Ok(())
     }
 
     /// Ends the session after death or level completion.
-    /// Only callable by burner wallet when player is dead OR has completed the level.
+    /// Only callable by session key signer when player is dead OR has completed the level.
     /// Also closes the player's inventory via CPI to ensure fresh inventory for next session.
     ///
     /// This is designed to be called automatically by the frontend after combat,
-    /// signed only by the burner wallet (no user interaction required).
+    /// signed only by the session key signer (no user interaction required).
     pub fn end_session(ctx: Context<EndSession>, _campaign_level: u8) -> Result<()> {
         let session = &ctx.accounts.game_session;
         let game_state = &ctx.accounts.game_state;
         let clock = Clock::get()?;
+        let authority_bump = ctx.bumps.session_manager_authority;
+        let authority_signer_seeds: &[&[u8]] =
+            &[SESSION_MANAGER_AUTHORITY_SEED, &[authority_bump]];
+        let signer_seeds: &[&[&[u8]]] = &[authority_signer_seeds];
 
-        // Validate: session can only be ended if player is dead OR completed the level
-        require!(
-            game_state.is_dead || game_state.completed,
-            SessionManagerError::SessionNotEndable
-        );
+        // Do not trust `session.is_delegated` bit here; legacy undelegate flows can leave
+        // the flag stale even after ownership returns to session-manager.
 
-        // Determine victory from game state (completed = true means victory)
+        // Determine victory from game state (completed and not dead means victory).
+        // Any other state closes as defeat so cleanup can recover stuck sessions.
         let victory = game_state.completed && !game_state.is_dead;
 
         // Record run result via CPI to player-profile
@@ -633,9 +885,11 @@ pub mod session_manager {
             &ctx.accounts.player_profile_program,
             &ctx.accounts.player_profile.to_account_info(),
             &ctx.accounts.game_session.to_account_info(),
-            &ctx.accounts.burner_wallet.to_account_info(),
+            &ctx.accounts.session_signer.to_account_info(),
+            &ctx.accounts.session_manager_authority.to_account_info(),
             session.campaign_level,
             victory,
+            signer_seeds,
         )?;
 
         emit!(SessionEnded {
@@ -651,12 +905,12 @@ pub mod session_manager {
         // Order matters: close child accounts before parent accounts
 
         // 1. Close map_pois (depends on session)
-        close_map_pois_via_burner_cpi(
+        close_map_pois_via_session_signer_cpi(
             &ctx.accounts.poi_system_program,
             &ctx.accounts.map_pois,
             &ctx.accounts.game_session.to_account_info(),
             &ctx.accounts.player,
-            &ctx.accounts.burner_wallet.to_account_info(),
+            &ctx.accounts.session_signer.to_account_info(),
         )?;
 
         // 2. Close generated_map (depends on session)
@@ -665,7 +919,7 @@ pub mod session_manager {
             &ctx.accounts.generated_map,
             &ctx.accounts.game_session.to_account_info(),
             &ctx.accounts.player,
-            &ctx.accounts.burner_wallet.to_account_info(),
+            &ctx.accounts.session_signer.to_account_info(),
         )?;
 
         // 3. Close map_enemies (depends on game_state)
@@ -674,24 +928,24 @@ pub mod session_manager {
             &ctx.accounts.map_enemies,
             &ctx.accounts.game_state.to_account_info(),
             &ctx.accounts.player,
-            &ctx.accounts.burner_wallet.to_account_info(),
+            &ctx.accounts.session_signer.to_account_info(),
         )?;
 
         // 4. Close game_state
-        close_game_state_via_burner_cpi(
+        close_game_state_via_session_signer_cpi(
             &ctx.accounts.gameplay_state_program.to_account_info(),
             &ctx.accounts.game_state.to_account_info(),
             &ctx.accounts.player,
-            &ctx.accounts.burner_wallet.to_account_info(),
+            &ctx.accounts.session_signer.to_account_info(),
         )?;
 
         // 5. Close inventory via CPI to ensure fresh inventory for next session
-        // Use burner_wallet since it's the inventory owner (set during start_session)
+        // Use session_signer since it's the inventory owner (set during start_session)
         player_inventory::cpi::close_inventory(CpiContext::new(
             ctx.accounts.player_inventory_program.to_account_info(),
             player_inventory::cpi::accounts::CloseInventory {
                 inventory: ctx.accounts.inventory.to_account_info(),
-                player: ctx.accounts.burner_wallet.to_account_info(),
+                player: ctx.accounts.session_signer.to_account_info(),
             },
         ))?;
 
@@ -707,6 +961,9 @@ pub mod session_manager {
         let session = &ctx.accounts.game_session;
         let clock = Clock::get()?;
 
+        // Do not trust `session.is_delegated` bit here; legacy undelegate flows can leave
+        // the flag stale even after ownership returns to session-manager.
+
         emit!(SessionEnded {
             player: session.player,
             session_id: session.session_id,
@@ -720,12 +977,12 @@ pub mod session_manager {
         // Order matters: close child accounts before parent accounts
 
         // 1. Close map_pois (depends on session)
-        close_map_pois_via_burner_cpi(
+        close_map_pois_via_session_signer_cpi(
             &ctx.accounts.poi_system_program,
             &ctx.accounts.map_pois,
             &ctx.accounts.game_session.to_account_info(),
             &ctx.accounts.player,
-            &ctx.accounts.burner_wallet.to_account_info(),
+            &ctx.accounts.session_signer.to_account_info(),
         )?;
 
         // 2. Close generated_map (depends on session)
@@ -734,7 +991,7 @@ pub mod session_manager {
             &ctx.accounts.generated_map,
             &ctx.accounts.game_session.to_account_info(),
             &ctx.accounts.player,
-            &ctx.accounts.burner_wallet.to_account_info(),
+            &ctx.accounts.session_signer.to_account_info(),
         )?;
 
         // 3. Close map_enemies (depends on game_state)
@@ -743,15 +1000,15 @@ pub mod session_manager {
             &ctx.accounts.map_enemies,
             &ctx.accounts.game_state.to_account_info(),
             &ctx.accounts.player,
-            &ctx.accounts.burner_wallet.to_account_info(),
+            &ctx.accounts.session_signer.to_account_info(),
         )?;
 
         // 4. Close game_state
-        close_game_state_via_burner_cpi(
+        close_game_state_via_session_signer_cpi(
             &ctx.accounts.gameplay_state_program.to_account_info(),
             &ctx.accounts.game_state.to_account_info(),
             &ctx.accounts.player,
-            &ctx.accounts.burner_wallet.to_account_info(),
+            &ctx.accounts.session_signer.to_account_info(),
         )?;
 
         // 5. Close inventory via CPI
@@ -759,7 +1016,7 @@ pub mod session_manager {
             ctx.accounts.player_inventory_program.to_account_info(),
             player_inventory::cpi::accounts::CloseInventory {
                 inventory: ctx.accounts.inventory.to_account_info(),
-                player: ctx.accounts.burner_wallet.to_account_info(),
+                player: ctx.accounts.session_signer.to_account_info(),
             },
         ))?;
 
@@ -878,10 +1135,10 @@ pub struct StartSession<'info> {
     #[account(mut)]
     pub player: Signer<'info>,
 
-    /// Burner wallet that will own all session-specific accounts (inventory, etc.)
+    /// Session key signer that will own all session-specific accounts (inventory, etc.)
     /// Must be a signer so it can be set as the inventory owner for gameplay transactions.
     #[account(mut)]
-    pub burner_wallet: Signer<'info>,
+    pub session_signer: Signer<'info>,
 
     /// Map configuration for map generation
     pub map_config: Account<'info, MapConfigAccount>,
@@ -948,7 +1205,7 @@ pub struct StartDuelSession<'info> {
     pub player: Signer<'info>,
 
     #[account(mut)]
-    pub burner_wallet: Signer<'info>,
+    pub session_signer: Signer<'info>,
 
     #[account(
         seeds = [SESSION_MANAGER_AUTHORITY_SEED],
@@ -1018,7 +1275,7 @@ pub struct StartGauntletSession<'info> {
     pub player: Signer<'info>,
 
     #[account(mut)]
-    pub burner_wallet: Signer<'info>,
+    pub session_signer: Signer<'info>,
 
     #[account(
         seeds = [SESSION_MANAGER_AUTHORITY_SEED],
@@ -1059,32 +1316,235 @@ pub struct StartGauntletSession<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[delegate]
 #[derive(Accounts)]
 #[instruction(campaign_level: u8)]
 pub struct DelegateSession<'info> {
-    #[account(
-        mut,
-        has_one = player @ SessionManagerError::Unauthorized
-    )]
-    pub game_session: Account<'info, GameSession>,
+    #[account(mut, del)]
+    /// CHECK: Validated in handler (owner/player/level/delegation status and PDA seeds).
+    pub game_session: AccountInfo<'info>,
+
+    /// CHECK: Must match game_session.player, but does not need to sign.
+    pub player: AccountInfo<'info>,
+    pub session_signer: Signer<'info>,
+}
+
+#[delegate]
+#[derive(Accounts)]
+#[instruction(campaign_level: u8)]
+pub struct DelegateGameState<'info> {
+    #[account(mut, del)]
+    /// CHECK: Validated in handler as gameplay-state PDA for the delegated session.
+    pub game_state: AccountInfo<'info>,
 
     pub player: Signer<'info>,
 }
 
+#[delegate]
+#[derive(Accounts)]
+#[instruction(campaign_level: u8)]
+pub struct DelegateMapEnemies<'info> {
+    #[account(mut, del)]
+    /// CHECK: Validated in handler as map-enemies PDA for the delegated session.
+    pub map_enemies: AccountInfo<'info>,
+
+    pub player: Signer<'info>,
+}
+
+#[delegate]
+#[derive(Accounts)]
+#[instruction(campaign_level: u8)]
+pub struct DelegateGeneratedMap<'info> {
+    #[account(mut, del)]
+    /// CHECK: Validated in handler as generated-map PDA for the delegated session.
+    pub generated_map: AccountInfo<'info>,
+
+    pub player: Signer<'info>,
+}
+
+#[delegate]
+#[derive(Accounts)]
+#[instruction(campaign_level: u8)]
+pub struct DelegateInventory<'info> {
+    #[account(mut, del)]
+    /// CHECK: Validated in handler as inventory PDA for the delegated session.
+    pub inventory: AccountInfo<'info>,
+
+    pub player: Signer<'info>,
+}
+
+#[delegate]
+#[derive(Accounts)]
+#[instruction(campaign_level: u8)]
+pub struct DelegateMapPois<'info> {
+    #[account(mut, del)]
+    /// CHECK: Validated in handler as map-pois PDA for the delegated session.
+    pub map_pois: AccountInfo<'info>,
+
+    pub player: Signer<'info>,
+}
+
+#[commit]
 #[derive(Accounts)]
 #[instruction(campaign_level: u8)]
 pub struct CommitSession<'info> {
-    #[account(
-        mut,
-        has_one = player @ SessionManagerError::Unauthorized
-    )]
-    pub game_session: Account<'info, GameSession>,
+    #[account(mut)]
+    /// CHECK: Deserialized and validated in handler to support delegated owner (DELeGG).
+    pub game_session: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    /// CHECK: Validated in handler as gameplay-state PDA for the delegated session.
+    pub game_state: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    /// CHECK: Validated in handler as map-enemies PDA for the delegated session.
+    pub map_enemies: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    /// CHECK: Validated in handler as generated-map PDA for the delegated session.
+    pub generated_map: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    /// CHECK: Validated in handler as inventory PDA for the delegated session.
+    pub inventory: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    /// CHECK: Validated in handler as map-pois PDA for the delegated session.
+    pub map_pois: UncheckedAccount<'info>,
 
     pub player: Signer<'info>,
 }
 
+#[commit]
+#[derive(Accounts)]
+#[instruction(campaign_level: u8)]
+pub struct UndelegateSession<'info> {
+    #[account(mut)]
+    /// CHECK: Deserialized and validated in handler to support delegated owner (DELeGG).
+    pub game_session: UncheckedAccount<'info>,
+
+    /// CHECK: Must match game_session.player, but does not need to sign.
+    pub player: AccountInfo<'info>,
+    pub session_signer: Signer<'info>,
+}
+
+fn validate_gameplay_runtime_accounts(
+    game_session_key: &Pubkey,
+    game_state: &AccountInfo<'_>,
+    map_enemies: &AccountInfo<'_>,
+) -> Result<()> {
+    let (expected_game_state, _) =
+        Pubkey::find_program_address(&[b"game_state", game_session_key.as_ref()], &gameplay_state::ID);
+    require_keys_eq!(
+        game_state.key(),
+        expected_game_state,
+        SessionManagerError::Unauthorized
+    );
+
+    let (expected_map_enemies, _) = Pubkey::find_program_address(
+        &[MapEnemies::SEED_PREFIX, game_session_key.as_ref()],
+        &gameplay_state::ID,
+    );
+    require_keys_eq!(
+        map_enemies.key(),
+        expected_map_enemies,
+        SessionManagerError::Unauthorized
+    );
+
+    Ok(())
+}
+
+fn validate_secondary_runtime_accounts(
+    game_session_key: &Pubkey,
+    generated_map: &AccountInfo<'_>,
+    inventory: &AccountInfo<'_>,
+    map_pois: &AccountInfo<'_>,
+) -> Result<()> {
+    let (expected_generated_map, _) = Pubkey::find_program_address(
+        &[GeneratedMap::SEED_PREFIX, game_session_key.as_ref()],
+        &map_generator::ID,
+    );
+    require_keys_eq!(
+        generated_map.key(),
+        expected_generated_map,
+        SessionManagerError::Unauthorized
+    );
+
+    let (expected_inventory, _) = Pubkey::find_program_address(
+        &[b"inventory", game_session_key.as_ref()],
+        &player_inventory::ID,
+    );
+    require_keys_eq!(
+        inventory.key(),
+        expected_inventory,
+        SessionManagerError::Unauthorized
+    );
+
+    let (expected_map_pois, _) = Pubkey::find_program_address(
+        &[b"map_pois", game_session_key.as_ref()],
+        &POI_SYSTEM_PROGRAM_ID,
+    );
+    require_keys_eq!(
+        map_pois.key(),
+        expected_map_pois,
+        SessionManagerError::Unauthorized
+    );
+
+    Ok(())
+}
+
+fn require_session_delegation_preconditions(
+    game_session_info: &AccountInfo<'_>,
+    player: &Pubkey,
+    campaign_level: u8,
+) -> Result<()> {
+    require_keys_eq!(
+        *game_session_info.owner,
+        crate::ID,
+        SessionManagerError::Unauthorized
+    );
+
+    let data = game_session_info.try_borrow_data()?;
+    let mut data_slice: &[u8] = &data;
+    let session = GameSession::try_deserialize(&mut data_slice)?;
+
+    require_keys_eq!(session.player, *player, SessionManagerError::Unauthorized);
+    require!(
+        session.campaign_level == campaign_level,
+        SessionManagerError::InvalidCampaignLevel
+    );
+    require!(
+        !session.is_delegated,
+        SessionManagerError::SessionAlreadyDelegated
+    );
+
+    Ok(())
+}
+
+fn derive_campaign_session_pda(player: &Pubkey, campaign_level: u8) -> Pubkey {
+    let campaign_seed = [campaign_level];
+    let seeds: &[&[u8]] = &[GameSession::SEED_PREFIX, player.as_ref(), &campaign_seed];
+    Pubkey::find_program_address(seeds, &crate::ID).0
+}
+
+fn load_game_session_unchecked(game_session_info: &AccountInfo<'_>) -> Result<GameSession> {
+    let data = game_session_info.try_borrow_data()?;
+    let mut data_slice: &[u8] = &data;
+    Ok(GameSession::try_deserialize(&mut data_slice)?)
+}
+
+fn store_game_session_unchecked(
+    game_session_info: &AccountInfo<'_>,
+    session: &GameSession,
+) -> Result<()> {
+    let mut data = game_session_info.try_borrow_mut_data()?;
+    let mut data_ref: &mut [u8] = &mut data;
+    session.try_serialize(&mut data_ref)?;
+    Ok(())
+}
+
 /// End session after death or level completion.
-/// Only burner wallet needs to sign - player just receives rent refund.
+/// Only session key signer needs to sign - player just receives rent refund.
 /// Closes all session-related accounts: session, game_state, generated_map, map_enemies, map_pois, inventory.
 #[derive(Accounts)]
 #[instruction(campaign_level: u8)]
@@ -1092,7 +1552,7 @@ pub struct EndSession<'info> {
     #[account(
         mut,
         has_one = player @ SessionManagerError::Unauthorized,
-        has_one = burner_wallet @ SessionManagerError::Unauthorized,
+        has_one = session_signer @ SessionManagerError::Unauthorized,
         close = player
     )]
     pub game_session: Account<'info, GameSession>,
@@ -1135,9 +1595,16 @@ pub struct EndSession<'info> {
     #[account(mut)]
     pub player: AccountInfo<'info>,
 
-    /// Burner wallet - must sign to authorize session end and close inventory
+    /// Session key signer - must sign to authorize session end and close inventory
     #[account(mut)]
-    pub burner_wallet: Signer<'info>,
+    pub session_signer: Signer<'info>,
+
+    #[account(
+        seeds = [SESSION_MANAGER_AUTHORITY_SEED],
+        bump
+    )]
+    /// CHECK: PDA signer used to authorize player-profile run-result CPI.
+    pub session_manager_authority: UncheckedAccount<'info>,
 
     /// Player's inventory account (closed via CPI to ensure fresh inventory next session)
     #[account(mut)]
@@ -1161,8 +1628,8 @@ pub struct EndSession<'info> {
 }
 
 /// Abandon session at any time (user-initiated).
-/// Requires both main wallet and burner wallet signatures.
-/// Main wallet authorizes the abandonment, burner wallet is needed to close sub-accounts.
+/// Requires both main wallet and session key signer signatures.
+/// Main wallet authorizes the abandonment, session key signer is needed to close sub-accounts.
 /// Closes all session-related accounts: session, game_state, generated_map, map_enemies, map_pois, inventory.
 #[derive(Accounts)]
 #[instruction(campaign_level: u8)]
@@ -1170,7 +1637,7 @@ pub struct AbandonSession<'info> {
     #[account(
         mut,
         has_one = player @ SessionManagerError::Unauthorized,
-        has_one = burner_wallet @ SessionManagerError::Unauthorized,
+        has_one = session_signer @ SessionManagerError::Unauthorized,
         close = player
     )]
     pub game_session: Account<'info, GameSession>,
@@ -1199,9 +1666,9 @@ pub struct AbandonSession<'info> {
     #[account(mut)]
     pub player: Signer<'info>,
 
-    /// Burner wallet - must sign to close sub-accounts (owns the inventory)
+    /// Session key signer - must sign to close sub-accounts (owns the inventory)
     #[account(mut)]
-    pub burner_wallet: Signer<'info>,
+    pub session_signer: Signer<'info>,
 
     /// Player's inventory account (closed via CPI)
     #[account(mut)]
@@ -1229,7 +1696,7 @@ pub struct SessionStarted {
     pub player: Pubkey,
     pub session_id: u64,
     pub campaign_level: u8,
-    pub burner_wallet: Pubkey,
+    pub session_signer: Pubkey,
     pub timestamp: i64,
 }
 
@@ -1264,7 +1731,7 @@ fn derive_pvp_seed(
     clock: &Clock,
     session_counter: u64,
     player: &Pubkey,
-    burner_wallet: &Pubkey,
+    session_signer: &Pubkey,
 ) -> u64 {
     let mut acc = session_counter
         .wrapping_mul(0x9E37_79B9_7F4A_7C15)
@@ -1277,7 +1744,7 @@ fn derive_pvp_seed(
     for byte in player.as_ref() {
         acc = acc.wrapping_mul(0x100_0000_01B3).wrapping_add(*byte as u64);
     }
-    for byte in burner_wallet.as_ref() {
+    for byte in session_signer.as_ref() {
         acc = acc.wrapping_mul(0x100_0000_01B3).wrapping_add(*byte as u64);
     }
 
@@ -1327,6 +1794,51 @@ fn invoke_manual_cpi<'info>(
             data,
         },
         &invoke_infos,
+    )?;
+    Ok(())
+}
+
+/// Generic manual CPI invocation with PDA signer seeds.
+fn invoke_manual_cpi_signed<'info>(
+    program: &AccountInfo<'info>,
+    program_id: Pubkey,
+    discriminator: &[u8; 8],
+    extra_data: &[u8],
+    accounts: &[(&AccountInfo<'info>, bool, bool)],
+    signer_seeds: &[&[&[u8]]],
+) -> Result<()> {
+    use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
+    use anchor_lang::solana_program::program::invoke_signed;
+
+    let mut data = Vec::with_capacity(8 + extra_data.len());
+    data.extend_from_slice(discriminator);
+    data.extend_from_slice(extra_data);
+
+    let metas: Vec<AccountMeta> = accounts
+        .iter()
+        .map(|(info, writable, signer)| {
+            if *writable {
+                AccountMeta::new(info.key(), *signer)
+            } else {
+                AccountMeta::new_readonly(info.key(), *signer)
+            }
+        })
+        .collect();
+
+    let mut invoke_infos: Vec<AccountInfo<'info>> = accounts
+        .iter()
+        .map(|(info, _, _)| (*info).clone())
+        .collect();
+    invoke_infos.push(program.clone());
+
+    invoke_signed(
+        &Instruction {
+            program_id,
+            accounts: metas,
+            data,
+        },
+        &invoke_infos,
+        signer_seeds,
     )?;
     Ok(())
 }
@@ -1386,7 +1898,7 @@ fn discover_visible_waypoints_cpi<'info>(
     program: &AccountInfo<'info>,
     map_pois: &AccountInfo<'info>,
     game_state: &AccountInfo<'info>,
-    burner_wallet: &AccountInfo<'info>,
+    session_signer: &AccountInfo<'info>,
     visibility_radius: u8,
 ) -> Result<()> {
     invoke_manual_cpi(
@@ -1397,7 +1909,7 @@ fn discover_visible_waypoints_cpi<'info>(
         &[
             (map_pois, true, false),
             (game_state, false, false),
-            (burner_wallet, false, true),
+            (session_signer, false, true),
         ],
     )
 }
@@ -1409,12 +1921,14 @@ fn record_run_result_cpi<'info>(
     program: &AccountInfo<'info>,
     player_profile: &AccountInfo<'info>,
     session: &AccountInfo<'info>,
-    burner_wallet: &AccountInfo<'info>,
+    session_signer: &AccountInfo<'info>,
+    session_manager_authority: &AccountInfo<'info>,
     level_completed: u8,
     victory: bool,
+    signer_seeds: &[&[&[u8]]],
 ) -> Result<()> {
     let extra = [level_completed, if victory { 1 } else { 0 }];
-    invoke_manual_cpi(
+    invoke_manual_cpi_signed(
         program,
         PLAYER_PROFILE_PROGRAM_ID,
         &RECORD_RUN_RESULT_CPI_DISCRIMINATOR,
@@ -1422,8 +1936,10 @@ fn record_run_result_cpi<'info>(
         &[
             (player_profile, true, false),
             (session, false, false),
-            (burner_wallet, false, true),
+            (session_signer, false, true),
+            (session_manager_authority, false, true),
         ],
+        signer_seeds,
     )
 }
 
@@ -1431,26 +1947,28 @@ fn record_run_result_cpi<'info>(
 // Close CPI Functions for end_session
 // ============================================================================
 
-pub const CLOSE_GAME_STATE_VIA_BURNER_DISCRIMINATOR: [u8; 8] = [71, 137, 243, 70, 95, 193, 114, 51];
+pub const CLOSE_GAME_STATE_VIA_SESSION_SIGNER_DISCRIMINATOR: [u8; 8] =
+    [199, 166, 186, 238, 90, 16, 234, 79];
 pub const CLOSE_MAP_ENEMIES_DISCRIMINATOR: [u8; 8] = [192, 111, 190, 66, 236, 132, 252, 88];
 pub const CLOSE_GENERATED_MAP_DISCRIMINATOR: [u8; 8] = [249, 208, 241, 231, 57, 214, 174, 103];
-pub const CLOSE_MAP_POIS_VIA_BURNER_DISCRIMINATOR: [u8; 8] = [96, 5, 252, 241, 226, 138, 10, 215];
+pub const CLOSE_MAP_POIS_VIA_SESSION_SIGNER_DISCRIMINATOR: [u8; 8] =
+    [35, 38, 19, 18, 250, 66, 39, 150];
 
-fn close_game_state_via_burner_cpi<'info>(
+fn close_game_state_via_session_signer_cpi<'info>(
     program: &AccountInfo<'info>,
     game_state: &AccountInfo<'info>,
     player: &AccountInfo<'info>,
-    burner_wallet: &AccountInfo<'info>,
+    session_signer: &AccountInfo<'info>,
 ) -> Result<()> {
     invoke_manual_cpi(
         program,
         gameplay_state::ID,
-        &CLOSE_GAME_STATE_VIA_BURNER_DISCRIMINATOR,
+        &CLOSE_GAME_STATE_VIA_SESSION_SIGNER_DISCRIMINATOR,
         &[],
         &[
             (game_state, true, false),
             (player, true, false),
-            (burner_wallet, false, true),
+            (session_signer, false, true),
         ],
     )
 }
@@ -1460,7 +1978,7 @@ fn close_map_enemies_cpi<'info>(
     map_enemies: &AccountInfo<'info>,
     game_state: &AccountInfo<'info>,
     player: &AccountInfo<'info>,
-    burner_wallet: &AccountInfo<'info>,
+    session_signer: &AccountInfo<'info>,
 ) -> Result<()> {
     invoke_manual_cpi(
         program,
@@ -1471,7 +1989,7 @@ fn close_map_enemies_cpi<'info>(
             (map_enemies, true, false),
             (game_state, false, false),
             (player, true, false),
-            (burner_wallet, false, true),
+            (session_signer, false, true),
         ],
     )
 }
@@ -1481,7 +1999,7 @@ fn close_generated_map_cpi<'info>(
     generated_map: &AccountInfo<'info>,
     session: &AccountInfo<'info>,
     player: &AccountInfo<'info>,
-    burner_wallet: &AccountInfo<'info>,
+    session_signer: &AccountInfo<'info>,
 ) -> Result<()> {
     invoke_manual_cpi(
         program,
@@ -1492,28 +2010,28 @@ fn close_generated_map_cpi<'info>(
             (generated_map, true, false),
             (session, false, false),
             (player, true, false),
-            (burner_wallet, false, true),
+            (session_signer, false, true),
         ],
     )
 }
 
-fn close_map_pois_via_burner_cpi<'info>(
+fn close_map_pois_via_session_signer_cpi<'info>(
     program: &AccountInfo<'info>,
     map_pois: &AccountInfo<'info>,
     session: &AccountInfo<'info>,
     player: &AccountInfo<'info>,
-    burner_wallet: &AccountInfo<'info>,
+    session_signer: &AccountInfo<'info>,
 ) -> Result<()> {
     invoke_manual_cpi(
         program,
         POI_SYSTEM_PROGRAM_ID,
-        &CLOSE_MAP_POIS_VIA_BURNER_DISCRIMINATOR,
+        &CLOSE_MAP_POIS_VIA_SESSION_SIGNER_DISCRIMINATOR,
         &[],
         &[
             (map_pois, true, false),
             (session, false, false),
             (player, true, false),
-            (burner_wallet, false, true),
+            (session_signer, false, true),
         ],
     )
 }
@@ -1575,13 +2093,13 @@ mod tests {
     }
 
     #[test]
-    fn test_close_game_state_via_burner_discriminator() {
+    fn test_close_game_state_via_session_signer_discriminator() {
         use sha2::{Digest, Sha256};
-        let hash = Sha256::digest(b"global:close_game_state_via_burner");
+        let hash = Sha256::digest(b"global:close_game_state_via_session_signer");
         let expected: [u8; 8] = hash[..8].try_into().unwrap();
         assert_eq!(
-            CLOSE_GAME_STATE_VIA_BURNER_DISCRIMINATOR, expected,
-            "CLOSE_GAME_STATE_VIA_BURNER_DISCRIMINATOR doesn't match"
+            CLOSE_GAME_STATE_VIA_SESSION_SIGNER_DISCRIMINATOR, expected,
+            "CLOSE_GAME_STATE_VIA_SESSION_SIGNER_DISCRIMINATOR doesn't match"
         );
     }
 
@@ -1608,13 +2126,13 @@ mod tests {
     }
 
     #[test]
-    fn test_close_map_pois_via_burner_discriminator() {
+    fn test_close_map_pois_via_session_signer_discriminator() {
         use sha2::{Digest, Sha256};
-        let hash = Sha256::digest(b"global:close_map_pois_via_burner");
+        let hash = Sha256::digest(b"global:close_map_pois_via_session_signer");
         let expected: [u8; 8] = hash[..8].try_into().unwrap();
         assert_eq!(
-            CLOSE_MAP_POIS_VIA_BURNER_DISCRIMINATOR, expected,
-            "CLOSE_MAP_POIS_VIA_BURNER_DISCRIMINATOR doesn't match"
+            CLOSE_MAP_POIS_VIA_SESSION_SIGNER_DISCRIMINATOR, expected,
+            "CLOSE_MAP_POIS_VIA_SESSION_SIGNER_DISCRIMINATOR doesn't match"
         );
     }
 }

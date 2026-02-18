@@ -51,4 +51,7 @@ pub enum SessionManagerError {
     #[msg("Session can only be ended after death or level completion")]
     SessionNotEndable,
 
+    /// Session must be undelegated before closing
+    #[msg("Session must be undelegated before closing")]
+    SessionStillDelegated,
 }

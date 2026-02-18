@@ -39,15 +39,22 @@ pub const SESSION_MANAGER_PROGRAM_ID: [u8; 32] = [
     0xfa, 0xa7, 0x5b, 0x43, 0xba, 0x17, 0xd1, 0x02, 0x50, 0xff, 0x76, 0xc0, 0xaf, 0xf2, 0xde, 0xb7,
 ];
 
-/// Byte offset of `burner_wallet` field in GameSession account data.
+/// Seed for session-manager authority PDA that signs authorized CPIs.
+pub const SESSION_MANAGER_AUTHORITY_SEED: &[u8] = b"session_manager_authority";
+
+/// Byte offset of `campaign_level` field in GameSession account data.
+/// Layout: 8 (discriminator) + 32 (player) + 8 (session_id) = 48
+pub const SESSION_CAMPAIGN_LEVEL_OFFSET: usize = 48;
+
+/// Byte offset of `session_signer` field in GameSession account data.
 /// Layout: 8 (discriminator) + 32 (player) + 8 (session_id) + 1 (campaign_level) +
 /// 8 (started_at) + 8 (last_activity) + 1 (is_delegated) + 1 (bump) +
 /// 10 (active_item_pool) = 77
-pub const SESSION_BURNER_WALLET_OFFSET: usize = 77;
+pub const SESSION_SESSION_SIGNER_OFFSET: usize = 77;
 
-/// Minimum session account data length required to read through burner_wallet.
-/// SESSION_BURNER_WALLET_OFFSET + 32 (Pubkey size) = 109
-pub const SESSION_MIN_DATA_LEN: usize = SESSION_BURNER_WALLET_OFFSET + 32;
+/// Minimum session account data length required to read through session_signer.
+/// SESSION_SESSION_SIGNER_OFFSET + 32 (Pubkey size) = 109
+pub const SESSION_MIN_DATA_LEN: usize = SESSION_SESSION_SIGNER_OFFSET + 32;
 
 /// Treasury wallet for run purchases (5LvEA4tH5H5DtWCxa3FcauokxAycvafX9ruvcT2mEXt8)
 /// NOTE: This MUST be updated to the actual treasury pubkey before mainnet deployment

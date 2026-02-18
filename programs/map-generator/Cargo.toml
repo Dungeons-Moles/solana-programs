@@ -18,3 +18,4 @@ idl-build = ["anchor-lang/idl-build"]
 
 [dependencies]
 anchor-lang = "0.32.0"
+ephemeral-rollups-sdk = { version = "0.7.3", features = ["anchor", "disable-realloc"] }

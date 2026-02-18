@@ -65,8 +65,8 @@ pub struct GameState {
     /// Session owner's main wallet (used for lifecycle operations like close)
     pub player: Pubkey,
 
-    /// Burner wallet authorized for gameplay transactions (move, boss fight)
-    pub burner_wallet: Pubkey,
+    /// Session key signer authorized for gameplay transactions (move, boss fight)
+    pub session_signer: Pubkey,
 
     /// Linked GameSession PDA
     pub session: Pubkey,

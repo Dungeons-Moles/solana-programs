@@ -1,4 +1,7 @@
 use anchor_lang::prelude::*;
+use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
+use ephemeral_rollups_sdk::cpi::DelegateConfig;
+use ephemeral_rollups_sdk::ephem::commit_and_undelegate_accounts;
 
 pub mod constants;
 pub mod errors;
@@ -24,7 +27,16 @@ pub const SESSION_MANAGER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     217, 18, 17, 128, 79, 140, 152, 73, 103, 95, 134, 179, 31, 109, 34, 82, 250, 167, 91, 67, 186,
     23, 209, 2, 80, 255, 118, 192, 175, 242, 222, 183,
 ]);
+pub const LOCAL_ER_VALIDATOR: Pubkey = pubkey!("mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev");
 
+fn local_delegate_config() -> DelegateConfig {
+    DelegateConfig {
+        validator: Some(LOCAL_ER_VALIDATOR),
+        ..DelegateConfig::default()
+    }
+}
+
+#[ephemeral]
 #[program]
 pub mod map_generator {
     use super::*;
@@ -134,30 +146,30 @@ pub mod map_generator {
     /// Closes the GeneratedMap account, returning rent to player.
     /// Used by session-manager CPI during end_session to clean up.
     ///
-    /// Authorization: Reads session account to verify burner_wallet matches signer,
+    /// Authorization: Reads session account to verify session_signer matches signer,
     /// then returns rent to session.player.
     pub fn close_generated_map(ctx: Context<CloseGeneratedMap>) -> Result<()> {
         /// Byte offset of `player` in GameSession account data.
         /// Must match session_manager::state::GameSession layout.
         const SESSION_PLAYER_OFFSET: usize = 8;
-        /// Byte offset of `burner_wallet` in GameSession account data.
-        /// Keep in sync with session_manager::state::GameSession::BURNER_WALLET_OFFSET.
-        const SESSION_BURNER_WALLET_OFFSET: usize = 77;
+        /// Byte offset of `session_signer` in GameSession account data.
+        /// Keep in sync with session_manager::state::GameSession::SESSION_SIGNER_OFFSET.
+        const SESSION_SESSION_SIGNER_OFFSET: usize = 77;
 
         let session_data = ctx.accounts.session.try_borrow_data()?;
         require!(
-            session_data.len() >= SESSION_BURNER_WALLET_OFFSET + 32,
+            session_data.len() >= SESSION_SESSION_SIGNER_OFFSET + 32,
             MapGeneratorError::InvalidSession
         );
 
-        let stored_burner = Pubkey::from(
+        let stored_session_signer = Pubkey::from(
             <[u8; 32]>::try_from(
-                &session_data[SESSION_BURNER_WALLET_OFFSET..SESSION_BURNER_WALLET_OFFSET + 32],
+                &session_data[SESSION_SESSION_SIGNER_OFFSET..SESSION_SESSION_SIGNER_OFFSET + 32],
             )
             .unwrap(),
         );
         require!(
-            stored_burner == ctx.accounts.burner_wallet.key(),
+            stored_session_signer == ctx.accounts.session_signer.key(),
             MapGeneratorError::Unauthorized
         );
 
@@ -176,6 +188,55 @@ pub mod map_generator {
             session: ctx.accounts.generated_map.session,
         });
 
+        Ok(())
+    }
+
+    /// Delegates generated-map PDA to MagicBlock from its owning program.
+    pub fn delegate_generated_map(ctx: Context<DelegateGeneratedMap>) -> Result<()> {
+        let session_key = ctx.accounts.session.key();
+        let (expected_generated_map, _) = Pubkey::find_program_address(
+            &[GeneratedMap::SEED_PREFIX, session_key.as_ref()],
+            &crate::ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.generated_map.key(),
+            expected_generated_map,
+            MapGeneratorError::Unauthorized
+        );
+        let map_seeds: &[&[u8]] = &[GeneratedMap::SEED_PREFIX, session_key.as_ref()];
+        ctx.accounts.delegate_generated_map(
+            &ctx.accounts.player,
+            map_seeds,
+            local_delegate_config(),
+        )?;
+        Ok(())
+    }
+
+    /// Commits and undelegates generated-map PDA from ER back to base layer.
+    pub fn undelegate_generated_map(ctx: Context<UndelegateGeneratedMap>) -> Result<()> {
+        let session_key = ctx.accounts.session.key();
+        let (expected_generated_map, _) = Pubkey::find_program_address(
+            &[GeneratedMap::SEED_PREFIX, session_key.as_ref()],
+            &crate::ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.generated_map.key(),
+            expected_generated_map,
+            MapGeneratorError::Unauthorized
+        );
+        require_keys_eq!(
+            ctx.accounts.generated_map.session,
+            session_key,
+            MapGeneratorError::Unauthorized
+        );
+
+        let generated_map_info = ctx.accounts.generated_map.to_account_info();
+        commit_and_undelegate_accounts(
+            &ctx.accounts.session_signer.to_account_info(),
+            vec![&generated_map_info],
+            &ctx.accounts.magic_context,
+            &ctx.accounts.magic_program.to_account_info(),
+        )?;
         Ok(())
     }
 }
@@ -208,7 +269,10 @@ pub struct GenerateMap<'info> {
     pub payer: Signer<'info>,
 
     /// Game session PDA reference (validated externally)
-    /// CHECK: Session account is validated by the caller
+    /// CHECK: Ownership is validated by constraint; PDA relationship is enforced by seeds on generated_map.
+    #[account(
+        owner = SESSION_MANAGER_PROGRAM_ID @ MapGeneratorError::InvalidSessionOwner
+    )]
     pub session: UncheckedAccount<'info>,
 
     /// Map configuration with seeds
@@ -229,6 +293,27 @@ pub struct GenerateMap<'info> {
     pub generated_map: Account<'info, GeneratedMap>,
 
     pub system_program: Program<'info, System>,
+}
+
+#[delegate]
+#[derive(Accounts)]
+pub struct DelegateGeneratedMap<'info> {
+    #[account(mut, del)]
+    /// CHECK: PDA is validated via explicit seed check in handler.
+    pub generated_map: AccountInfo<'info>,
+    /// CHECK: Session PDA owned by session-manager; used only for seed derivation.
+    pub session: UncheckedAccount<'info>,
+    pub player: Signer<'info>,
+}
+
+#[commit]
+#[derive(Accounts)]
+pub struct UndelegateGeneratedMap<'info> {
+    #[account(mut)]
+    pub generated_map: Account<'info, GeneratedMap>,
+    /// CHECK: Session PDA used only for deterministic PDA validation.
+    pub session: UncheckedAccount<'info>,
+    pub session_signer: Signer<'info>,
 }
 
 #[derive(Accounts)]
@@ -274,7 +359,7 @@ pub struct SetTileFloor<'info> {
     pub gameplay_authority: Signer<'info>,
 }
 
-/// Context for closing GeneratedMap account via burner wallet.
+/// Context for closing GeneratedMap account via session key signer.
 #[derive(Accounts)]
 pub struct CloseGeneratedMap<'info> {
     #[account(
@@ -286,7 +371,7 @@ pub struct CloseGeneratedMap<'info> {
     )]
     pub generated_map: Account<'info, GeneratedMap>,
 
-    /// Game session PDA to verify burner_wallet authorization
+    /// Game session PDA to verify session_signer authorization
     /// CHECK: Session account is validated manually in instruction
     pub session: UncheckedAccount<'info>,
 
@@ -295,8 +380,8 @@ pub struct CloseGeneratedMap<'info> {
     #[account(mut)]
     pub player: AccountInfo<'info>,
 
-    /// Burner wallet must sign to authorize closure
-    pub burner_wallet: Signer<'info>,
+    /// Session key signer must sign to authorize closure
+    pub session_signer: Signer<'info>,
 }
 
 // ============================================================================

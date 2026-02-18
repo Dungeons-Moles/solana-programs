@@ -59,9 +59,17 @@ pub enum PlayerProfileError {
     #[msg("Session account has invalid owner")]
     InvalidSessionOwner,
 
-    /// Burner wallet does not match the session's stored burner wallet
-    #[msg("Burner wallet does not match session")]
-    InvalidBurnerWallet,
+    /// Session key signer does not match the session's stored session key signer
+    #[msg("Session key signer does not match session")]
+    InvalidSessionSigner,
+
+    /// Direct profile mutations are disabled; use authorized CPI path.
+    #[msg("Direct mutation disabled")]
+    DirectMutationDisabled,
+
+    /// Session-manager authority PDA is invalid.
+    #[msg("Invalid session-manager authority")]
+    InvalidSessionManagerAuthority,
 
     /// Pit draft queue account is invalid or malformed
     #[msg("Invalid pit draft queue account")]

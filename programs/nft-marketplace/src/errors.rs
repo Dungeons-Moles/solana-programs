@@ -52,4 +52,7 @@ pub enum MarketplaceError {
 
     #[msg("Cannot list a skin that is currently equipped")]
     SkinCurrentlyEquipped,
+
+    #[msg("Invalid gauntlet pool account")]
+    InvalidGauntletPool,
 }

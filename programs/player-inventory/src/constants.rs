@@ -29,3 +29,7 @@ pub const TOOL_OIL_DIG: u8 = 0x04;
 
 /// Tool Oil flag for +1 ARM
 pub const TOOL_OIL_ARM: u8 = 0x08;
+
+/// Metaplex Core program ID for NFT asset validation
+pub const MPL_CORE_PROGRAM_ID: anchor_lang::prelude::Pubkey =
+    anchor_lang::pubkey!("CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d");

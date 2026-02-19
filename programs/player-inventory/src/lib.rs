@@ -24,7 +24,7 @@ pub mod nft_items;
 pub mod state;
 
 use combat_system::{EffectType, TriggerType};
-use constants::MAX_GEAR_SLOTS;
+use constants::{MAX_GEAR_SLOTS, MPL_CORE_PROGRAM_ID};
 use effects::generate_combat_effects;
 use errors::InventoryError;
 use fusion::{execute_fusion, validate_fusion};
@@ -551,6 +551,12 @@ pub mod player_inventory {
         // Validate the NFT item exists in catalog
         let _item_def =
             get_nft_item(&nft_item_id).ok_or(InventoryError::InvalidItemId)?;
+
+        // Validate the account is owned by Metaplex Core program
+        require!(
+            *ctx.accounts.special_asset.owner == MPL_CORE_PROGRAM_ID,
+            InventoryError::Unauthorized
+        );
 
         // Validate the NFT is owned by the player (read raw bytes from Metaplex Core asset)
         let skin_data = ctx.accounts.special_asset.try_borrow_data()?;

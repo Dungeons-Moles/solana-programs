@@ -26,6 +26,17 @@ pub mod nft_marketplace {
         skins_collection: Pubkey,
         items_collection: Pubkey,
     ) -> Result<()> {
+        // Validate gauntlet_pool is the canonical gameplay-state PDA
+        let (expected_pool, _) = Pubkey::find_program_address(
+            &[GAUNTLET_POOL_VAULT_SEED],
+            &GAMEPLAY_STATE_PROGRAM_ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.gauntlet_pool.key(),
+            expected_pool,
+            MarketplaceError::InvalidGauntletPool
+        );
+
         let config = &mut ctx.accounts.marketplace_config;
         config.authority = ctx.accounts.authority.key();
         config.skins_collection = skins_collection;
@@ -301,6 +312,7 @@ pub mod nft_marketplace {
     // ========================================================================
 
     /// Admin creates a quest definition.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_quest(
         ctx: Context<CreateQuest>,
         quest_id: u16,
@@ -392,7 +404,7 @@ pub struct InitializeMarketplace<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
 
-    /// CHECK: Validated to be the gameplay-state gauntlet pool vault PDA.
+    /// CHECK: Validated in handler against gameplay-state gauntlet pool vault PDA.
     pub gauntlet_pool: AccountInfo<'info>,
 
     pub system_program: Program<'info, System>,

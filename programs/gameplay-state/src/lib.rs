@@ -311,8 +311,7 @@ pub mod gameplay_state {
             GameplayStateError::Unauthorized
         );
         require!(
-            (run_mode == RunMode::Campaign && max_weeks == 3)
-                || (run_mode == RunMode::Duel && max_weeks == 3)
+            (run_mode == RunMode::Campaign || run_mode == RunMode::Duel) && max_weeks == 3
                 || (run_mode == RunMode::Gauntlet && max_weeks == 5),
             GameplayStateError::InvalidRunModeMaxWeeks
         );

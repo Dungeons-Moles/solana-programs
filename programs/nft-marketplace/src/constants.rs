@@ -25,3 +25,9 @@ pub const PLAYER_PROFILE_PROGRAM_ID: Pubkey = pubkey!("29DPbP1zuCCRg63PiShMjxAmZ
 
 /// PDA seed for player profile: ["player", owner]
 pub const PLAYER_PROFILE_SEED: &[u8] = b"player";
+
+/// Gameplay-state program ID (5VAaGSSoBP4UEt3RL2EXvDwpeDxAXMndsJn7QX96nc4n)
+pub const GAMEPLAY_STATE_PROGRAM_ID: Pubkey = pubkey!("5VAaGSSoBP4UEt3RL2EXvDwpeDxAXMndsJn7QX96nc4n");
+
+/// Seed used by gameplay-state for the canonical gauntlet pool vault PDA
+pub const GAUNTLET_POOL_VAULT_SEED: &[u8] = b"gauntlet_pool_vault";

@@ -1,9 +1,10 @@
 /**
- * Creates the two Metaplex Core collections for Dungeons & Moles NFTs on devnet.
+ * Creates the two Metaplex Core collections and initializes the NFT marketplace.
  *
- * Collections:
- *   1. "Dungeons & Moles Skins"    — cosmetic character skins
- *   2. "Dungeons & Moles Special Items" — tradeable special items
+ * Steps:
+ *   1. Create "Dungeons & Moles Skins" collection
+ *   2. Create "Dungeons & Moles NFT Items" collection
+ *   3. Initialize marketplace config with both collection addresses
  *
  * Both collections use:
  *   - Royalty plugin: 500 bps (5%), split 60% company treasury / 40% gauntlet pool
@@ -60,11 +61,17 @@ const [mintAuthorityPda] = anchor.web3.PublicKey.findProgramAddressSync(
   NFT_MARKETPLACE_PROGRAM_ID
 );
 
+// Derive the marketplace_config PDA
+const [marketplaceConfigPda] = anchor.web3.PublicKey.findProgramAddressSync(
+  [Buffer.from("marketplace_config")],
+  NFT_MARKETPLACE_PROGRAM_ID
+);
+
 // Royalties: 500 bps = 5% total
 const ROYALTY_BPS = 500;
 
 async function main() {
-  console.log("=== Dungeons & Moles Collection Init ===\n");
+  console.log("=== Dungeons & Moles Collection Init + Marketplace Setup ===\n");
 
   // Load wallet from env or default path
   const walletPath =
@@ -87,7 +94,7 @@ async function main() {
     Uint8Array.from(walletJson)
   );
 
-  // Set up Umi
+  // Set up Umi (for collection creation)
   const umi = createUmi(rpcUrl);
   const umiKeypair = fromWeb3JsKeypair(keypair);
   const signer = createSignerFromKeypair(umi, umiKeypair);
@@ -126,16 +133,17 @@ async function main() {
     );
   } catch (e: any) {
     console.error("  Failed to create skins collection:", e.message || e);
+    process.exit(1);
   }
 
-  // ── 2. Create Special Items Collection ─────────────────────────────
-  console.log("Creating Special Items Collection...");
+  // ── 2. Create NFT Items Collection ────────────────────────────────
+  console.log("Creating NFT Items Collection...");
   const itemsCollection = generateSigner(umi);
 
   try {
     await createCollection(umi, {
       collection: itemsCollection,
-      name: "Dungeons & Moles Special Items",
+      name: "Dungeons & Moles NFT Items",
       uri: "https://arweave.net/items-collection-metadata", // TODO: replace with actual URI
       updateAuthority: mintAuthority,
       plugins: [
@@ -152,23 +160,63 @@ async function main() {
     }).sendAndConfirm(umi);
 
     console.log(
-      "  Items Collection created:",
+      "  NFT Items Collection created:",
       itemsCollection.publicKey.toString()
     );
   } catch (e: any) {
-    console.error("  Failed to create items collection:", e.message || e);
+    console.error("  Failed to create NFT items collection:", e.message || e);
+    process.exit(1);
+  }
+
+  // ── 3. Initialize Marketplace ─────────────────────────────────────
+  console.log("\nInitializing Marketplace...");
+
+  const connection = new anchor.web3.Connection(rpcUrl, "confirmed");
+  const wallet = new anchor.Wallet(keypair);
+  const provider = new anchor.AnchorProvider(connection, wallet, {
+    commitment: "confirmed",
+  });
+
+  // Load IDL
+  const idlPath = `${__dirname}/../target/idl/nft_marketplace.json`;
+  const idl = JSON.parse(fs.readFileSync(idlPath, "utf-8"));
+  const program = new anchor.Program(idl, provider);
+
+  try {
+    const skinsCollectionPubkey = new anchor.web3.PublicKey(
+      skinsCollection.publicKey.toString()
+    );
+    const itemsCollectionPubkey = new anchor.web3.PublicKey(
+      itemsCollection.publicKey.toString()
+    );
+
+    await program.methods
+      .initializeMarketplace(skinsCollectionPubkey, itemsCollectionPubkey)
+      .accounts({
+        marketplaceConfig: marketplaceConfigPda,
+        authority: keypair.publicKey,
+        gauntletPool: gauntletPoolVault,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .rpc();
+
+    console.log("  Marketplace initialized!");
+    console.log("  Config PDA:", marketplaceConfigPda.toBase58());
+  } catch (e: any) {
+    if (e.message?.includes("already in use")) {
+      console.log("  Marketplace already initialized (config account exists).");
+    } else {
+      console.error("  Failed to initialize marketplace:", e.message || e);
+      process.exit(1);
+    }
   }
 
   // ── Summary ────────────────────────────────────────────────────────
   console.log("\n=== Summary ===");
   console.log("Skins Collection:", skinsCollection.publicKey.toString());
-  console.log("Items Collection:", itemsCollection.publicKey.toString());
-  console.log(
-    "\nAdd these to nft-marketplace/src/constants.rs and call initialize_marketplace."
-  );
-  console.log(
-    "Then run initialize_marketplace with these collection addresses."
-  );
+  console.log("NFT Items Collection:", itemsCollection.publicKey.toString());
+  console.log("Marketplace Config:", marketplaceConfigPda.toBase58());
+  console.log("\nYou can now mint skins and NFT items using: anchor run mint-nft");
 }
 
 main()

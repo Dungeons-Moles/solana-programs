@@ -49,4 +49,7 @@ pub enum MarketplaceError {
 
     #[msg("Fee basis points exceed maximum")]
     FeeTooHigh,
+
+    #[msg("Cannot list a skin that is currently equipped")]
+    SkinCurrentlyEquipped,
 }

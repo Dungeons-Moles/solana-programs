@@ -1,4 +1,4 @@
-//! Special item definitions for NFT-backed items.
+//! NFT item definitions for NFT-backed items.
 //!
 //! These items exist outside the base 80-item system and are backed by
 //! Metaplex Core NFTs. They use IDs starting with "S-XX-" to avoid
@@ -7,7 +7,7 @@
 use crate::items::ItemDefinition;
 use crate::state::{EffectDefinition, EffectType, ItemTag, ItemType, Rarity, TriggerType};
 
-pub const SPECIAL_ITEMS: &[ItemDefinition] = &[
+pub const NFT_ITEMS: &[ItemDefinition] = &[
     // S-XX-01: Infernal Pickaxe — Blast/Gear, Heroic
     // On TurnStart: deal 2/3/4 non-weapon damage
     ItemDefinition {
@@ -124,9 +124,9 @@ pub const SPECIAL_ITEMS: &[ItemDefinition] = &[
     },
 ];
 
-/// Look up a special item by its ID.
-pub fn get_special_item(item_id: &[u8; 8]) -> Option<&'static ItemDefinition> {
-    SPECIAL_ITEMS.iter().find(|item| item.id == item_id)
+/// Look up an NFT item by its ID.
+pub fn get_nft_item(item_id: &[u8; 8]) -> Option<&'static ItemDefinition> {
+    NFT_ITEMS.iter().find(|item| item.id == item_id)
 }
 
 #[cfg(test)]
@@ -134,13 +134,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_special_item_count() {
-        assert_eq!(SPECIAL_ITEMS.len(), 6, "Should have exactly 6 special items");
+    fn test_nft_item_count() {
+        assert_eq!(NFT_ITEMS.len(), 6, "Should have exactly 6 NFT items");
     }
 
     #[test]
-    fn test_get_special_item_by_id() {
-        let item = get_special_item(b"S-XX-01\0");
+    fn test_get_nft_item_by_id() {
+        let item = get_nft_item(b"S-XX-01\0");
         assert!(item.is_some());
         let item = item.unwrap();
         assert_eq!(item.name, "Infernal Pickaxe");
@@ -150,30 +150,30 @@ mod tests {
     }
 
     #[test]
-    fn test_get_special_item_invalid() {
-        let item = get_special_item(b"S-XX-99\0");
+    fn test_get_nft_item_invalid() {
+        let item = get_nft_item(b"S-XX-99\0");
         assert!(item.is_none());
     }
 
     #[test]
-    fn test_special_items_no_collision_with_base() {
+    fn test_nft_items_no_collision_with_base() {
         use crate::items::get_item;
-        for special in SPECIAL_ITEMS {
+        for nft_item in NFT_ITEMS {
             assert!(
-                get_item(special.id).is_none(),
-                "Special item {} should not exist in base item registry",
-                special.name
+                get_item(nft_item.id).is_none(),
+                "NFT item {} should not exist in base item registry",
+                nft_item.name
             );
         }
     }
 
     #[test]
-    fn test_all_special_items_are_gear() {
-        for item in SPECIAL_ITEMS {
+    fn test_all_nft_items_are_gear() {
+        for item in NFT_ITEMS {
             assert_eq!(
                 item.item_type,
                 ItemType::Gear,
-                "Special item {} should be Gear type",
+                "NFT item {} should be Gear type",
                 item.name
             );
         }

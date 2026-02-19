@@ -1,9 +1,10 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 use mpl_core::instructions::{
-    AddPluginV1CpiBuilder, CreateV1CpiBuilder, RemovePluginV1CpiBuilder, TransferV1CpiBuilder,
+    AddPluginV1CpiBuilder, ApprovePluginAuthorityV1CpiBuilder, CreateV1CpiBuilder,
+    RemovePluginV1CpiBuilder, TransferV1CpiBuilder,
 };
-use mpl_core::types::{Plugin, PluginType, TransferDelegate};
+use mpl_core::types::{Plugin, PluginAuthority, PluginType, TransferDelegate};
 
 pub mod constants;
 pub mod errors;
@@ -56,6 +57,7 @@ pub mod nft_marketplace {
             .payer(&ctx.accounts.payer)
             .owner(Some(&ctx.accounts.owner))
             .authority(Some(&ctx.accounts.mint_authority))
+            .system_program(&ctx.accounts.system_program.to_account_info())
             .name(name)
             .uri(uri)
             .invoke_signed(&[signer_seeds])?;
@@ -63,12 +65,12 @@ pub mod nft_marketplace {
         Ok(())
     }
 
-    /// Mint a special item NFT via CPI to Metaplex Core.
-    pub fn mint_special_item(
-        ctx: Context<MintSpecialItem>,
+    /// Mint an NFT item via CPI to Metaplex Core.
+    pub fn mint_nft_item(
+        ctx: Context<MintNftItem>,
         name: String,
         uri: String,
-        _special_item_id: [u8; 8],
+        _nft_item_id: [u8; 8],
     ) -> Result<()> {
         let bump = ctx.bumps.mint_authority;
         let signer_seeds: &[&[u8]] = &[b"mint_authority", &[bump]];
@@ -79,6 +81,7 @@ pub mod nft_marketplace {
             .payer(&ctx.accounts.payer)
             .owner(Some(&ctx.accounts.owner))
             .authority(Some(&ctx.accounts.mint_authority))
+            .system_program(&ctx.accounts.system_program.to_account_info())
             .name(name)
             .uri(uri)
             .invoke_signed(&[signer_seeds])?;
@@ -113,6 +116,33 @@ pub mod nft_marketplace {
             MarketplaceError::InvalidCollection
         );
 
+        // Block listing skins that are currently equipped on the player profile.
+        // PlayerProfile layout (Borsh): 8 (disc) + 32 (owner) + 4+N (name String) +
+        // 4 (total_runs) + 1 (highest_level) + 4 (available_runs) + 8 (created_at) +
+        // 1 (bump) + 10 (unlocked_items) + 10 (active_item_pool) + 1+32 (equipped_skin)
+        if collection_key == config.skins_collection {
+            let profile_data = ctx.accounts.player_profile.try_borrow_data()?;
+            if profile_data.len() > 44 {
+                let name_len =
+                    u32::from_le_bytes(profile_data[40..44].try_into().unwrap()) as usize;
+                let equipped_offset = 44 + name_len + 4 + 1 + 4 + 8 + 1 + 10 + 10;
+                if profile_data.len() > equipped_offset + 33
+                    && profile_data[equipped_offset] == 1
+                {
+                    let mut skin_bytes = [0u8; 32];
+                    skin_bytes.copy_from_slice(
+                        &profile_data[equipped_offset + 1..equipped_offset + 33],
+                    );
+                    let equipped_pubkey = Pubkey::new_from_array(skin_bytes);
+                    require!(
+                        equipped_pubkey != ctx.accounts.asset.key(),
+                        MarketplaceError::SkinCurrentlyEquipped
+                    );
+                }
+            }
+            drop(profile_data);
+        }
+
         let clock = Clock::get()?;
 
         // Set up listing.
@@ -130,7 +160,21 @@ pub mod nft_marketplace {
             .collection(Some(&ctx.accounts.collection))
             .payer(&ctx.accounts.seller)
             .authority(Some(&ctx.accounts.seller))
+            .system_program(&ctx.accounts.system_program.to_account_info())
             .plugin(Plugin::TransferDelegate(TransferDelegate {}))
+            .invoke()?;
+
+        // Approve the mint_authority PDA as the delegate so it can transfer during buy_nft.
+        ApprovePluginAuthorityV1CpiBuilder::new(&ctx.accounts.mpl_core_program)
+            .asset(&ctx.accounts.asset)
+            .collection(Some(&ctx.accounts.collection))
+            .payer(&ctx.accounts.seller)
+            .authority(Some(&ctx.accounts.seller))
+            .system_program(&ctx.accounts.system_program.to_account_info())
+            .plugin_type(PluginType::TransferDelegate)
+            .new_authority(PluginAuthority::Address {
+                address: ctx.accounts.mint_authority.key(),
+            })
             .invoke()?;
 
         Ok(())
@@ -144,6 +188,7 @@ pub mod nft_marketplace {
             .collection(Some(&ctx.accounts.collection))
             .payer(&ctx.accounts.seller)
             .authority(Some(&ctx.accounts.seller))
+            .system_program(&ctx.accounts.system_program.to_account_info())
             .plugin_type(PluginType::TransferDelegate)
             .invoke()?;
 
@@ -223,13 +268,27 @@ pub mod nft_marketplace {
             )?;
         }
 
-        // Transfer NFT from seller to buyer via delegate authority.
+        // Transfer NFT from seller to buyer via mint_authority PDA (collection update authority).
+        let bump = ctx.bumps.mint_authority;
+        let signer_seeds: &[&[u8]] = &[b"mint_authority", &[bump]];
+
         TransferV1CpiBuilder::new(&ctx.accounts.mpl_core_program)
             .asset(&ctx.accounts.asset)
             .collection(Some(&ctx.accounts.collection))
             .payer(&ctx.accounts.buyer)
-            .authority(Some(&ctx.accounts.seller))
+            .authority(Some(&ctx.accounts.mint_authority))
             .new_owner(&ctx.accounts.buyer.to_account_info())
+            .invoke_signed(&[signer_seeds])?;
+
+        // Clean up TransferDelegate plugin so the buyer can re-list later.
+        // After transfer, buyer is the new owner and can remove plugins.
+        RemovePluginV1CpiBuilder::new(&ctx.accounts.mpl_core_program)
+            .asset(&ctx.accounts.asset)
+            .collection(Some(&ctx.accounts.collection))
+            .payer(&ctx.accounts.buyer)
+            .authority(Some(&ctx.accounts.buyer))
+            .system_program(&ctx.accounts.system_program.to_account_info())
+            .plugin_type(PluginType::TransferDelegate)
             .invoke()?;
 
         // Listing account closed via `close = seller` constraint in BuyNft.
@@ -303,7 +362,7 @@ pub mod nft_marketplace {
     }
 
     /// Player claims a completed quest reward.
-    /// For hackathon: minting happens via separate mint_skin/mint_special_item calls.
+    /// For hackathon: minting happens via separate mint_skin/mint_nft_item calls.
     /// This instruction just marks the quest as claimed.
     pub fn claim_quest_reward(ctx: Context<ClaimQuestReward>, _quest_id: u16) -> Result<()> {
         let progress = &mut ctx.accounts.quest_progress;
@@ -384,7 +443,7 @@ pub struct MintSkin<'info> {
 }
 
 #[derive(Accounts)]
-pub struct MintSpecialItem<'info> {
+pub struct MintNftItem<'info> {
     /// CHECK: New asset account, will be initialized by Metaplex Core.
     #[account(mut)]
     pub asset: Signer<'info>,
@@ -459,6 +518,14 @@ pub struct ListNft<'info> {
 
     #[account(mut)]
     pub seller: Signer<'info>,
+
+    /// CHECK: Player profile PDA. Read to check equipped_skin.
+    #[account(
+        seeds = [PLAYER_PROFILE_SEED, seller.key().as_ref()],
+        bump,
+        seeds::program = PLAYER_PROFILE_PROGRAM_ID,
+    )]
+    pub player_profile: AccountInfo<'info>,
 
     /// CHECK: Metaplex Core program.
     #[account(address = MPL_CORE_PROGRAM_ID)]

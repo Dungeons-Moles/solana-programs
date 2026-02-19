@@ -79,7 +79,7 @@ pub enum ObjectiveType {
 pub enum RewardType {
     GauntletBooster,
     Skin,
-    SpecialItem,
+    NftItem,
 }
 
 /// Quest template

@@ -19,3 +19,9 @@ pub const BPS_DENOMINATOR: u64 = 10_000;
 
 /// Royalty bps for collection creation: 500 bps = 5%
 pub const ROYALTY_BPS: u16 = 500;
+
+/// Player Profile program ID (29DPbP1zuCCRg63PiShMjxAmZos97BR5TmhpijUYQzze)
+pub const PLAYER_PROFILE_PROGRAM_ID: Pubkey = pubkey!("29DPbP1zuCCRg63PiShMjxAmZos97BR5TmhpijUYQzze");
+
+/// PDA seed for player profile: ["player", owner]
+pub const PLAYER_PROFILE_SEED: &[u8] = b"player";

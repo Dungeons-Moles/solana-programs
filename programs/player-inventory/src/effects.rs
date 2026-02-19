@@ -4,7 +4,7 @@
 
 use crate::items::get_item;
 use crate::itemsets::get_active_itemsets;
-use crate::special_items::get_special_item;
+use crate::nft_items::get_nft_item;
 use crate::state::{
     stat_bonus, EffectType, ItemEffect, ItemInstance, PlayerInventory, Tier, ToolOilModification,
 };
@@ -20,8 +20,8 @@ pub fn generate_item_effects(item: &ItemInstance) -> Vec<ItemEffect> {
             .collect();
     }
 
-    // Try special item registry
-    if let Some(definition) = get_special_item(&item.item_id) {
+    // Try NFT item registry
+    if let Some(definition) = get_nft_item(&item.item_id) {
         return definition
             .effects
             .iter()

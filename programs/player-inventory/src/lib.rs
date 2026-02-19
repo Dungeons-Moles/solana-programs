@@ -20,7 +20,7 @@ pub mod fusion;
 pub mod items;
 pub mod itemsets;
 pub mod offers;
-pub mod special_items;
+pub mod nft_items;
 pub mod state;
 
 use combat_system::{EffectType, TriggerType};
@@ -540,17 +540,17 @@ pub mod player_inventory {
         Ok(())
     }
 
-    /// Equips a special NFT-backed gear item into the player's inventory.
-    /// Validates the NFT is owned by the player and the special_item_id exists in the catalog.
+    /// Equips an NFT-backed gear item into the player's inventory.
+    /// Validates the NFT is owned by the player and the nft_item_id exists in the catalog.
     pub fn equip_special_gear_authorized(
         ctx: Context<EquipSpecialGearAuthorized>,
-        special_item_id: [u8; 8],
+        nft_item_id: [u8; 8],
     ) -> Result<()> {
-        use crate::special_items::get_special_item;
+        use crate::nft_items::get_nft_item;
 
-        // Validate the special item exists in catalog
+        // Validate the NFT item exists in catalog
         let _item_def =
-            get_special_item(&special_item_id).ok_or(InventoryError::InvalidItemId)?;
+            get_nft_item(&nft_item_id).ok_or(InventoryError::InvalidItemId)?;
 
         // Validate the NFT is owned by the player (read raw bytes from Metaplex Core asset)
         let skin_data = ctx.accounts.special_asset.try_borrow_data()?;
@@ -573,12 +573,12 @@ pub mod player_inventory {
             .find_empty_gear_slot()
             .ok_or(InventoryError::InventoryFull)?;
 
-        // Create ItemInstance for the special item
-        inventory.gear[slot_index] = Some(ItemInstance::new(special_item_id, Tier::I));
+        // Create ItemInstance for the NFT item
+        inventory.gear[slot_index] = Some(ItemInstance::new(nft_item_id, Tier::I));
 
         emit!(ItemEquipped {
             player: inventory.player,
-            item_id: special_item_id,
+            item_id: nft_item_id,
             tier: Tier::I,
             slot: format!("gear[{}]", slot_index),
         });

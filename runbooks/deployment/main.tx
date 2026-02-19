@@ -48,3 +48,10 @@ action "deploy_poi_system" "svm::deploy_program" {
     authority = signer.authority
     payer = signer.payer
 }
+
+action "deploy_nft_marketplace" "svm::deploy_program" {
+    description = "Deploy nft_marketplace program"
+    program = svm::get_program_from_anchor_project("nft_marketplace")
+    authority = signer.authority
+    payer = signer.payer
+}

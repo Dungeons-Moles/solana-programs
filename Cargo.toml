@@ -8,9 +8,14 @@ members = [
     "programs/player-inventory",
     "crates/field-enemies",
     "crates/boss-system",
-    "programs/poi-system"
+    "programs/poi-system",
+    "programs/nft-marketplace"
 ]
 resolver = "2"
+
+[workspace.dependencies]
+rmp = "=0.8.14"
+rmp-serde = "=1.3.0"
 
 [profile.release]
 overflow-checks = true

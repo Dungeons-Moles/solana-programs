@@ -81,6 +81,8 @@ pub mod player_profile {
         // Initialize with starter items (bits 0-39 set)
         profile.unlocked_items = STARTER_ITEMS_BITMASK;
         profile.active_item_pool = STARTER_ITEMS_BITMASK;
+        profile.equipped_skin = None;
+        profile.gauntlet_boosters = 0;
 
         emit!(ProfileCreated {
             owner: profile.owner,
@@ -339,6 +341,47 @@ pub mod player_profile {
 
         Ok(())
     }
+
+    /// Equips a Metaplex Core skin NFT on the player's profile.
+    /// Validates that the NFT is owned by the player and is a valid Metaplex Core asset.
+    pub fn equip_skin(ctx: Context<EquipSkin>) -> Result<()> {
+        let skin_asset = &ctx.accounts.skin_asset;
+
+        // Validate the account is owned by Metaplex Core program
+        require!(
+            *skin_asset.owner == MPL_CORE_PROGRAM_ID,
+            PlayerProfileError::InvalidSkinAsset
+        );
+
+        // Read raw bytes to validate ownership
+        let data = skin_asset.try_borrow_data()?;
+        require!(data.len() >= 33, PlayerProfileError::InvalidSkinAsset);
+
+        // Byte 0: Key discriminator (1 = AssetV1)
+        require!(data[0] == 1, PlayerProfileError::InvalidSkinAsset);
+
+        // Bytes 1..33: Owner pubkey
+        let mut owner_bytes = [0u8; 32];
+        owner_bytes.copy_from_slice(&data[1..33]);
+        let asset_owner = Pubkey::new_from_array(owner_bytes);
+        require!(
+            asset_owner == ctx.accounts.owner.key(),
+            PlayerProfileError::SkinNotOwned
+        );
+        drop(data);
+
+        let profile = &mut ctx.accounts.player_profile;
+        profile.equipped_skin = Some(skin_asset.key());
+
+        Ok(())
+    }
+
+    /// Unequips the currently equipped skin NFT.
+    pub fn unequip_skin(ctx: Context<UnequipSkin>) -> Result<()> {
+        let profile = &mut ctx.accounts.player_profile;
+        profile.equipped_skin = None;
+        Ok(())
+    }
 }
 
 // ============================================================================
@@ -461,6 +504,38 @@ pub struct PurchaseRuns<'info> {
 
 #[derive(Accounts)]
 pub struct ConsumeRun<'info> {
+    #[account(
+        mut,
+        seeds = [PlayerProfile::SEED_PREFIX, owner.key().as_ref()],
+        bump = player_profile.bump,
+        has_one = owner @ PlayerProfileError::Unauthorized
+    )]
+    pub player_profile: Account<'info, PlayerProfile>,
+
+    pub owner: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct EquipSkin<'info> {
+    #[account(
+        mut,
+        seeds = [PlayerProfile::SEED_PREFIX, owner.key().as_ref()],
+        bump = player_profile.bump,
+        has_one = owner @ PlayerProfileError::Unauthorized
+    )]
+    pub player_profile: Account<'info, PlayerProfile>,
+
+    pub owner: Signer<'info>,
+
+    /// CHECK: Metaplex Core asset account. Validated in equip_skin handler:
+    /// 1. Account owner == Metaplex Core program ID
+    /// 2. Asset discriminator == 1 (AssetV1)
+    /// 3. Asset owner field == player wallet
+    pub skin_asset: AccountInfo<'info>,
+}
+
+#[derive(Accounts)]
+pub struct UnequipSkin<'info> {
     #[account(
         mut,
         seeds = [PlayerProfile::SEED_PREFIX, owner.key().as_ref()],

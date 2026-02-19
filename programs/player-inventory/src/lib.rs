@@ -20,10 +20,11 @@ pub mod fusion;
 pub mod items;
 pub mod itemsets;
 pub mod offers;
+pub mod nft_items;
 pub mod state;
 
 use combat_system::{EffectType, TriggerType};
-use constants::MAX_GEAR_SLOTS;
+use constants::{MAX_GEAR_SLOTS, MPL_CORE_PROGRAM_ID};
 use effects::generate_combat_effects;
 use errors::InventoryError;
 use fusion::{execute_fusion, validate_fusion};
@@ -538,6 +539,58 @@ pub mod player_inventory {
 
         Ok(())
     }
+
+    /// Equips an NFT-backed gear item into the player's inventory.
+    /// Validates the NFT is owned by the player and the nft_item_id exists in the catalog.
+    pub fn equip_special_gear_authorized(
+        ctx: Context<EquipSpecialGearAuthorized>,
+        nft_item_id: [u8; 8],
+    ) -> Result<()> {
+        use crate::nft_items::get_nft_item;
+
+        // Validate the NFT item exists in catalog
+        let _item_def =
+            get_nft_item(&nft_item_id).ok_or(InventoryError::InvalidItemId)?;
+
+        // Validate the account is owned by Metaplex Core program
+        require!(
+            *ctx.accounts.special_asset.owner == MPL_CORE_PROGRAM_ID,
+            InventoryError::Unauthorized
+        );
+
+        // Validate the NFT is owned by the player (read raw bytes from Metaplex Core asset)
+        let skin_data = ctx.accounts.special_asset.try_borrow_data()?;
+        require!(skin_data.len() >= 33, InventoryError::Unauthorized);
+        require!(skin_data[0] == 1, InventoryError::Unauthorized); // AssetV1 discriminator
+
+        let mut owner_bytes = [0u8; 32];
+        owner_bytes.copy_from_slice(&skin_data[1..33]);
+        let asset_owner = Pubkey::new_from_array(owner_bytes);
+        require!(
+            asset_owner == ctx.accounts.inventory.player,
+            InventoryError::Unauthorized
+        );
+        drop(skin_data);
+
+        let inventory = &mut ctx.accounts.inventory;
+
+        // Find empty gear slot
+        let slot_index = inventory
+            .find_empty_gear_slot()
+            .ok_or(InventoryError::InventoryFull)?;
+
+        // Create ItemInstance for the NFT item
+        inventory.gear[slot_index] = Some(ItemInstance::new(nft_item_id, Tier::I));
+
+        emit!(ItemEquipped {
+            player: inventory.player,
+            item_id: nft_item_id,
+            tier: Tier::I,
+            slot: format!("gear[{}]", slot_index),
+        });
+
+        Ok(())
+    }
 }
 
 // =============================================================================
@@ -952,6 +1005,30 @@ pub struct EquipToolAuthorized<'info> {
     /// CHECK: Validated by program ID constant
     #[account(address = GAMEPLAY_STATE_PROGRAM_ID)]
     pub gameplay_state_program: AccountInfo<'info>,
+}
+
+/// Context for equipping special NFT gear via authorized CPI from poi-system.
+#[derive(Accounts)]
+pub struct EquipSpecialGearAuthorized<'info> {
+    #[account(
+        mut,
+        seeds = [b"inventory", inventory.session.as_ref()],
+        bump = inventory.bump,
+    )]
+    pub inventory: Account<'info, PlayerInventory>,
+
+    /// POI authority PDA from poi-system that must sign
+    #[account(
+        seeds = [b"poi_authority"],
+        bump,
+        seeds::program = POI_SYSTEM_PROGRAM_ID,
+    )]
+    pub poi_authority: Signer<'info>,
+
+    /// CHECK: Metaplex Core asset account. Validated in handler:
+    /// 1. AssetV1 discriminator check
+    /// 2. Owner field matches inventory player
+    pub special_asset: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]

@@ -75,3 +75,6 @@ pub const GAUNTLET_POOL_VAULT_SEED: &[u8] = b"gauntlet_pool_vault";
 
 /// Seed used by gameplay-state for the global pit draft queue PDA.
 pub const PIT_DRAFT_QUEUE_SEED: &[u8] = b"pit_draft_queue";
+
+/// Metaplex Core program ID for NFT skin asset validation (CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d)
+pub const MPL_CORE_PROGRAM_ID: anchor_lang::prelude::Pubkey = anchor_lang::pubkey!("CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d");

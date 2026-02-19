@@ -1493,34 +1493,6 @@ fn validate_secondary_runtime_accounts(
     Ok(())
 }
 
-fn require_session_delegation_preconditions(
-    game_session_info: &AccountInfo<'_>,
-    player: &Pubkey,
-    campaign_level: u8,
-) -> Result<()> {
-    require_keys_eq!(
-        *game_session_info.owner,
-        crate::ID,
-        SessionManagerError::Unauthorized
-    );
-
-    let data = game_session_info.try_borrow_data()?;
-    let mut data_slice: &[u8] = &data;
-    let session = GameSession::try_deserialize(&mut data_slice)?;
-
-    require_keys_eq!(session.player, *player, SessionManagerError::Unauthorized);
-    require!(
-        session.campaign_level == campaign_level,
-        SessionManagerError::InvalidCampaignLevel
-    );
-    require!(
-        !session.is_delegated,
-        SessionManagerError::SessionAlreadyDelegated
-    );
-
-    Ok(())
-}
-
 fn derive_campaign_session_pda(player: &Pubkey, campaign_level: u8) -> Pubkey {
     let campaign_seed = [campaign_level];
     let seeds: &[&[u8]] = &[GameSession::SEED_PREFIX, player.as_ref(), &campaign_seed];
@@ -1530,7 +1502,7 @@ fn derive_campaign_session_pda(player: &Pubkey, campaign_level: u8) -> Pubkey {
 fn load_game_session_unchecked(game_session_info: &AccountInfo<'_>) -> Result<GameSession> {
     let data = game_session_info.try_borrow_data()?;
     let mut data_slice: &[u8] = &data;
-    Ok(GameSession::try_deserialize(&mut data_slice)?)
+    GameSession::try_deserialize(&mut data_slice)
 }
 
 fn store_game_session_unchecked(
@@ -1917,6 +1889,7 @@ fn discover_visible_waypoints_cpi<'info>(
 pub const RECORD_RUN_RESULT_CPI_DISCRIMINATOR: [u8; 8] =
     [0x09, 0xaf, 0xf6, 0x09, 0x1f, 0x62, 0x79, 0x45];
 
+#[allow(clippy::too_many_arguments)]
 fn record_run_result_cpi<'info>(
     program: &AccountInfo<'info>,
     player_profile: &AccountInfo<'info>,

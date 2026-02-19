@@ -35,6 +35,12 @@ pub struct PlayerProfile {
     /// Bitmask of items in the active pool for new sessions
     /// Must be a subset of `unlocked_items` and have >= 40 items
     pub active_item_pool: [u8; ITEM_BITMASK_SIZE],
+
+    /// Currently equipped Metaplex Core skin NFT (if any)
+    pub equipped_skin: Option<Pubkey>,
+
+    /// Free gauntlet entries from quest rewards
+    pub gauntlet_boosters: u8,
 }
 
 impl PlayerProfile {
@@ -44,6 +50,7 @@ impl PlayerProfile {
     /// Account space calculation
     /// 8 (discriminator) + 32 (owner) + 4 + 32 (name max) + 4 (total_runs) +
     /// 1 (highest_level_unlocked) + 4 (available_runs) + 8 (created_at) +
-    /// 1 (bump) + 10 (unlocked_items) + 10 (active_item_pool)
-    pub const INIT_SPACE: usize = 32 + 4 + 32 + 4 + 1 + 4 + 8 + 1 + 10 + 10;
+    /// 1 (bump) + 10 (unlocked_items) + 10 (active_item_pool) +
+    /// 1 + 32 (equipped_skin Option<Pubkey>) + 1 (gauntlet_boosters)
+    pub const INIT_SPACE: usize = 32 + 4 + 32 + 4 + 1 + 4 + 8 + 1 + 10 + 10 + 1 + 32 + 1;
 }

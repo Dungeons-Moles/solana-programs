@@ -36,6 +36,11 @@ Thumbs.db
 coverage/
 .nyc_output/
 
+# Local validator data
+.mb-ledger/
+magicblock-test-storage/
+test-ledger/
+
 # Keypairs (never commit!)
 *.json
 !package.json

@@ -1687,14 +1687,19 @@ pub mod gameplay_state {
 
         // Night phase: enemies within 3 tiles (Chebyshev distance) move toward player.
         // Skip enemy movement if player is directly engaging an enemy on target tile.
+        // Detection uses old position (where enemies "notice" the player), but enemies
+        // chase toward the NEW position (target), so moving away means the enemy follows
+        // but doesn't catch up in the same turn.
         if should_process_night_enemy_movement(&game_state.phase, target_enemy_exists_before_move) {
-            let player_x = game_state.position_x;
-            let player_y = game_state.position_y;
+            let detect_x = game_state.position_x;
+            let detect_y = game_state.position_y;
+            let chase_x = target_x;
+            let chase_y = target_y;
             let mut enemy_idx = 0usize;
 
             while enemy_idx < map_enemies.enemies.len() {
                 let enemy = map_enemies.enemies[enemy_idx];
-                let distance = chebyshev_distance(enemy.x, enemy.y, player_x, player_y);
+                let distance = chebyshev_distance(enemy.x, enemy.y, detect_x, detect_y);
                 if distance > 0 && distance <= 3 {
                     let old_x = enemy.x;
                     let old_y = enemy.y;
@@ -1702,8 +1707,8 @@ pub mod gameplay_state {
                     if let Some((new_x, new_y)) = select_enemy_step(
                         enemy.x,
                         enemy.y,
-                        player_x,
-                        player_y,
+                        chase_x,
+                        chase_y,
                         generated_map,
                         &occupied,
                         map_width,
@@ -1714,7 +1719,7 @@ pub mod gameplay_state {
                             occupied[old_index] = false;
                         }
 
-                        if new_x == player_x && new_y == player_y {
+                        if new_x == chase_x && new_y == chase_y {
                             player_tile_blocked = true;
                         } else {
                             let new_index = (new_y as usize) * map_width + (new_x as usize);
@@ -1735,7 +1740,7 @@ pub mod gameplay_state {
                             to_y: new_y,
                         });
 
-                        if new_x == player_x && new_y == player_y {
+                        if new_x == chase_x && new_y == chase_y {
                             combat_triggered = true;
                             let player_won = resolve_enemy_combat(
                                 game_state,

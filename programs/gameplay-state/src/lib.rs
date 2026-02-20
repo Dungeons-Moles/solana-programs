@@ -763,7 +763,7 @@ pub mod gameplay_state {
     }
 
     /// Pays duel entry and registers this run in async duel matchmaking.
-    pub fn enter_duel(ctx: Context<EnterDuel>, seed: u64) -> Result<()> {
+    pub fn enter_duel(ctx: Context<EnterDuel>) -> Result<()> {
         require_expected_address(
             ctx.accounts.company_treasury.key(),
             COMPANY_TREASURY_ADDRESS,
@@ -777,11 +777,8 @@ pub mod gameplay_state {
             ctx.accounts.game_state.run_mode == RunMode::Duel,
             GameplayStateError::DuelInvalidRunMode
         );
-        require!(
-            ctx.accounts.generated_map.seed == seed,
-            GameplayStateError::DuelSeedMismatch
-        );
 
+        let seed = ctx.accounts.generated_map.seed;
         let player_key = ctx.accounts.player.key();
         let duel_entry = &mut ctx.accounts.duel_entry;
         require!(
@@ -838,17 +835,14 @@ pub mod gameplay_state {
     }
 
     /// Finalizes this player's duel run and resolves duel outcomes when possible.
-    pub fn finalize_duel_run(ctx: Context<FinalizeDuelRun>, seed: u64) -> Result<()> {
+    pub fn finalize_duel_run(ctx: Context<FinalizeDuelRun>) -> Result<()> {
         require_expected_address(
             ctx.accounts.company_treasury.key(),
             COMPANY_TREASURY_ADDRESS,
             GameplayStateError::InvalidDuelFeeAccount,
         )?;
-        require!(
-            ctx.accounts.generated_map.seed == seed,
-            GameplayStateError::DuelSeedMismatch
-        );
 
+        let seed = ctx.accounts.generated_map.seed;
         let game_state = &ctx.accounts.game_state;
         require!(
             game_state.run_mode == RunMode::Duel,
@@ -1061,6 +1055,40 @@ pub mod gameplay_state {
         });
 
         duel_entry.settled = true;
+        Ok(())
+    }
+
+    /// Resets the duel entry for the current session.
+    /// If the run was not finalized (abandoned), refunds the player's stake from the vault
+    /// and re-queues any matched creator back into the open queue.
+    /// Called before end_session/abandon_session so the player can start a new duel.
+    pub fn reset_duel_entry(ctx: Context<ResetDuelEntry>) -> Result<()> {
+        let duel_entry = &mut ctx.accounts.duel_entry;
+
+        if duel_entry.entry_lamports == 0 {
+            return Ok(());
+        }
+
+        if !duel_entry.finalized {
+            transfer_lamports_from_vault(
+                &ctx.accounts.duel_vault.to_account_info(),
+                &ctx.accounts.player.to_account_info(),
+                duel_entry.entry_lamports,
+            )?;
+
+            if let Some(creator) = duel_entry.matched_creator.take() {
+                let open_queue = &mut ctx.accounts.duel_open_queue;
+                if open_queue.entries.len() < constants::DUEL_OPEN_QUEUE_CAPACITY {
+                    open_queue.entries.push(creator);
+                }
+            }
+        }
+
+        duel_entry.entry_lamports = 0;
+        duel_entry.finalized = false;
+        duel_entry.settled = false;
+        duel_entry.outcome = DuelRunOutcome::Pending;
+
         Ok(())
     }
 
@@ -3375,7 +3403,6 @@ pub struct ClaimGauntletRewards<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(seed: u64)]
 pub struct EnterDuel<'info> {
     #[account(
         init_if_needed,
@@ -3430,7 +3457,6 @@ pub struct EnterDuel<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(seed: u64)]
 pub struct FinalizeDuelRun<'info> {
     #[account(
         mut,
@@ -3490,6 +3516,42 @@ pub struct FinalizeDuelRun<'info> {
         bump = gauntlet_pool_vault.bump
     )]
     pub gauntlet_pool_vault: Account<'info, GauntletPoolVault>,
+}
+
+#[derive(Accounts)]
+pub struct ResetDuelEntry<'info> {
+    #[account(
+        mut,
+        seeds = [DUEL_ENTRY_SEED, game_state.session.as_ref()],
+        bump = duel_entry.bump,
+        constraint = duel_entry.player == player.key() @ GameplayStateError::Unauthorized,
+    )]
+    pub duel_entry: Box<Account<'info, DuelEntry>>,
+
+    #[account(
+        mut,
+        seeds = [DUEL_VAULT_SEED],
+        bump = duel_vault.bump,
+    )]
+    pub duel_vault: Account<'info, DuelVault>,
+
+    #[account(
+        mut,
+        seeds = [DUEL_OPEN_QUEUE_SEED],
+        bump = duel_open_queue.bump,
+    )]
+    pub duel_open_queue: Box<Account<'info, DuelOpenQueue>>,
+
+    #[account(
+        has_one = session_signer @ GameplayStateError::Unauthorized,
+    )]
+    pub game_state: Account<'info, GameState>,
+
+    /// CHECK: Player wallet receives refund. Validated by duel_entry.player constraint.
+    #[account(mut)]
+    pub player: AccountInfo<'info>,
+
+    pub session_signer: Signer<'info>,
 }
 
 #[derive(Accounts)]

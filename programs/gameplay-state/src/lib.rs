@@ -129,7 +129,11 @@ pub mod gameplay_state {
         game_state.moves_remaining = DAY_MOVES;
         game_state.total_moves = 0;
         game_state.boss_fight_ready = false;
-        game_state.gold = 0;
+        game_state.gold = match campaign_level {
+            1..=9 => 10,
+            10..=19 => 5,
+            _ => 0,
+        };
         game_state.bump = ctx.bumps.game_state;
         game_state.campaign_level = campaign_level;
         game_state.run_mode = RunMode::Campaign;

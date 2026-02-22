@@ -12,6 +12,7 @@ Monorepo for the on-chain gameplay stack used by Dungeons & Moles.
 - `gameplay-state`: campaign state, movement/combat resolution, and PvP mode settlement (gauntlet/duel/pit-draft)
 - `player-inventory`: inventory, item effects, offers, and fusion logic
 - `poi-system`: point-of-interest spawn and interaction flow
+- `nft-marketplace`: Metaplex Core NFT minting (skins & items), listing, buying, and quest system
 
 ### Shared gameplay crates (`crates/`)
 
@@ -29,6 +30,7 @@ crates/
 programs/
   gameplay-state/
   map-generator/
+  nft-marketplace/
   player-inventory/
   player-profile/
   poi-system/
@@ -39,7 +41,7 @@ tests/
 ## Tooling
 
 - Rust `1.75+` (edition `2021`, Solana BPF target)
-- Anchor `0.32.0`
+- Anchor `0.32.1`
 - Solana CLI `2.3+`
 - Node.js `>=18` (TypeScript tests)
 
@@ -52,26 +54,48 @@ cargo test
 cargo clippy
 ```
 
-## Test Suite
+## Local Testing
 
-TypeScript integration tests live in `tests/`:
+There are two local validator setups depending on what you need to test. You cannot run both simultaneously yet.
 
-- `tests/session-manager/session-manager.ts`
-- `tests/map-generator/map-generator.ts`
-- `tests/gameplay-state/gameplay-state.ts`
-- `tests/player-inventory/inventory_management.ts`
-- `tests/player-profile/player-profile.ts`
-- `tests/poi-system/poi-system.ts`
+### Option A: MagicBlock Ephemeral Rollups (gameplay + session lifecycle)
 
-## Implemented Economy Constants
+1. Start the MagicBlock local validator:
 
-- Profile starts with `20` campaign runs.
-- Run top-up is `20` runs for `0.005 SOL`, split `50% treasury / 50% gauntlet pool`.
-- Gauntlet entry is `0.01 SOL` (`3% company / 97% gauntlet pool`).
-- Duel entry is currently fixed at `0.1 SOL` (`3% company / 2% gauntlet pool / 95% winner`).
-- Pit Draft entry is currently fixed at `0.1 SOL` (`3% company / 2% gauntlet pool / 95% winner`).
+```bash
+mb-test-validator --reset --ledger .mb-ledger --rpc-port 8899 --faucet-port 9901
+```
 
-## Operational Notes
+2. Start the ephemeral validator:
 
-- MagicBlock integration is currently stubbed while SDK/toolchain compatibility is finalized.
-- Some gameplay systems are split across program + crate boundaries to keep CPI surfaces focused and reusable.
+```bash
+ephemeral-validator --remotes http://127.0.0.1:8899 --remotes ws://127.0.0.1:8900 --listen 127.0.0.1:7799 --reset
+```
+
+3. Build, deploy, and initialize:
+
+```bash
+anchor build
+anchor deploy
+anchor run init
+```
+
+### Option B: Surfpool (NFT marketplace + Metaplex integrations)
+
+Surfpool clones devnet state locally, which is required for Metaplex program availability.
+
+1. Start Surfpool pointing at devnet:
+
+```bash
+surfpool start --rpc-url https://api.devnet.solana.com
+```
+
+2. Build, deploy, and initialize collections:
+
+```bash
+anchor build
+anchor deploy
+anchor run init-collections
+```
+
+> **Note:** Surfpool mode does not include the MagicBlock ephemeral validator, so delegation/undelegation flows cannot be tested in this setup.

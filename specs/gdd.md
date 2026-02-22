@@ -104,7 +104,8 @@ Stats (ATK/ARM/SPD/DIG) are no longer stored in the game state. They are derived
 
 Start (prototype baseline):
 
-- HP 10, ATK 1 (from Basic Pickaxe), ARM 0, SPD 0, DIG 1 (Base).
+- HP 15, ATK 1 (from Basic Pickaxe), ARM 0, SPD 0, DIG 1 (Base).
+- Starting Gold by campaign level: Levels 1–9: 10 Gold, Levels 10–19: 5 Gold, Levels 20+: 0 Gold.
 
 Inventory:
 
@@ -275,7 +276,7 @@ Format: `ID — Name (Type) [Tag] {Rarity} — Image: <path> — Effect`
 - `G-FR-01` — Frost Lantern (Gear) [FROST] {Common} — Image: assets/icons/items/frost/frost_lantern.png — Battle Start: give enemy `1/2/3` Chill
 - `G-FR-02` — Frostguard Buckler (Gear) [FROST] {Heroic} — Image: assets/icons/items/frost/frostguard_buckler.png — `+8/10/12 ARM`; Battle Start: if enemy has Chill, gain `+3/4/5` Armor and apply 1 Chill
 - `G-FR-03` — Cold Snap Charm (Gear) [FROST] {Rare} — Image: assets/icons/items/frost/cold_snap_charm.png — If you act first on Turn 1: apply `2/3/4` Chill
-- `G-FR-04` — Ice Skates (Gear) [FROST] {Rare} — Image: assets/icons/items/frost/ice_skates.png — `+1/2/3 SPD`; reduce dig cost by 1 (minimum 2)
+- `G-FR-04` — Ice Skates (Gear) [FROST] {Rare} — Image: assets/icons/items/frost/ice_skates.png — `+1/2/3 SPD, +1 DIG`
 - `G-FR-05` — Rime Cloak (Gear) [FROST] {Rare} — Image: assets/icons/items/frost/rime_cloak.png — `+3/5/7 ARM`; when struck (once/turn): apply 1 Chill to attacker
 - `G-FR-06` — Permafrost Core (Gear) [FROST] {Mythic} — Image: assets/icons/items/frost/permafrost_core.png — Turn Start: if enemy has Chill, gain `2/3/4` Armor and deal 2 non-weapon damage; Chill on enemies decays 1 stack slower (minimum decay: 0)
 - `G-FR-07` — Cold Front Idol (Gear) [FROST] {Heroic} — Image: assets/icons/items/frost/cold_front_idol.png — Every other turn: apply 1 Chill and deal 1 non-weapon damage; if enemy already has Chill, gain +1 SPD this turn
@@ -429,11 +430,11 @@ Stat format per tier: `HP/ATK/ARM/SPD/DIG`
 | Spore Slime     | assets/entities/enemies/field/spore-slime.png     |  7/1/2/0/1 | 10/2/3/0/1 | 13/3/4/0/2 | Battle Start: apply 1 Chill to you                            |
 | Rust Mite Swarm | assets/entities/enemies/field/rust-mite-swarm.png |  6/1/0/3/2 |  9/2/0/4/2 | 12/3/0/5/3 | On Hit (once/turn): apply 1 Rust                              |
 | Collapsed Miner | assets/entities/enemies/field/collapsed-miner.png |  7/1/0/1/3 | 11/2/0/2/3 | 15/3/1/3/4 | Wounded: gain +2 ATK (this battle)                            |
-| Shard Beetle    | assets/entities/enemies/field/shard-beetle.png    |  8/1/2/1/2 | 11/2/3/1/2 | 14/3/4/2/3 | Battle Start: gain 3 Shrapnel                                 |
-| Tunnel Warden   | assets/entities/enemies/field/tunnel-warden.png   |  8/2/2/2/2 | 11/3/4/3/2 | 14/4/6/4/3 | First strike each turn: remove 2 Armor from you before damage |
-| Burrow Ambusher | assets/entities/enemies/field/burrow-ambusher.png |  6/2/0/4/2 |  9/3/0/5/2 | 12/4/0/6/3 | Battle Start: deal 2 damage ignoring Armor                    |
-| Frost Wisp      | assets/entities/enemies/field/frost-wisp.png      |  7/1/0/4/1 | 10/2/0/5/1 | 13/3/0/6/2 | If it acts first on Turn 1: apply 2 Chill                     |
-| Powder Tick     | assets/entities/enemies/field/powder-tick.png     |  6/1/0/2/1 |  9/2/0/3/1 | 12/3/0/4/2 | Countdown(3): deal 5 damage to you and itself (non-weapon)    |
+| Shard Beetle    | assets/entities/enemies/field/shard-beetle.png    |  8/1/2/1/2 | 11/2/3/1/2 | 14/3/4/2/3 | Battle Start: gain 1 Shrapnel                                 |
+| Tunnel Warden   | assets/entities/enemies/field/tunnel-warden.png   |  8/2/2/2/2 | 11/3/4/3/2 | 14/4/6/4/3 | First strike each turn: remove 1 Armor from you before damage |
+| Burrow Ambusher | assets/entities/enemies/field/burrow-ambusher.png |  6/2/0/4/2 |  9/3/0/5/2 | 12/4/0/6/3 | Battle Start: deal 1 damage ignoring Armor                    |
+| Frost Wisp      | assets/entities/enemies/field/frost-wisp.png      |  7/1/0/4/1 | 10/2/0/5/1 | 13/3/0/6/2 | If it acts first on Turn 1: apply 1 Chill                     |
+| Powder Tick     | assets/entities/enemies/field/powder-tick.png     |  6/1/0/2/1 |  9/2/0/3/1 | 12/3/0/4/2 | Countdown(3): deal 3 damage to you (non-weapon)               |
 | Coin Slug       | assets/entities/enemies/field/coin-slug.png       |  7/1/2/1/1 | 10/2/3/1/1 | 13/3/4/2/2 | Battle Start: gain Armor equal to floor(your Gold/10) (cap 3) |
 | Blood Mosquito  | assets/entities/enemies/field/blood-mosquito.png  |  6/1/0/3/1 |  9/2/0/4/1 | 12/3/0/5/2 | On Hit (once/turn): apply 1 Bleed                             |
 
@@ -467,44 +468,56 @@ Some POIs are one-time, others are repeatable utilities.
 | L13 | Counter Cache   | assets/world/pois/counter-cache.png   | Uncommon | One-time              | Anytime    | Pick 1 of 3 items drawn only from the 2 weakness tags of the current week boss |
 | L14 | Scrap Chute     | assets/world/pois/scrap-chute.png     | Uncommon | One-time              | Anytime    | Destroy 1 Gear item; costs 4 Gold flat; refund by rarity: Common 2g, Rare 4g, Heroic 6g, Mythic 10g |
 
-### POI Guarantees per run (by act)
-
-Guarantees are in addition to baseline spawns (below). **No POI types are biome-gated** in v1 — acts/biomes only change **counts** and **weights**, so players always have access to core progression systems (e.g., Tool Crates).
-
-Act 1 (Biome A):
-
-- L1 adjacent, L8 x2, L9 x1, L11 x1, L12 x1, L7 x1
-- L13 (Week 1) x1, L13 (Week 2) x1, L13 (Week 3) 50%
-- L14 x1, L5 x2
-
-Act 2 (Biome B):
-
-- Same as Act 1
-- L13 (Week 3) x1 guaranteed
-- L5 x3, L6 x2 total
-
-Act 3 (Biome C):
-
-- Same core utilities
-- L13 (Week 3) 30%
-- L5 x1, L14 x1
-
-Act 4 (Biome D):
-
-- Same core utilities
-- L13 (Week 3) 20%
-- L5 x2, L14 x1
-
 ### Baseline spawn counts (by act)
 
 Baseline spawns ensure that every run contains at least one copy of each **common/uncommon** POI type that players rely on for build formation and navigation. Counts vary by act to control the power curve and map routing incentives.
 
-| Act | Supply Cache (L2) | Tool Crate (L3) | Tool Oil Rack (L4) | Survey Beacon (L6) | Rusty Anvil (L10) |
-| --- | ----------------- | --------------- | ------------------ | ------------------ | ----------------- |
-| 1   | x10               | x2              | x2                 | x1                 | x1                |
-| 2   | x9                | x2              | x1                 | x2                 | x1                |
-| 3   | x8                | x2              | x1                 | x1                 | x1                |
-| 4   | x7                | x2              | x1                 | x1                 | x1                |
+| POI                  | Act 1 | Act 2 | Act 3 | Act 4 |
+| -------------------- | ----: | ----: | ----: | ----: |
+| L2 Supply Cache      |    10 |    12 |    14 |    16 |
+| L3 Tool Crate        |     2 |     3 |     4 |     5 |
+| L4 Tool Oil Rack     |     3 |     4 |     4 |     5 |
+| L5 Rest Alcove       |     4 |     5 |     5 |     6 |
+| L6 Survey Beacon     |     3 |     3 |     4 |     4 |
+| L7 Seismic Scanner   |     2 |     2 |     3 |     3 |
+| L8 Rail Waypoint     |     2 |     3 |     4 |     5 |
+| L9 Smuggler Hatch    |     1 |     1 |     2 |     2 |
+| L10 Rusty Anvil      |     1 |     2 |     2 |     2 |
+| L11 Rune Kiln        |     — |     1 |     1 |     2 |
+| L12 Geode Vault      |     — |     — |     1 |     2 |
+| L14 Scrap Chute      |     1 |     2 |     2 |     3 |
+| **Total baseline**   |    30 |    39 |    47 |    55 |
+
+### POI Guarantees per run (by act)
+
+Guarantees are **in addition to** baseline spawns above. **No POI types are biome-gated** in v1 — acts/biomes only change **counts** and **weights**, so players always have access to core progression systems (e.g., Tool Crates).
+
+All acts:
+
+- L1 Mole Den: 1x, adjacent to start, 100% chance.
+
+Act 1 (Biome A):
+
+- L8 Rail Waypoint: 2x, 100%
+- L13 Counter Cache: 1x Week 2 (50%), 1x Week 3 (75%)
+
+Act 2 (Biome B):
+
+- L8 Rail Waypoint: 3x, 100%
+- L12 Geode Vault: 1x Week 3 (50%)
+- L13 Counter Cache: 1x Week 1 (50%), 1x Week 2 (75%), 1x Week 3 (100%)
+
+Act 3 (Biome C):
+
+- L8 Rail Waypoint: 4x, 100%
+- L12 Geode Vault: 1x Week 2 (50%), 1x Week 3 (75%)
+- L13 Counter Cache: 1x any week, 100%
+
+Act 4 (Biome D):
+
+- L8 Rail Waypoint: 5x, 100%
+- L12 Geode Vault: 1x, 100%
+- L13 Counter Cache: 2x, 100%
 
 ### Item offer rarity tables
 
@@ -655,7 +668,7 @@ Within-act ramp (stages 1–5/6–10/11–15/16–20):
 - `tier = floor((stageInAct - 1) / 5)` = 0..3
 - Week 1 boss: `+2 HP*tier`, `+1 ARM*tier`
 - Week 2 boss: `+3 HP*tier`, `+1 ARM*tier`, `+1 ATK at tier>=2`
-- Week 3 final: `+4 HP*tier`, `+1 ARM*tier`, `+1 ATK at tier>=1`
+- Week 3 final: `+4 HP*tier`, `+1 ARM*tier`, `+1 ATK at tier>=1`; at tier 0 specifically, **-3 ARM reduction** (makes early Week 3 finals more accessible)
 
 Act-level bumps:
 

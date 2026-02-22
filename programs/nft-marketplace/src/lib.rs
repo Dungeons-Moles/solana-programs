@@ -136,7 +136,10 @@ pub mod nft_marketplace {
             if profile_data.len() > 44 {
                 let name_len =
                     u32::from_le_bytes(profile_data[40..44].try_into().unwrap()) as usize;
-                let equipped_offset = 44 + name_len + 4 + 1 + 4 + 8 + 1 + 10 + 10;
+                let equipped_offset = 44usize
+                    .checked_add(name_len)
+                    .and_then(|v| v.checked_add(4 + 1 + 4 + 8 + 1 + 10 + 10))
+                    .ok_or(MarketplaceError::ArithmeticOverflow)?;
                 if profile_data.len() > equipped_offset + 33
                     && profile_data[equipped_offset] == 1
                 {

@@ -110,6 +110,10 @@ pub mod gameplay_state {
         );
 
         require!(
+            campaign_level >= 1 && campaign_level <= 40,
+            GameplayStateError::InvalidCampaignLevel
+        );
+        require!(
             start_x < map_width && start_y < map_height,
             GameplayStateError::OutOfBounds
         );

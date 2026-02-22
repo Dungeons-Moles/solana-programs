@@ -158,4 +158,7 @@ pub enum GameplayStateError {
 
     #[msg("Gauntlet session already settled")]
     GauntletAlreadySettled,
+
+    #[msg("Campaign level must be between 1 and 40")]
+    InvalidCampaignLevel,
 }

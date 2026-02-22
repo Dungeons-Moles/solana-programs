@@ -35,9 +35,10 @@ pub fn scale_week2_stats(base_hp: u16, base_arm: u8, tier: u8) -> (u16, u8, u8) 
 pub fn scale_week3_stats(base_hp: u16, base_arm: u8, tier: u8) -> (u16, u8, u8) {
     let hp_bonus = 4 * tier as u16;
     let arm_bonus = tier;
+    let arm_reduction = if tier == 0 { 3u8 } else { 0u8 };
     let atk_bonus = if tier >= 1 { 1u8 } else { 0u8 };
 
-    (base_hp + hp_bonus, base_arm + arm_bonus, atk_bonus)
+    (base_hp + hp_bonus, base_arm.saturating_sub(arm_reduction) + arm_bonus, atk_bonus)
 }
 
 /// Apply act baseline bonuses to stats
@@ -157,7 +158,7 @@ mod tests {
     fn test_week3_scaling() {
         // Base HP = 72, ARM = 12 (Eldritch Mole)
         let (hp, arm, atk) = scale_week3_stats(72, 12, 0);
-        assert_eq!((hp, arm, atk), (72, 12, 0)); // Tier 0: no bonuses
+        assert_eq!((hp, arm, atk), (72, 9, 0)); // Tier 0: -3 ARM reduction
 
         let (hp, arm, atk) = scale_week3_stats(72, 12, 1);
         assert_eq!((hp, arm, atk), (76, 13, 1)); // Tier 1: +4 HP, +1 ARM, +1 ATK
@@ -205,11 +206,11 @@ mod tests {
 
         let scaled = scale_boss(boss, 35, Week::Three);
 
-        // Week 3 tier 0 scaling: no tier bonuses
+        // Week 3 tier 0 scaling: -3 ARM reduction
         // Act 4 baseline: +2 ATK, +1 SPD
         assert_eq!(scaled.hp, 74); // no tier bonus
         assert_eq!(scaled.atk, 4 + 2); // 6 (base + act bonus)
-        assert_eq!(scaled.arm, 14); // no tier bonus
+        assert_eq!(scaled.arm, 11); // 14 - 3 ARM reduction at tier 0
         assert_eq!(scaled.spd, 2 + 1); // 3 (act 4 bonus)
         assert_eq!(scaled.dig, 3); // unchanged
     }

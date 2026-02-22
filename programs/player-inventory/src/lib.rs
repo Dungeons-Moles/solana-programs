@@ -35,23 +35,21 @@ use state::{
     ToolOilModification,
 };
 
-declare_id!("5BtqiWegvVAgEnTRUofB9oUoQvPztYqSkMPwRpYQacP8");
+declare_id!("APRnvp41jEYnT1EnrdBTim7bodqE6v2RSgzv1CG7Qv7u");
 
 /// Seed for inventory_authority PDA used for CPI calls to other programs
 pub const INVENTORY_AUTHORITY_SEED: &[u8] = b"inventory_authority";
 
 /// POI system program ID for authorized equip operations via CPI
-/// Derived from "6E27r1Cyo2CNPvtRsonn3uHUAdznS3cMXEBX4HRbfBQY"
 pub const POI_SYSTEM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
-    77, 160, 63, 209, 182, 56, 149, 181, 2, 195, 173, 95, 65, 136, 88, 122, 235, 166, 235, 216,
-    241, 107, 2, 35, 185, 14, 177, 21, 150, 103, 215, 77,
+    0x04, 0xcb, 0x52, 0x15, 0x87, 0x19, 0x4d, 0x2b, 0xbe, 0x24, 0xa5, 0xa7, 0xae, 0xc7, 0xc2, 0x79,
+    0x1e, 0xa8, 0x59, 0xd6, 0xc2, 0x7b, 0x44, 0x05, 0x0d, 0x53, 0x85, 0xb7, 0x4b, 0x8b, 0xc2, 0x60,
 ]);
 
 /// Gameplay state program ID for HP modification CPI
-/// Derived from "5VAaGSSoBP4UEt3RL2EXvDwpeDxAXMndsJn7QX96nc4n"
 pub const GAMEPLAY_STATE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
-    66, 165, 213, 208, 125, 103, 44, 88, 115, 217, 192, 197, 1, 117, 7, 170, 78, 32, 208, 143, 119,
-    94, 47, 124, 229, 196, 47, 149, 235, 227, 237, 31,
+    0xa5, 0x69, 0x33, 0xc3, 0x32, 0x44, 0x5d, 0xb7, 0x52, 0x8d, 0x7a, 0x6b, 0xc3, 0x01, 0x56, 0x1e,
+    0x68, 0x50, 0xaa, 0x96, 0x7a, 0x85, 0xea, 0x62, 0xb5, 0x79, 0xe3, 0x23, 0xe4, 0xa8, 0x88, 0x36,
 ]);
 pub const LOCAL_ER_VALIDATOR: Pubkey = pubkey!("mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev");
 

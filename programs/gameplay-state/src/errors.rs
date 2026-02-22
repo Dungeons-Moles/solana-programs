@@ -155,4 +155,10 @@ pub enum GameplayStateError {
 
     #[msg("Invalid max weeks value for run mode")]
     InvalidRunModeMaxWeeks,
+
+    #[msg("Gauntlet session already settled")]
+    GauntletAlreadySettled,
+
+    #[msg("Campaign level must be between 1 and 40")]
+    InvalidCampaignLevel,
 }

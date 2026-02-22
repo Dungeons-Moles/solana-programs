@@ -55,12 +55,22 @@ impl Phase {
     }
 }
 
+/// Defender credit accumulated during gauntlet ER gameplay, settled after undelegation.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub struct GauntletDefenderCredit {
+    pub defender: Pubkey,
+    pub points: u64,
+}
+
+impl GauntletDefenderCredit {
+    pub const INIT_SPACE: usize = 32 + 8;
+}
+
 /// Core gameplay state account linked to a GameSession.
 /// Contains all mutable game data for a single run.
 /// Stats (ATK, ARM, SPD, DIG, MaxHP) are derived from inventory at runtime.
 /// PDA Seeds: ["game_state", session_pda.as_ref()]
 #[account]
-#[derive(InitSpace)]
 pub struct GameState {
     /// Session owner's main wallet (used for lifecycle operations like close)
     pub player: Pubkey,
@@ -126,6 +136,24 @@ pub struct GameState {
     /// Level completion flag - set when week 3 boss is defeated
     /// Used by session_manager to validate end_session calls
     pub completed: bool,
+
+    /// Pre-drawn gauntlet echo opponents (cached at entry, resolved during ER gameplay).
+    pub gauntlet_echoes: [Option<GauntletEchoSnapshot>; 5],
+
+    /// Epoch ID at gauntlet entry, used for settlement validation.
+    pub gauntlet_epoch_id: u64,
+
+    /// Points accumulated during gauntlet ER gameplay, settled after undelegation.
+    pub gauntlet_points_earned: u64,
+
+    /// Defender credit to apply at settlement (only for Player echo losses).
+    pub gauntlet_defender_credit: Option<GauntletDefenderCredit>,
+
+    /// Highest week the player won (for echo insertion at settlement).
+    pub gauntlet_highest_week_won: u8,
+
+    /// Whether gauntlet points have been settled to global accounts.
+    pub gauntlet_settled: bool,
 }
 
 impl GameState {
@@ -133,6 +161,20 @@ impl GameState {
     pub fn seeds(session: &Pubkey) -> [&[u8]; 2] {
         [GAME_STATE_SEED, session.as_ref()]
     }
+
+    // Manual INIT_SPACE because GauntletEchoSnapshot uses manual INIT_SPACE (not derive).
+    //
+    // Base fields: 3×Pubkey(32) + 8×u8 + i16 + Phase(1) + u8 + u32 + bool + u16 + u8 + u8
+    //              + RunMode(1) + u8 + bool + bool = 119
+    // Gauntlet fields:
+    //   gauntlet_echoes: 5 × (1 + GauntletEchoSnapshot::INIT_SPACE) = 5 × 180 = 900
+    //   gauntlet_epoch_id: 8
+    //   gauntlet_points_earned: 8
+    //   gauntlet_defender_credit: 1 + GauntletDefenderCredit::INIT_SPACE = 41
+    //   gauntlet_highest_week_won: 1
+    //   gauntlet_settled: 1
+    // Total new: 959
+    pub const INIT_SPACE: usize = 119 + 959;
 }
 
 /// A spawned enemy instance on the map

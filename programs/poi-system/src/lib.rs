@@ -16,7 +16,7 @@ use gameplay_state::state::{GameState, RunMode};
 pub use pois::PoiDefinition;
 use state::{ActiveCondition, MapPois, ShopState, UseType, MAP_POIS_SEED};
 
-declare_id!("6E27r1Cyo2CNPvtRsonn3uHUAdznS3cMXEBX4HRbfBQY");
+declare_id!("KiT25b86BSAF8yErcWwyuuWNaoXMpNf859NjH41TpSj");
 
 /// Seed for POI authority PDA used to sign CPI calls to gameplay-state
 pub const POI_AUTHORITY_SEED: &[u8] = b"poi_authority";
@@ -26,16 +26,16 @@ pub const SPAWN_VISION_RADIUS: u8 = 6;
 
 /// Session manager program ID for session ownership checks
 pub const SESSION_MANAGER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
-    217, 18, 17, 128, 79, 140, 152, 73, 103, 95, 134, 179, 31, 109, 34, 82, 250, 167, 91, 67, 186,
-    23, 209, 2, 80, 255, 118, 192, 175, 242, 222, 183,
+    0x58, 0x20, 0x64, 0x87, 0xdf, 0xd8, 0x68, 0xf1, 0xa4, 0x79, 0x15, 0x8b, 0xb2, 0x8a, 0x56, 0x0c,
+    0xa9, 0x4f, 0x56, 0x2e, 0x62, 0x85, 0x26, 0xb7, 0x4f, 0x8b, 0xa1, 0x4d, 0x08, 0x36, 0x20, 0x99,
 ]);
 
 /// Map generator program ID for reading GeneratedMap account
 /// Must match the declare_id! in map-generator/src/lib.rs
-/// BYdGuEGf8NqtLnHpSRuZFrPGEgvdxMfGfTt71QVBxYHa
+/// GCy5GqvnJN99rgGtV6fMn8NtL9E7RoAyHDGzQv8me65j
 pub const MAP_GENERATOR_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
-    156, 174, 227, 192, 77, 77, 237, 57, 57, 229, 227, 42, 100, 51, 52, 5, 241, 68, 44, 141, 222,
-    59, 35, 223, 249, 8, 30, 121, 140, 38, 69, 149,
+    0xe1, 0xf0, 0x18, 0x72, 0xcf, 0x4e, 0x1d, 0xea, 0xe0, 0x2f, 0x0a, 0xb0, 0xe8, 0xbf, 0x4b, 0x0c,
+    0xf5, 0xb2, 0x05, 0xc5, 0x47, 0x61, 0x12, 0x2d, 0x49, 0xda, 0x54, 0xc1, 0xf5, 0xd0, 0xac, 0x6e,
 ]);
 pub const LOCAL_ER_VALIDATOR: Pubkey = pubkey!("mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev");
 
@@ -1696,7 +1696,7 @@ pub struct InitializeMapPois<'info> {
     #[account(
         constraint = game_state.session == session.key() @ PoiSystemError::InvalidSession
     )]
-    pub game_state: Account<'info, GameState>,
+    pub game_state: Box<Account<'info, GameState>>,
 
     #[account(mut)]
     pub payer: Signer<'info>,
@@ -1769,7 +1769,7 @@ pub struct InteractRest<'info> {
         seeds = [MAP_POIS_SEED, map_pois.session.as_ref()],
         bump = map_pois.bump
     )]
-    pub map_pois: Account<'info, MapPois>,
+    pub map_pois: Box<Account<'info, MapPois>>,
 
     /// Player's GameState for position/time validation (mut for CPI)
     #[account(
@@ -1778,7 +1778,7 @@ pub struct InteractRest<'info> {
         bump = game_state.bump,
         seeds::program = gameplay_state::ID,
     )]
-    pub game_state: Account<'info, GameState>,
+    pub game_state: Box<Account<'info, GameState>>,
 
     /// Player's inventory for deriving max_hp and boss fight resolution (mut for gear slot expansion)
     #[account(
@@ -1787,7 +1787,7 @@ pub struct InteractRest<'info> {
         bump = inventory.bump,
         seeds::program = player_inventory::ID,
     )]
-    pub inventory: Account<'info, player_inventory::state::PlayerInventory>,
+    pub inventory: Box<Account<'info, player_inventory::state::PlayerInventory>>,
 
     /// Generated map account (provides seed for duel week 1/2 boss selection in skip_to_day).
     #[account(
@@ -1843,7 +1843,7 @@ pub struct InteractPickItem<'info> {
         bump = game_state.bump,
         seeds::program = gameplay_state::ID,
     )]
-    pub game_state: Account<'info, GameState>,
+    pub game_state: Box<Account<'info, GameState>>,
 
     /// Player's inventory for equipping items
     #[account(
@@ -1852,7 +1852,7 @@ pub struct InteractPickItem<'info> {
         bump = inventory.bump,
         seeds::program = player_inventory::ID,
     )]
-    pub inventory: Account<'info, player_inventory::state::PlayerInventory>,
+    pub inventory: Box<Account<'info, player_inventory::state::PlayerInventory>>,
 
     /// Inventory authority PDA from player-inventory for HP modification CPI
     /// CHECK: PDA derived from player-inventory program
@@ -1903,7 +1903,7 @@ pub struct InteractToolOil<'info> {
         bump = game_state.bump,
         seeds::program = gameplay_state::ID,
     )]
-    pub game_state: Account<'info, GameState>,
+    pub game_state: Box<Account<'info, GameState>>,
 
     /// Player inventory where tool-oil mutations are applied
     #[account(
@@ -1913,7 +1913,7 @@ pub struct InteractToolOil<'info> {
         seeds::program = player_inventory::ID,
         has_one = player @ PoiSystemError::Unauthorized,
     )]
-    pub inventory: Account<'info, player_inventory::state::PlayerInventory>,
+    pub inventory: Box<Account<'info, player_inventory::state::PlayerInventory>>,
 
     /// POI authority PDA for signing CPI calls
     /// CHECK: PDA derived from this program, used as signer in CPI
@@ -1946,7 +1946,7 @@ pub struct EnterShop<'info> {
         bump = game_state.bump,
         seeds::program = gameplay_state::ID,
     )]
-    pub game_state: Account<'info, GameState>,
+    pub game_state: Box<Account<'info, GameState>>,
 
     /// Game session for active_item_pool filtering
     #[account(
@@ -1976,7 +1976,7 @@ pub struct ShopPurchase<'info> {
         bump = game_state.bump,
         seeds::program = gameplay_state::ID,
     )]
-    pub game_state: Account<'info, GameState>,
+    pub game_state: Box<Account<'info, GameState>>,
 
     /// Player's inventory for equipping purchased items
     #[account(
@@ -1985,7 +1985,7 @@ pub struct ShopPurchase<'info> {
         bump = inventory.bump,
         seeds::program = player_inventory::ID,
     )]
-    pub inventory: Account<'info, player_inventory::state::PlayerInventory>,
+    pub inventory: Box<Account<'info, player_inventory::state::PlayerInventory>>,
 
     /// Inventory authority PDA from player-inventory for HP modification CPI
     /// CHECK: PDA derived from player-inventory program
@@ -2031,7 +2031,7 @@ pub struct ShopReroll<'info> {
         bump = game_state.bump,
         seeds::program = gameplay_state::ID,
     )]
-    pub game_state: Account<'info, GameState>,
+    pub game_state: Box<Account<'info, GameState>>,
 
     /// Game session for active_item_pool filtering
     #[account(
@@ -2090,7 +2090,7 @@ pub struct InteractRustyAnvil<'info> {
         bump = game_state.bump,
         seeds::program = gameplay_state::ID,
     )]
-    pub game_state: Account<'info, GameState>,
+    pub game_state: Box<Account<'info, GameState>>,
 
     /// Player inventory where tool tier is upgraded
     #[account(
@@ -2100,7 +2100,7 @@ pub struct InteractRustyAnvil<'info> {
         seeds::program = player_inventory::ID,
         has_one = player @ PoiSystemError::Unauthorized,
     )]
-    pub inventory: Account<'info, player_inventory::state::PlayerInventory>,
+    pub inventory: Box<Account<'info, player_inventory::state::PlayerInventory>>,
 
     /// POI authority PDA for signing CPI calls
     /// CHECK: PDA derived from this program, used as signer in CPI
@@ -2135,7 +2135,7 @@ pub struct InteractRuneKiln<'info> {
         bump = game_state.bump,
         seeds::program = gameplay_state::ID,
     )]
-    pub game_state: Account<'info, GameState>,
+    pub game_state: Box<Account<'info, GameState>>,
 
     /// Player inventory where gear fusion is applied
     #[account(
@@ -2145,7 +2145,7 @@ pub struct InteractRuneKiln<'info> {
         seeds::program = player_inventory::ID,
         has_one = player @ PoiSystemError::Unauthorized,
     )]
-    pub inventory: Account<'info, player_inventory::state::PlayerInventory>,
+    pub inventory: Box<Account<'info, player_inventory::state::PlayerInventory>>,
 
     /// POI authority PDA for signing CPI calls
     /// CHECK: PDA derived from this program, used as signer in CPI
@@ -2178,7 +2178,7 @@ pub struct DiscoverVisibleWaypoints<'info> {
         bump = game_state.bump,
         seeds::program = gameplay_state::ID,
     )]
-    pub game_state: Account<'info, GameState>,
+    pub game_state: Box<Account<'info, GameState>>,
 
     /// Player discovering
     pub player: Signer<'info>,
@@ -2200,7 +2200,7 @@ pub struct FastTravel<'info> {
         bump = game_state.bump,
         seeds::program = gameplay_state::ID,
     )]
-    pub game_state: Account<'info, GameState>,
+    pub game_state: Box<Account<'info, GameState>>,
 
     /// POI authority PDA for signing CPI calls
     /// CHECK: PDA derived from this program, used as signer in CPI
@@ -2233,7 +2233,7 @@ pub struct InteractSurveyBeacon<'info> {
         bump = game_state.bump,
         seeds::program = gameplay_state::ID,
     )]
-    pub game_state: Account<'info, GameState>,
+    pub game_state: Box<Account<'info, GameState>>,
 
     /// Player activating
     pub player: Signer<'info>,
@@ -2255,7 +2255,7 @@ pub struct InteractSeismicScanner<'info> {
         bump = game_state.bump,
         seeds::program = gameplay_state::ID,
     )]
-    pub game_state: Account<'info, GameState>,
+    pub game_state: Box<Account<'info, GameState>>,
 
     /// Player activating
     pub player: Signer<'info>,
@@ -2278,7 +2278,7 @@ pub struct InteractScrapChute<'info> {
         bump = game_state.bump,
         seeds::program = gameplay_state::ID,
     )]
-    pub game_state: Account<'info, GameState>,
+    pub game_state: Box<Account<'info, GameState>>,
 
     /// Player inventory must belong to the same session and player
     #[account(
@@ -2288,7 +2288,7 @@ pub struct InteractScrapChute<'info> {
         seeds::program = player_inventory::ID,
         has_one = player @ PoiSystemError::Unauthorized,
     )]
-    pub inventory: Account<'info, player_inventory::state::PlayerInventory>,
+    pub inventory: Box<Account<'info, player_inventory::state::PlayerInventory>>,
 
     /// Inventory authority PDA from player-inventory for CPI calls
     /// CHECK: PDA derived from player-inventory program

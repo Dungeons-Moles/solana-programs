@@ -47,49 +47,49 @@ pub static COLLAPSED_MINER_TRAITS: [ItemEffect; 1] = [ItemEffect {
     condition: Condition::None,
 }];
 
-/// Shard Beetle: Battle Start: gain 3 Shrapnel
+/// Shard Beetle: Battle Start: gain 1 Shrapnel
 pub static SHARD_BEETLE_TRAITS: [ItemEffect; 1] = [ItemEffect {
     trigger: TriggerType::BattleStart,
     once_per_turn: false,
     effect_type: EffectType::ApplyShrapnel,
-    value: 3,
+    value: 1,
     condition: Condition::None,
 }];
 
-/// Tunnel Warden: First strike each turn: remove 2 Armor from player before damage
+/// Tunnel Warden: First strike each turn: remove 1 Armor from player before damage
 pub static TUNNEL_WARDEN_TRAITS: [ItemEffect; 1] = [ItemEffect {
     trigger: TriggerType::TurnStart,
     once_per_turn: true,
     effect_type: EffectType::RemoveArmor,
-    value: 2,
+    value: 1,
     condition: Condition::None,
 }];
 
-/// Burrow Ambusher: Battle Start: deal 2 damage ignoring Armor
+/// Burrow Ambusher: Battle Start: deal 1 damage ignoring Armor
 pub static BURROW_AMBUSHER_TRAITS: [ItemEffect; 1] = [ItemEffect {
     trigger: TriggerType::BattleStart,
     once_per_turn: false,
     effect_type: EffectType::DealNonWeaponDamage,
-    value: 2,
+    value: 1,
     condition: Condition::None,
 }];
 
-/// Frost Wisp: If it acts first on Turn 1: apply 2 Chill
+/// Frost Wisp: If it acts first on Turn 1: apply 1 Chill
 pub static FROST_WISP_TRAITS: [ItemEffect; 1] = [ItemEffect {
     trigger: TriggerType::FirstTurnIfFaster,
     once_per_turn: false,
     effect_type: EffectType::ApplyChill,
-    value: 2,
+    value: 1,
     condition: Condition::None,
 }];
 
-/// Powder Tick: Countdown(3): deal 5 damage to player (non-weapon)
+/// Powder Tick: Countdown(3): deal 3 damage to player (non-weapon)
 /// Fires every 3 turns (turn 3, 6, 9, etc.)
 pub static POWDER_TICK_TRAITS: [ItemEffect; 1] = [ItemEffect {
     trigger: TriggerType::Countdown { turns: 3 },
     once_per_turn: false,
     effect_type: EffectType::DealNonWeaponDamage,
-    value: 5,
+    value: 3,
     condition: Condition::None,
 }];
 
@@ -142,7 +142,7 @@ mod tests {
         assert_eq!(traits.len(), 1);
         assert!(matches!(traits[0].trigger, TriggerType::BattleStart));
         assert!(matches!(traits[0].effect_type, EffectType::ApplyShrapnel));
-        assert_eq!(traits[0].value, 3);
+        assert_eq!(traits[0].value, 1);
     }
 
     #[test]
@@ -193,6 +193,6 @@ mod tests {
             "Frost Wisp should use FirstTurnIfFaster trigger"
         );
         assert!(matches!(traits[0].effect_type, EffectType::ApplyChill));
-        assert_eq!(traits[0].value, 2);
+        assert_eq!(traits[0].value, 1);
     }
 }

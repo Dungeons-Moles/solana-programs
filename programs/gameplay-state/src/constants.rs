@@ -9,7 +9,7 @@ pub const NIGHT_MOVES: u8 = 30;
 // =============================================================================
 
 /// Base HP before item bonuses
-pub const BASE_HP: i16 = 10;
+pub const BASE_HP: i16 = 15;
 
 /// Base attack stat before item bonuses
 pub const BASE_ATK: i16 = 0;

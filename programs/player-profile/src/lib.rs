@@ -11,7 +11,7 @@ use constants::*;
 use errors::PlayerProfileError;
 use state::PlayerProfile;
 
-declare_id!("29DPbP1zuCCRg63PiShMjxAmZos97BR5TmhpijUYQzze");
+declare_id!("Ch3bbL1oQk2z5rX1jiun3KuSWZqnXZ1MnrfrtKj4MKun");
 
 fn is_player_queued_in_pit_draft(
     pit_draft_queue: &AccountInfo<'_>,

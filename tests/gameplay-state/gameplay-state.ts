@@ -715,10 +715,11 @@ describe("gameplay-state", () => {
     );
     await movePlayer(sessionSigner, gameStatePDA, target.x, target.y);
 
+    // Gauntlet echo combat auto-resolves inline in move_player.
+    // After the move, the player is either dead (lost echo fight), advanced to week 2,
+    // or completed (if this was the last week). bossFightReady may be false.
     const gs = await gameplayProgram.account.gameState.fetch(gameStatePDA);
-    expect(gs.bossFightReady).to.equal(true);
-    expect(gs.movesRemaining).to.equal(0);
-    expect(gs.phase).to.deep.equal({ night3: {} });
+    expect(gs.isDead || gs.week > 1 || gs.completed).to.equal(true);
     return true;
   };
 
@@ -1735,10 +1736,9 @@ describe("gameplay-state", () => {
           new anchor.BN(0),
           player.user.publicKey,
         );
-        const [gameplayAuthorityPDA] = getGameplayAuthorityPDA();
 
         await (gameplayProgram.methods as any)
-          .enterGauntlet()
+          .enterGauntlet(new anchor.BN(0))
           .accounts({
             gameState: player.gameStatePDA,
             player: player.user.publicKey,
@@ -1747,6 +1747,13 @@ describe("gameplay-state", () => {
             companyTreasury,
             systemProgram: SystemProgram.programId,
           } as any)
+          .remainingAccounts([
+            { pubkey: gauntletWeek1PDA, isSigner: false, isWritable: false },
+            { pubkey: gauntletWeek2PDA, isSigner: false, isWritable: false },
+            { pubkey: gauntletWeek3PDA, isSigner: false, isWritable: false },
+            { pubkey: gauntletWeek4PDA, isSigner: false, isWritable: false },
+            { pubkey: gauntletWeek5PDA, isSigner: false, isWritable: false },
+          ])
           .signers([player.user])
           .rpc();
 
@@ -1769,30 +1776,28 @@ describe("gameplay-state", () => {
           return;
         }
 
+        // Settle gauntlet session to credit points to epoch pool
         await (gameplayProgram.methods as any)
-          .resolveGauntletWeek(new anchor.BN(0))
+          .settleGauntletSession(new anchor.BN(0))
           .accounts({
             gameState: player.gameStatePDA,
             player: player.user.publicKey,
-            inventory: player.inventoryPDA,
-            gameplayAuthority: gameplayAuthorityPDA,
-            playerInventoryProgram: playerInventoryProgram.programId,
-            gauntletConfig: gauntletConfigPDA,
+            sessionSigner: player.sessionSigner.publicKey,
             gauntletEpochPool: epoch0PoolPDA,
             gauntletPlayerScore: playerScorePDA,
+            inventory: player.inventoryPDA,
             gauntletWeek1: gauntletWeek1PDA,
             gauntletWeek2: gauntletWeek2PDA,
             gauntletWeek3: gauntletWeek3PDA,
             gauntletWeek4: gauntletWeek4PDA,
             gauntletWeek5: gauntletWeek5PDA,
-            systemProgram: SystemProgram.programId,
           } as any)
           .preInstructions([
             anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
               units: 1_400_000,
             }),
           ])
-          .signers([player.user])
+          .signers([player.sessionSigner])
           .rpc();
 
         try {
@@ -1821,7 +1826,7 @@ describe("gameplay-state", () => {
         );
       });
 
-      it("enters gauntlet and resolves week 1 without defender score account", async () => {
+      it("enters gauntlet, auto-resolves echo, and settles session", async () => {
         await ensureGauntletExists();
 
         const player = await setupUserWithGameState();
@@ -1840,7 +1845,7 @@ describe("gameplay-state", () => {
         );
 
         await (gameplayProgram.methods as any)
-          .enterGauntlet()
+          .enterGauntlet(new anchor.BN(0))
           .accounts({
             gameState: player.gameStatePDA,
             player: player.user.publicKey,
@@ -1849,6 +1854,13 @@ describe("gameplay-state", () => {
             companyTreasury,
             systemProgram: SystemProgram.programId,
           } as any)
+          .remainingAccounts([
+            { pubkey: gauntletWeek1PDA, isSigner: false, isWritable: false },
+            { pubkey: gauntletWeek2PDA, isSigner: false, isWritable: false },
+            { pubkey: gauntletWeek3PDA, isSigner: false, isWritable: false },
+            { pubkey: gauntletWeek4PDA, isSigner: false, isWritable: false },
+            { pubkey: gauntletWeek5PDA, isSigner: false, isWritable: false },
+          ])
           .signers([player.user])
           .rpc();
 
@@ -1878,36 +1890,35 @@ describe("gameplay-state", () => {
         expect(companyAfter - companyBefore).to.equal(300000);
         expect(vaultAfter - vaultBefore).to.equal(9700000);
 
+        // Settle gauntlet session on base layer
         await (gameplayProgram.methods as any)
-          .resolveGauntletWeek(new anchor.BN(0))
+          .settleGauntletSession(new anchor.BN(0))
           .accounts({
             gameState: player.gameStatePDA,
             player: player.user.publicKey,
-            inventory: player.inventoryPDA,
-            gameplayAuthority: gameplayAuthorityPDA,
-            playerInventoryProgram: playerInventoryProgram.programId,
-            gauntletConfig: gauntletConfigPDA,
+            sessionSigner: player.sessionSigner.publicKey,
             gauntletEpochPool: epochPoolPDA,
             gauntletPlayerScore: playerScorePDA,
+            inventory: player.inventoryPDA,
             gauntletWeek1: gauntletWeek1PDA,
             gauntletWeek2: gauntletWeek2PDA,
             gauntletWeek3: gauntletWeek3PDA,
             gauntletWeek4: gauntletWeek4PDA,
             gauntletWeek5: gauntletWeek5PDA,
-            systemProgram: SystemProgram.programId,
           } as any)
           .preInstructions([
             anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
               units: 1_400_000,
             }),
           ])
-          .signers([player.user])
+          .signers([player.sessionSigner])
           .rpc();
 
         const gs = await gameplayProgram.account.gameState.fetch(
           player.gameStatePDA,
         );
         expect(gs.runMode).to.exist;
+        expect(gs.gauntletSettled).to.equal(true);
 
         await cleanup(
           player.user,

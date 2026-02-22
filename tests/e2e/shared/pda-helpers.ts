@@ -26,6 +26,13 @@ export function getDuelSessionPda(player: PublicKey): [PublicKey, number] {
   );
 }
 
+export function getGauntletSessionPda(player: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("gauntlet_session"), player.toBuffer()],
+    PROGRAM_IDS.sessionManager
+  );
+}
+
 export function getSessionManagerAuthorityPda(): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("session_manager_authority")],
@@ -136,6 +143,27 @@ export function getGauntletWeekPoolPda(week: number): [PublicKey, number] {
   );
 }
 
+export function getGauntletEpochPoolPda(epochId: bigint): [PublicKey, number] {
+  const buf = Buffer.alloc(8);
+  buf.writeBigUInt64LE(epochId);
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("gauntlet_epoch_pool"), buf],
+    PROGRAM_IDS.gameplayState
+  );
+}
+
+export function getGauntletPlayerScorePda(
+  epochId: bigint,
+  player: PublicKey
+): [PublicKey, number] {
+  const buf = Buffer.alloc(8);
+  buf.writeBigUInt64LE(epochId);
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("gauntlet_player_score"), buf, player.toBuffer()],
+    PROGRAM_IDS.gameplayState
+  );
+}
+
 // ── Player Inventory PDAs ───────────────────────────────────────────────────
 export function getInventoryPda(sessionPda: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
@@ -149,6 +177,21 @@ export function getMapPoisPda(sessionPda: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("map_pois"), sessionPda.toBuffer()],
     PROGRAM_IDS.poiSystem
+  );
+}
+
+export function getPoiAuthorityPda(): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("poi_authority")],
+    PROGRAM_IDS.poiSystem
+  );
+}
+
+// ── Player Inventory Authority PDA ──────────────────────────────────────────
+export function getInventoryAuthorityPda(): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("inventory_authority")],
+    PROGRAM_IDS.playerInventory
   );
 }
 

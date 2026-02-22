@@ -95,7 +95,7 @@ impl Cell {
 const POI_MIN_SPACING: u8 = 10;
 
 const BASELINE_L2_SUPPLY_CACHE: [u8; 4] = [10, 9, 8, 7];
-const BASELINE_L3_TOOL_CRATE: [u8; 4] = [2, 2, 2, 2];
+const BASELINE_L3_TOOL_CRATE: [u8; 4] = [3, 2, 2, 2];
 const BASELINE_L4_TOOL_OIL: [u8; 4] = [2, 1, 1, 1];
 const BASELINE_L6_SURVEY_BEACON: [u8; 4] = [1, 2, 1, 1];
 const BASELINE_L10_RUSTY_ANVIL: [u8; 4] = [1, 1, 1, 1];
@@ -591,10 +591,12 @@ fn find_valid_poi_position(
     None
 }
 
-fn find_reachable_counter_cache_position(
+fn find_reachable_poi_position(
     walkable_tiles: &mut [Position],
     map: &GeneratedMap,
     rng: &mut SeededRNG,
+    poi_type: u8,
+    max_distance: u8,
 ) -> Option<Position> {
     let spawn = Position {
         x: map.spawn_x,
@@ -608,12 +610,11 @@ fn find_reachable_counter_cache_position(
             continue;
         }
 
-        // Reachable within early budget using tile-distance approximation.
-        if manhattan_distance(pos, spawn) > 30 {
+        if manhattan_distance(pos, spawn) > max_distance as u16 {
             continue;
         }
 
-        if !is_same_type_spacing_valid(map, pos, 13) {
+        if !is_same_type_spacing_valid(map, pos, poi_type) {
             continue;
         }
 
@@ -682,9 +683,9 @@ fn place_pois(map: &mut GeneratedMap, rng: &mut SeededRNG, campaign_level: u8) {
         targets[1] = targets[1].saturating_sub(1);
     }
 
-    // Ensure one reachable Counter Cache first when available.
+    // Ensure one reachable Counter Cache near spawn when available.
     if targets[13] > 0 && (map.poi_count as usize) < MAX_POIS {
-        if let Some(position) = find_reachable_counter_cache_position(&mut walkable_tiles, map, rng)
+        if let Some(position) = find_reachable_poi_position(&mut walkable_tiles, map, rng, 13, 30)
         {
             let index = map.poi_count as usize;
             map.pois[index] = PoiSpawn {
@@ -698,9 +699,57 @@ fn place_pois(map: &mut GeneratedMap, rng: &mut SeededRNG, campaign_level: u8) {
         }
     }
 
+    // Ensure one reachable Tool Crate near spawn when available.
+    if targets[3] > 0 && (map.poi_count as usize) < MAX_POIS {
+        if let Some(position) = find_reachable_poi_position(&mut walkable_tiles, map, rng, 3, 12)
+        {
+            let index = map.poi_count as usize;
+            map.pois[index] = PoiSpawn {
+                poi_type: 3,
+                is_used: false,
+                x: position.x,
+                y: position.y,
+            };
+            map.poi_count += 1;
+            targets[3] = targets[3].saturating_sub(1);
+        }
+    }
+
+    // Ensure one reachable Supply Cache near spawn when available.
+    if targets[2] > 0 && (map.poi_count as usize) < MAX_POIS {
+        if let Some(position) = find_reachable_poi_position(&mut walkable_tiles, map, rng, 2, 12)
+        {
+            let index = map.poi_count as usize;
+            map.pois[index] = PoiSpawn {
+                poi_type: 2,
+                is_used: false,
+                x: position.x,
+                y: position.y,
+            };
+            map.poi_count += 1;
+            targets[2] = targets[2].saturating_sub(1);
+        }
+    }
+
+    // Ensure one reachable Tool Oil Rack near spawn when available.
+    if targets[4] > 0 && (map.poi_count as usize) < MAX_POIS {
+        if let Some(position) = find_reachable_poi_position(&mut walkable_tiles, map, rng, 4, 12)
+        {
+            let index = map.poi_count as usize;
+            map.pois[index] = PoiSpawn {
+                poi_type: 4,
+                is_used: false,
+                x: position.x,
+                y: position.y,
+            };
+            map.poi_count += 1;
+            targets[4] = targets[4].saturating_sub(1);
+        }
+    }
+
     // Place specific POI types according to per-act targets.
     // Order prioritizes mandatory utilities before high-volume baseline spawns.
-    const PLACEMENT_ORDER: [u8; 13] = [12, 11, 10, 9, 8, 7, 14, 13, 6, 5, 4, 3, 2];
+    const PLACEMENT_ORDER: [u8; 13] = [12, 11, 10, 9, 8, 7, 14, 13, 3, 6, 5, 4, 2];
     for poi_type in PLACEMENT_ORDER {
         let count = targets[poi_type as usize] as usize;
         place_poi_type_count(map, rng, &mut walkable_tiles, poi_type, count);
@@ -1169,7 +1218,8 @@ mod tests {
                 expected_l2[act_idx],
                 "L2 count mismatch"
             );
-            assert_eq!(count_pois_by_type(&map, 3), 2, "L3 count mismatch");
+            let expected_l3 = [3usize, 2, 2, 2];
+            assert_eq!(count_pois_by_type(&map, 3), expected_l3[act_idx], "L3 count mismatch");
             assert_eq!(
                 count_pois_by_type(&map, 4),
                 expected_l4[act_idx],
@@ -1333,6 +1383,61 @@ mod tests {
                 id,
                 biome_b_enemy_count[id],
                 biome_a_enemy_count[id]
+            );
+        }
+    }
+
+    #[test]
+    fn test_guaranteed_pois_near_spawn_act1() {
+        // Verify that Tool Crate (L3), Supply Cache (L2), and Tool Oil Rack (L4)
+        // each have at least one instance within their guaranteed distance of spawn.
+        let max_dist_l3 = 12u16;
+        let max_dist_l2 = 12u16;
+        let max_dist_l4 = 12u16;
+
+        for seed in 1000u64..1200u64 {
+            let mut map = create_test_map();
+            assert!(generate_map(&mut map, seed, 1)); // Campaign level 1 = Act 1
+
+            let spawn = Position {
+                x: map.spawn_x,
+                y: map.spawn_y,
+            };
+
+            let mut closest_l2 = u16::MAX;
+            let mut closest_l3 = u16::MAX;
+            let mut closest_l4 = u16::MAX;
+
+            for idx in 0..map.poi_count as usize {
+                let poi = map.pois[idx];
+                let poi_pos = Position {
+                    x: poi.x,
+                    y: poi.y,
+                };
+                let dist = manhattan_distance(poi_pos, spawn);
+
+                match poi.poi_type {
+                    2 => closest_l2 = closest_l2.min(dist),
+                    3 => closest_l3 = closest_l3.min(dist),
+                    4 => closest_l4 = closest_l4.min(dist),
+                    _ => {}
+                }
+            }
+
+            assert!(
+                closest_l3 <= max_dist_l3,
+                "Seed {}: closest Tool Crate (L3) is {} tiles from spawn (max {})",
+                seed, closest_l3, max_dist_l3
+            );
+            assert!(
+                closest_l2 <= max_dist_l2,
+                "Seed {}: closest Supply Cache (L2) is {} tiles from spawn (max {})",
+                seed, closest_l2, max_dist_l2
+            );
+            assert!(
+                closest_l4 <= max_dist_l4,
+                "Seed {}: closest Tool Oil Rack (L4) is {} tiles from spawn (max {})",
+                seed, closest_l4, max_dist_l4
             );
         }
     }

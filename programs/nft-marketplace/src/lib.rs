@@ -14,7 +14,7 @@ use constants::*;
 use errors::MarketplaceError;
 use state::*;
 
-declare_id!("8gZC4WcbiC3ZSGEYMvruFRPcY1JJyZnLHFJSQnigGEEw");
+declare_id!("ApUAEEKYsRMjxoMA65WV2xiG8xGwWzFhHjTMGGefcumK");
 
 #[program]
 pub mod nft_marketplace {

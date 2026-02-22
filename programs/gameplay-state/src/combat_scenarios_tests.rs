@@ -465,16 +465,16 @@ fn test_rust_mite_t1_basic_pickaxe() {
 fn test_shard_beetle_t1_basic_pickaxe() {
     assert_scenario(&Scenario {
         name: "shard_beetle_t1_basic_pickaxe",
-        player_hp: 10,
+        player_hp: 15,
         tool: basic_pickaxe_with_oils(&[]),
         gear: vec![],
         enemy_archetype: ids::SHARD_BEETLE,
         enemy_tier: 0,
         player_gold: 0,
-        expected_player_won: false,
-        expected_final_player_hp: ExpectedHp::NonPositive,
-        expected_final_enemy_hp: ExpectedHp::Exact(4),
-        expected_turns: 7,
+        expected_player_won: true,
+        expected_final_player_hp: ExpectedHp::Exact(4),
+        expected_final_enemy_hp: ExpectedHp::NonPositive,
+        expected_turns: 10,
         expected_gold_change: None,
     });
 }
@@ -568,7 +568,7 @@ fn test_shard_beetle_applies_shrapnel_log() {
         entry.action == LogAction::ApplyStatus
             && !entry.is_player
             && entry.extra == STATUS_SHRAPNEL
-            && entry.value == 3
+            && entry.value == 1
     });
 }
 
@@ -602,7 +602,7 @@ fn test_burrow_ambusher_battle_start_damage_log() {
     assert_log_contains(
         &outcome.log,
         "burrow_ambusher_battle_start_damage_log",
-        |entry| entry.action == LogAction::NonWeaponDamage && entry.is_player && entry.value == 2,
+        |entry| entry.action == LogAction::NonWeaponDamage && entry.is_player && entry.value == 1,
     );
 }
 
@@ -698,14 +698,14 @@ fn test_work_vest_atk_oil_vs_spore_slime_t1() {
 
     let player_stats = calculate_stats(&inventory);
     assert_eq!(
-        player_stats.max_hp, 14,
-        "max_hp should be 10 base + 4 Work Vest"
+        player_stats.max_hp, 19,
+        "max_hp should be 15 base + 4 Work Vest"
     );
     assert_eq!(player_stats.strikes, 1, "strikes should be 1");
 
     // Now run the combat
     let outcome = run_combat(
-        14, // Player at full HP (14/14)
+        19, // Player at full HP (19/19)
         basic_pickaxe_with_oils(&[ToolOilModification::PlusAtk]),
         vec![work_vest()],
         ids::SPORE_SLIME,
@@ -734,8 +734,8 @@ fn test_work_vest_atk_oil_vs_spore_slime_t1() {
     // Verify outcome
     assert!(outcome.player_won, "Player should win");
     assert_eq!(
-        outcome.final_player_hp, 9,
-        "Player should end with 9 HP (Chill +1 damage on Turn 1)"
+        outcome.final_player_hp, 14,
+        "Player should end with 14 HP (Chill +1 damage on Turn 1)"
     );
     assert!(outcome.final_enemy_hp <= 0, "Enemy should be dead");
     assert_eq!(outcome.turns_taken, 5, "Combat should take 5 turns");
@@ -749,13 +749,13 @@ fn test_work_vest_max_hp_not_double_counted() {
 
     let player_stats = calculate_stats(&inventory);
     let player_effects = generate_combat_effects(&inventory);
-    let player_input = build_player_combatant(14, &player_stats, &player_effects);
+    let player_input = build_player_combatant(19, &player_stats, &player_effects);
 
-    // MaxHp should be 14 (10 base + 4 Work Vest)
-    assert_eq!(player_stats.max_hp, 14);
-    assert_eq!(player_input.max_hp, 14);
-    // HP should be 14 (we passed 14)
-    assert_eq!(player_input.hp, 14);
+    // MaxHp should be 19 (15 base + 4 Work Vest)
+    assert_eq!(player_stats.max_hp, 19);
+    assert_eq!(player_input.max_hp, 19);
+    // HP should be 19 (we passed 19)
+    assert_eq!(player_input.hp, 19);
     // ARM should be 0 at input time (Work Vest +1 ARM is applied during combat BattleStart)
     assert_eq!(player_input.arm, 0);
 }

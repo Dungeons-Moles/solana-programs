@@ -148,6 +148,9 @@ pub mod session_manager {
             session.active_item_pool = player_profile.active_item_pool;
             // Store session key signer pubkey
             session.session_signer = session_signer_key;
+            session.settled = false;
+            session.settled_victory = false;
+            session.settled_at = 0;
         }
 
         // 1. Generate Map
@@ -303,6 +306,9 @@ pub mod session_manager {
             session.bump = ctx.bumps.game_session;
             session.active_item_pool = player_profile.active_item_pool;
             session.session_signer = session_signer_key;
+            session.settled = false;
+            session.settled_victory = false;
+            session.settled_at = 0;
         }
 
         map_generator::cpi::generate_map_with_seed(
@@ -454,6 +460,9 @@ pub mod session_manager {
             session.bump = ctx.bumps.game_session;
             session.active_item_pool = player_profile.active_item_pool;
             session.session_signer = session_signer_key;
+            session.settled = false;
+            session.settled_victory = false;
+            session.settled_at = 0;
         }
 
         map_generator::cpi::generate_map_with_seed(
@@ -891,12 +900,25 @@ pub mod session_manager {
     /// This is designed to be called automatically by the frontend after combat,
     /// signed only by the session key signer (no user interaction required).
     pub fn end_session(ctx: Context<EndSession>, _campaign_level: u8) -> Result<()> {
-        let session = &ctx.accounts.game_session;
-        let game_state = &ctx.accounts.game_state;
         let clock = Clock::get()?;
         let authority_bump = ctx.bumps.session_manager_authority;
         let authority_signer_seeds: &[&[u8]] = &[SESSION_MANAGER_AUTHORITY_SEED, &[authority_bump]];
         let signer_seeds: &[&[&[u8]]] = &[authority_signer_seeds];
+        let game_session_key = ctx.accounts.game_session.key();
+
+        validate_gameplay_runtime_accounts(
+            &game_session_key,
+            &ctx.accounts.game_state.to_account_info(),
+            &ctx.accounts.map_enemies.to_account_info(),
+        )?;
+        validate_secondary_runtime_accounts(
+            &game_session_key,
+            &ctx.accounts.generated_map.to_account_info(),
+            &ctx.accounts.inventory.to_account_info(),
+            &ctx.accounts.map_pois.to_account_info(),
+        )?;
+
+        let game_state = read_game_state_unchecked(&ctx.accounts.game_state.to_account_info())?;
 
         // Do not trust `session.is_delegated` bit here; legacy undelegate flows can leave
         // the flag stale even after ownership returns to session-manager.
@@ -905,18 +927,31 @@ pub mod session_manager {
         // Any other state closes as defeat so cleanup can recover stuck sessions.
         let victory = game_state.completed && !game_state.is_dead;
 
-        // Record run result via CPI to player-profile
-        // This updates total_runs, and on first-time victory unlocks next level + random item
-        record_run_result_cpi(
-            &ctx.accounts.player_profile_program,
-            &ctx.accounts.player_profile.to_account_info(),
-            &ctx.accounts.game_session.to_account_info(),
-            &ctx.accounts.session_signer.to_account_info(),
-            &ctx.accounts.session_manager_authority.to_account_info(),
-            session.campaign_level,
-            victory,
-            signer_seeds,
-        )?;
+        if !ctx.accounts.game_session.settled {
+            record_run_result_cpi(
+                &ctx.accounts.player_profile_program,
+                &ctx.accounts.player_profile.to_account_info(),
+                &ctx.accounts.game_session.to_account_info(),
+                &ctx.accounts.session_signer.to_account_info(),
+                &ctx.accounts.session_manager_authority.to_account_info(),
+                ctx.accounts.game_session.campaign_level,
+                victory,
+                signer_seeds,
+            )?;
+            let session = &mut ctx.accounts.game_session;
+            session.settled = true;
+            session.settled_victory = victory;
+            session.settled_at = clock.unix_timestamp;
+            emit!(SessionResultSettled {
+                player: session.player,
+                session_id: session.session_id,
+                campaign_level: session.campaign_level,
+                victory,
+                timestamp: clock.unix_timestamp,
+            });
+        }
+
+        let session = &ctx.accounts.game_session;
 
         emit!(SessionEnded {
             player: session.player,
@@ -979,16 +1014,162 @@ pub mod session_manager {
         Ok(())
     }
 
+    /// Settles run outcome into player-profile without requiring account closure.
+    /// This is idempotent and can be retried independently when close fails.
+    pub fn settle_session_result(ctx: Context<SettleSessionResult>, _campaign_level: u8) -> Result<()> {
+        let clock = Clock::get()?;
+
+        let (expected_game_state, _) =
+            Pubkey::find_program_address(&[b"game_state", ctx.accounts.game_session.key().as_ref()], &gameplay_state::ID);
+        require_keys_eq!(
+            ctx.accounts.game_state.key(),
+            expected_game_state,
+            SessionManagerError::Unauthorized
+        );
+
+        let game_state = read_game_state_unchecked(&ctx.accounts.game_state)?;
+        require!(
+            game_state.is_dead || game_state.completed,
+            SessionManagerError::RunNotTerminal
+        );
+        let victory = game_state.completed && !game_state.is_dead;
+
+        let authority_bump = ctx.bumps.session_manager_authority;
+        let authority_signer_seeds: &[&[u8]] = &[SESSION_MANAGER_AUTHORITY_SEED, &[authority_bump]];
+        let signer_seeds: &[&[&[u8]]] = &[authority_signer_seeds];
+
+        if !ctx.accounts.game_session.settled {
+            record_run_result_cpi(
+                &ctx.accounts.player_profile_program,
+                &ctx.accounts.player_profile.to_account_info(),
+                &ctx.accounts.game_session.to_account_info(),
+                &ctx.accounts.session_signer.to_account_info(),
+                &ctx.accounts.session_manager_authority.to_account_info(),
+                ctx.accounts.game_session.campaign_level,
+                victory,
+                signer_seeds,
+            )?;
+            let session = &mut ctx.accounts.game_session;
+            session.settled = true;
+            session.settled_victory = victory;
+            session.settled_at = clock.unix_timestamp;
+            emit!(SessionResultSettled {
+                player: session.player,
+                session_id: session.session_id,
+                campaign_level: session.campaign_level,
+                victory,
+                timestamp: clock.unix_timestamp,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Emergency fallback: settle run result (if needed) and close only the game_session account.
+    /// This allows users to recover from ER child-account undelegation failures and start new runs.
+    /// Child runtime accounts may remain delegated/stuck and must be cleaned up separately.
+    pub fn close_session_only(ctx: Context<CloseSessionOnly>) -> Result<()> {
+        let clock = Clock::get()?;
+
+        let (expected_game_state, _) =
+            Pubkey::find_program_address(&[b"game_state", ctx.accounts.game_session.key().as_ref()], &gameplay_state::ID);
+        require_keys_eq!(
+            ctx.accounts.game_state.key(),
+            expected_game_state,
+            SessionManagerError::Unauthorized
+        );
+
+        // Best-effort terminal detection from base-layer game_state.
+        // If ER commit lag leaves base game_state non-terminal/stale, force-close
+        // as defeat so the player is never permanently blocked from starting a new run.
+        let victory = match read_game_state_unchecked(&ctx.accounts.game_state) {
+            Ok(game_state) if game_state.is_dead || game_state.completed => {
+                game_state.completed && !game_state.is_dead
+            }
+            _ => false,
+        };
+
+        let authority_bump = ctx.bumps.session_manager_authority;
+        let authority_signer_seeds: &[&[u8]] = &[SESSION_MANAGER_AUTHORITY_SEED, &[authority_bump]];
+        let signer_seeds: &[&[&[u8]]] = &[authority_signer_seeds];
+
+        if !ctx.accounts.game_session.settled {
+            record_run_result_cpi(
+                &ctx.accounts.player_profile_program,
+                &ctx.accounts.player_profile.to_account_info(),
+                &ctx.accounts.game_session.to_account_info(),
+                &ctx.accounts.session_signer.to_account_info(),
+                &ctx.accounts.session_manager_authority.to_account_info(),
+                ctx.accounts.game_session.campaign_level,
+                victory,
+                signer_seeds,
+            )?;
+            let session = &mut ctx.accounts.game_session;
+            session.settled = true;
+            session.settled_victory = victory;
+            session.settled_at = clock.unix_timestamp;
+            emit!(SessionResultSettled {
+                player: session.player,
+                session_id: session.session_id,
+                campaign_level: session.campaign_level,
+                victory,
+                timestamp: clock.unix_timestamp,
+            });
+        }
+
+        let session = &ctx.accounts.game_session;
+        emit!(SessionEnded {
+            player: session.player,
+            session_id: session.session_id,
+            campaign_level: session.campaign_level,
+            victory,
+            final_state_hash: session.state_hash,
+            timestamp: clock.unix_timestamp,
+        });
+
+        // game_session closes via `close = player` account constraint.
+        Ok(())
+    }
+
     /// Abandons a session at any time (user-initiated).
     /// Requires the main wallet signature.
     /// Used when player wants to quit a session early.
     /// Closes all session-related accounts to allow starting a new session on the same level.
     pub fn abandon_session(ctx: Context<AbandonSession>, _campaign_level: u8) -> Result<()> {
-        let session = &ctx.accounts.game_session;
         let clock = Clock::get()?;
 
         // Do not trust `session.is_delegated` bit here; legacy undelegate flows can leave
         // the flag stale even after ownership returns to session-manager.
+
+        // Abandon settles as defeat unless already settled.
+        let authority_bump = ctx.bumps.session_manager_authority;
+        let authority_signer_seeds: &[&[u8]] = &[SESSION_MANAGER_AUTHORITY_SEED, &[authority_bump]];
+        let signer_seeds: &[&[&[u8]]] = &[authority_signer_seeds];
+        if !ctx.accounts.game_session.settled {
+            record_run_result_cpi(
+                &ctx.accounts.player_profile_program,
+                &ctx.accounts.player_profile.to_account_info(),
+                &ctx.accounts.game_session.to_account_info(),
+                &ctx.accounts.session_signer.to_account_info(),
+                &ctx.accounts.session_manager_authority.to_account_info(),
+                ctx.accounts.game_session.campaign_level,
+                false,
+                signer_seeds,
+            )?;
+            let session = &mut ctx.accounts.game_session;
+            session.settled = true;
+            session.settled_victory = false;
+            session.settled_at = clock.unix_timestamp;
+            emit!(SessionResultSettled {
+                player: session.player,
+                session_id: session.session_id,
+                campaign_level: session.campaign_level,
+                victory: false,
+                timestamp: clock.unix_timestamp,
+            });
+        }
+
+        let session = &ctx.accounts.game_session;
 
         emit!(SessionEnded {
             player: session.player,
@@ -1543,6 +1724,12 @@ fn store_game_session_unchecked(
     Ok(())
 }
 
+fn read_game_state_unchecked(game_state_info: &AccountInfo<'_>) -> Result<GameState> {
+    let data = game_state_info.try_borrow_data()?;
+    let mut data_slice: &[u8] = &data;
+    GameState::try_deserialize(&mut data_slice)
+}
+
 /// End session after death or level completion.
 /// Only session key signer needs to sign - player just receives rent refund.
 /// Closes all session-related accounts: session, game_state, generated_map, map_enemies, map_pois, inventory.
@@ -1558,13 +1745,9 @@ pub struct EndSession<'info> {
     pub game_session: Account<'info, GameSession>,
 
     /// Game state account to validate death/completion status (closed via gameplay-state CPI)
-    #[account(
-        mut,
-        seeds = [b"game_state", game_session.key().as_ref()],
-        bump = game_state.bump,
-        seeds::program = gameplay_state::ID,
-    )]
-    pub game_state: Account<'info, GameState>,
+    #[account(mut)]
+    /// CHECK: Validated by PDA derivation in handler and deserialized via read_game_state_unchecked.
+    pub game_state: UncheckedAccount<'info>,
 
     /// Map enemies account (closed via gameplay-state CPI)
     #[account(mut)]
@@ -1590,8 +1773,8 @@ pub struct EndSession<'info> {
     )]
     pub player_profile: Account<'info, PlayerProfile>,
 
-    /// Player wallet - receives rent refund but does NOT need to sign
-    /// CHECK: Validated by has_one constraint on game_session
+    /// Player wallet - receives rent refund but does NOT need to sign.
+    /// CHECK: Validated by has_one constraint on game_session.
     #[account(mut)]
     pub player: AccountInfo<'info>,
 
@@ -1625,6 +1808,95 @@ pub struct EndSession<'info> {
     #[account(address = POI_SYSTEM_PROGRAM_ID)]
     /// CHECK: POI system program for CPI, validated by address constraint
     pub poi_system_program: UncheckedAccount<'info>,
+}
+
+/// Settles run result into player-profile without closing any accounts.
+#[derive(Accounts)]
+#[instruction(campaign_level: u8)]
+pub struct SettleSessionResult<'info> {
+    #[account(
+        mut,
+        has_one = player @ SessionManagerError::Unauthorized,
+        has_one = session_signer @ SessionManagerError::Unauthorized,
+    )]
+    pub game_session: Account<'info, GameSession>,
+
+    /// Game state account can still be delegated; validated in handler.
+    #[account(mut)]
+    /// CHECK: Validated by PDA derivation and deserialized in handler.
+    pub game_state: UncheckedAccount<'info>,
+
+    /// Player profile for recording run result
+    #[account(
+        mut,
+        seeds = [b"player", player.key().as_ref()],
+        bump,
+        seeds::program = PlayerProfileRef::id()
+    )]
+    pub player_profile: Account<'info, PlayerProfile>,
+
+    /// Player wallet - validated by has_one constraint.
+    /// CHECK: Has-one relation on game_session ensures this is the session owner.
+    #[account(mut)]
+    pub player: AccountInfo<'info>,
+
+    /// Session key signer - authorizes settlement without wallet popup
+    #[account(mut)]
+    pub session_signer: Signer<'info>,
+
+    #[account(
+        seeds = [SESSION_MANAGER_AUTHORITY_SEED],
+        bump
+    )]
+    /// CHECK: PDA signer used to authorize player-profile run-result CPI.
+    pub session_manager_authority: UncheckedAccount<'info>,
+
+    #[account(address = PLAYER_PROFILE_PROGRAM_ID)]
+    /// CHECK: Player profile program for manual CPI, validated by address constraint
+    pub player_profile_program: UncheckedAccount<'info>,
+}
+
+/// Emergency fallback: close only the game_session account after terminal state settlement.
+#[derive(Accounts)]
+pub struct CloseSessionOnly<'info> {
+    #[account(
+        mut,
+        has_one = player @ SessionManagerError::Unauthorized,
+        has_one = session_signer @ SessionManagerError::Unauthorized,
+        close = player
+    )]
+    pub game_session: Account<'info, GameSession>,
+
+    /// Game state account can still be delegated; validated in handler.
+    #[account(mut)]
+    /// CHECK: Validated by PDA derivation and deserialized in handler.
+    pub game_state: UncheckedAccount<'info>,
+
+    /// Player profile for recording run result (if not settled yet)
+    #[account(
+        mut,
+        seeds = [b"player", player.key().as_ref()],
+        bump,
+        seeds::program = PlayerProfileRef::id()
+    )]
+    pub player_profile: Account<'info, PlayerProfile>,
+
+    /// CHECK: Validated by has_one constraint on game_session.
+    #[account(mut)]
+    pub player: AccountInfo<'info>,
+
+    pub session_signer: Signer<'info>,
+
+    #[account(
+        seeds = [SESSION_MANAGER_AUTHORITY_SEED],
+        bump
+    )]
+    /// CHECK: PDA signer used to authorize player-profile run-result CPI.
+    pub session_manager_authority: UncheckedAccount<'info>,
+
+    #[account(address = PLAYER_PROFILE_PROGRAM_ID)]
+    /// CHECK: Player profile program for manual CPI, validated by address constraint
+    pub player_profile_program: UncheckedAccount<'info>,
 }
 
 /// Abandon session at any time (user-initiated).
@@ -1670,6 +1942,22 @@ pub struct AbandonSession<'info> {
     #[account(mut)]
     pub session_signer: Signer<'info>,
 
+    /// Player profile for recording run result (defeat) if not settled yet
+    #[account(
+        mut,
+        seeds = [b"player", player.key().as_ref()],
+        bump,
+        seeds::program = PlayerProfileRef::id()
+    )]
+    pub player_profile: Account<'info, PlayerProfile>,
+
+    #[account(
+        seeds = [SESSION_MANAGER_AUTHORITY_SEED],
+        bump
+    )]
+    /// CHECK: PDA signer used to authorize player-profile run-result CPI.
+    pub session_manager_authority: UncheckedAccount<'info>,
+
     /// Player's inventory account (closed via CPI)
     #[account(mut)]
     /// CHECK: Validated by player-inventory CPI
@@ -1677,6 +1965,10 @@ pub struct AbandonSession<'info> {
 
     pub player_inventory_program: Program<'info, PlayerInventory>,
     pub gameplay_state_program: Program<'info, GameplayState>,
+
+    #[account(address = PLAYER_PROFILE_PROGRAM_ID)]
+    /// CHECK: Player profile program for manual CPI, validated by address constraint
+    pub player_profile_program: UncheckedAccount<'info>,
 
     #[account(address = MAP_GENERATOR_PROGRAM_ID)]
     /// CHECK: Map generator program for CPI, validated by address constraint
@@ -1714,6 +2006,15 @@ pub struct SessionEnded {
     pub campaign_level: u8,
     pub victory: bool,
     pub final_state_hash: [u8; 32],
+    pub timestamp: i64,
+}
+
+#[event]
+pub struct SessionResultSettled {
+    pub player: Pubkey,
+    pub session_id: u64,
+    pub campaign_level: u8,
+    pub victory: bool,
     pub timestamp: i64,
 }
 

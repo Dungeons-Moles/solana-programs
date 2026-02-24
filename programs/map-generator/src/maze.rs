@@ -94,15 +94,21 @@ impl Cell {
 
 const POI_MIN_SPACING: u8 = 10;
 
-const BASELINE_L2_SUPPLY_CACHE: [u8; 4] = [10, 9, 8, 7];
-const BASELINE_L3_TOOL_CRATE: [u8; 4] = [3, 2, 2, 2];
-const BASELINE_L4_TOOL_OIL: [u8; 4] = [2, 1, 1, 1];
-const BASELINE_L6_SURVEY_BEACON: [u8; 4] = [1, 2, 1, 1];
-const BASELINE_L10_RUSTY_ANVIL: [u8; 4] = [1, 1, 1, 1];
-
-const GUARANTEED_L5_REST_ALCOVE: [u8; 4] = [2, 3, 1, 2];
-const GUARANTEED_L13_COUNTER_CACHE_BASE: [u8; 4] = [2, 2, 2, 2];
-const GUARANTEED_L13_WEEK3_CHANCE_PERCENT: [u8; 4] = [50, 100, 30, 20];
+// Baseline POI counts per act [Act1, Act2, Act3, Act4].
+// Higher acts = fewer POIs (harder scarcity).
+const BASELINE_L2_SUPPLY_CACHE: [u8; 4] = [16, 14, 14, 10];
+const BASELINE_L3_TOOL_CRATE: [u8; 4] = [5, 4, 4, 2];
+const BASELINE_L4_TOOL_OIL: [u8; 4] = [5, 4, 4, 3];
+const BASELINE_L5_REST_ALCOVE: [u8; 4] = [6, 5, 5, 4];
+const BASELINE_L6_SURVEY_BEACON: [u8; 4] = [4, 4, 4, 3];
+const BASELINE_L7_SEISMIC_SCANNER: [u8; 4] = [3, 3, 3, 2];
+const BASELINE_L8_RAIL_WAYPOINT: [u8; 4] = [5, 4, 4, 2];
+const BASELINE_L9_SMUGGLER_HATCH: [u8; 4] = [2, 2, 2, 1];
+const BASELINE_L10_RUSTY_ANVIL: [u8; 4] = [2, 2, 2, 1];
+const BASELINE_L11_RUNE_KILN: [u8; 4] = [2, 1, 1, 1];
+const BASELINE_L12_GEODE_VAULT: [u8; 4] = [2, 1, 1, 1];
+const BASELINE_L13_COUNTER_CACHE: [u8; 4] = [2, 2, 2, 2];
+const BASELINE_L14_SCRAP_CHUTE: [u8; 4] = [3, 2, 2, 1];
 
 // ==========================================================================
 // Enemy Placement Configuration
@@ -119,12 +125,12 @@ const EASY_POOL: [u8; 5] = [0, 1, 8, 10, 11]; // Rat, Bat, Wisp, Coin Slug, Bloo
 const MEDIUM_POOL: [u8; 4] = [2, 3, 5, 9]; // Spore, Rust Mite, Shard Beetle, Powder Tick
 const HARD_POOL: [u8; 3] = [4, 6, 7]; // Collapsed Miner, Tunnel Warden, Burrow Ambusher
 
-/// Week-based enemy pool weights represented as [easy, medium, hard] percentages.
-/// We map near/mid/far distance bands to week 1/2/3 respectively.
+/// Enemy pool weights by distance band: [easy%, medium%, hard%].
+/// Near spawn = easier enemies, far from spawn = harder enemies.
 const DISTANCE_POOL_WEIGHTS: [[u8; 3]; 3] = [
-    [60, 30, 10], // Near spawn (week 1 profile)
-    [40, 40, 20], // Mid map (week 2 profile)
-    [30, 40, 30], // Far map (week 3 profile)
+    [60, 30, 10], // Near spawn (0-33% distance)
+    [40, 40, 20], // Mid map (34-66% distance)
+    [30, 40, 30], // Far map (67-100% distance)
 ];
 
 /// Tier distribution near spawn: 80% T1 / 15% T2 / 5% T3
@@ -171,29 +177,20 @@ fn act_index_from_campaign_level(campaign_level: u8) -> usize {
 fn poi_target_counts_for_act(act_index: usize, rng: &mut SeededRNG) -> [u8; 15] {
     let mut targets = [0u8; 15];
 
-    // Fixed/core utilities
-    targets[1] = 1; // L1 Mole Den
-    targets[5] = GUARANTEED_L5_REST_ALCOVE[act_index]; // L5 Rest Alcove
-    targets[7] = 1; // L7 Seismic Scanner
-    targets[8] = 2; // L8 Rail Waypoint
-    targets[9] = 1; // L9 Smuggler Hatch
-    targets[11] = 1; // L11 Rune Kiln
-    targets[12] = 1; // L12 Geode Vault
-    targets[14] = 1; // L14 Scrap Chute
-
-    // Baseline common/uncommon counts
+    targets[1] = 1; // L1 Mole Den (fixed)
     targets[2] = BASELINE_L2_SUPPLY_CACHE[act_index];
     targets[3] = BASELINE_L3_TOOL_CRATE[act_index];
     targets[4] = BASELINE_L4_TOOL_OIL[act_index];
+    targets[5] = BASELINE_L5_REST_ALCOVE[act_index];
     targets[6] = BASELINE_L6_SURVEY_BEACON[act_index];
+    targets[7] = BASELINE_L7_SEISMIC_SCANNER[act_index];
+    targets[8] = BASELINE_L8_RAIL_WAYPOINT[act_index];
+    targets[9] = BASELINE_L9_SMUGGLER_HATCH[act_index];
     targets[10] = BASELINE_L10_RUSTY_ANVIL[act_index];
-
-    // Counter Cache (L13): week 1 + week 2 guaranteed, week 3 chance by act
-    targets[13] = GUARANTEED_L13_COUNTER_CACHE_BASE[act_index];
-    let week3_roll = (rng.next_val() % 100) as u8;
-    if week3_roll < GUARANTEED_L13_WEEK3_CHANCE_PERCENT[act_index] {
-        targets[13] = targets[13].saturating_add(1);
-    }
+    targets[11] = BASELINE_L11_RUNE_KILN[act_index];
+    targets[12] = BASELINE_L12_GEODE_VAULT[act_index];
+    targets[13] = BASELINE_L13_COUNTER_CACHE[act_index];
+    targets[14] = BASELINE_L14_SCRAP_CHUTE[act_index];
 
     targets
 }
@@ -926,7 +923,7 @@ mod tests {
             enemy_count: 0,
             enemies: [crate::state::EnemySpawn::default(); 48],
             poi_count: 0,
-            pois: [crate::state::PoiSpawn::default(); 50],
+            pois: [crate::state::PoiSpawn::default(); MAX_POIS],
             bump: 0,
         }
     }
@@ -1199,10 +1196,19 @@ mod tests {
     #[test]
     fn test_poi_targets_match_gdd_per_act() {
         let levels = [1u8, 11u8, 21u8, 31u8];
-        let expected_l2 = [10usize, 9, 8, 7];
-        let expected_l4 = [2usize, 1, 1, 1];
-        let expected_l5 = [2usize, 3, 1, 2];
-        let expected_l6 = [1usize, 2, 1, 1];
+        // Higher acts = fewer POIs (harder scarcity)
+        let expected_l2 = [16usize, 14, 14, 10];
+        let expected_l3 = [5usize, 4, 4, 2];
+        let expected_l4 = [5usize, 4, 4, 3];
+        let expected_l5 = [6usize, 5, 5, 4];
+        let expected_l6 = [4usize, 4, 4, 3];
+        let expected_l7 = [3usize, 3, 3, 2];
+        let expected_l8 = [5usize, 4, 4, 2];
+        let expected_l9 = [2usize, 2, 2, 1];
+        let expected_l10 = [2usize, 2, 2, 1];
+        let expected_l11 = [2usize, 1, 1, 1];
+        let expected_l12 = [2usize, 1, 1, 1];
+        let expected_l14 = [3usize, 2, 2, 1];
 
         for (act_idx, campaign_level) in levels.iter().copied().enumerate() {
             let mut map = create_test_map();
@@ -1212,47 +1218,21 @@ mod tests {
                 campaign_level
             ));
 
-            assert_eq!(count_pois_by_type(&map, 1), 1, "L1 count mismatch");
-            assert_eq!(
-                count_pois_by_type(&map, 2),
-                expected_l2[act_idx],
-                "L2 count mismatch"
-            );
-            let expected_l3 = [3usize, 2, 2, 2];
-            assert_eq!(count_pois_by_type(&map, 3), expected_l3[act_idx], "L3 count mismatch");
-            assert_eq!(
-                count_pois_by_type(&map, 4),
-                expected_l4[act_idx],
-                "L4 count mismatch"
-            );
-            assert_eq!(
-                count_pois_by_type(&map, 5),
-                expected_l5[act_idx],
-                "L5 count mismatch"
-            );
-            assert_eq!(
-                count_pois_by_type(&map, 6),
-                expected_l6[act_idx],
-                "L6 count mismatch"
-            );
-            assert_eq!(count_pois_by_type(&map, 7), 1, "L7 count mismatch");
-            assert_eq!(count_pois_by_type(&map, 8), 2, "L8 count mismatch");
-            assert_eq!(count_pois_by_type(&map, 9), 1, "L9 count mismatch");
-            assert_eq!(count_pois_by_type(&map, 10), 1, "L10 count mismatch");
-            assert_eq!(count_pois_by_type(&map, 11), 1, "L11 count mismatch");
-            assert_eq!(count_pois_by_type(&map, 12), 1, "L12 count mismatch");
-            assert_eq!(count_pois_by_type(&map, 14), 1, "L14 count mismatch");
+            assert_eq!(count_pois_by_type(&map, 1), 1, "L1 count mismatch act {}", act_idx + 1);
+            assert_eq!(count_pois_by_type(&map, 2), expected_l2[act_idx], "L2 count mismatch act {}", act_idx + 1);
+            assert_eq!(count_pois_by_type(&map, 3), expected_l3[act_idx], "L3 count mismatch act {}", act_idx + 1);
+            assert_eq!(count_pois_by_type(&map, 4), expected_l4[act_idx], "L4 count mismatch act {}", act_idx + 1);
+            assert_eq!(count_pois_by_type(&map, 5), expected_l5[act_idx], "L5 count mismatch act {}", act_idx + 1);
+            assert_eq!(count_pois_by_type(&map, 6), expected_l6[act_idx], "L6 count mismatch act {}", act_idx + 1);
+            assert_eq!(count_pois_by_type(&map, 7), expected_l7[act_idx], "L7 count mismatch act {}", act_idx + 1);
+            assert_eq!(count_pois_by_type(&map, 8), expected_l8[act_idx], "L8 count mismatch act {}", act_idx + 1);
+            assert_eq!(count_pois_by_type(&map, 9), expected_l9[act_idx], "L9 count mismatch act {}", act_idx + 1);
+            assert_eq!(count_pois_by_type(&map, 10), expected_l10[act_idx], "L10 count mismatch act {}", act_idx + 1);
+            assert_eq!(count_pois_by_type(&map, 11), expected_l11[act_idx], "L11 count mismatch act {}", act_idx + 1);
+            assert_eq!(count_pois_by_type(&map, 12), expected_l12[act_idx], "L12 count mismatch act {}", act_idx + 1);
+            assert_eq!(count_pois_by_type(&map, 14), expected_l14[act_idx], "L14 count mismatch act {}", act_idx + 1);
 
-            let l13_count = count_pois_by_type(&map, 13);
-            if act_idx == 1 {
-                assert_eq!(l13_count, 3, "Act 2 must guarantee 3 Counter Caches");
-            } else {
-                assert!(
-                    l13_count == 2 || l13_count == 3,
-                    "Counter Cache count should be 2 or 3, got {}",
-                    l13_count
-                );
-            }
+            assert_eq!(count_pois_by_type(&map, 13), 2, "L13 count mismatch act {}", act_idx + 1);
         }
     }
 

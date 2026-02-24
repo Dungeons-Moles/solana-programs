@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 
 /// Maximum number of POIs per map
-pub const MAX_POIS: usize = 50;
+pub const MAX_POIS: usize = 64;
 
 /// Maximum number of shop offers
 pub const SHOP_OFFER_COUNT: usize = 6;
@@ -208,14 +208,17 @@ pub struct MapPois {
     /// Seed for deterministic POI generation
     pub seed: u64,
     /// All POIs on this map
-    #[max_len(50)]
+    #[max_len(64)]
     pub pois: Vec<PoiInstance>,
     /// Active shop session (if any)
     pub shop_state: ShopState,
-    /// Current cache offer (for pick-item POIs)
-    pub current_offer: Option<CacheOffer>,
-    /// Current oil offer (for Tool Oil Rack L4)
-    pub current_oil_offer: Option<OilOffer>,
+    /// Persisted cache offers for pick-item POIs (L2, L3, L12, L13).
+    /// Generated once per POI per session — walking away and returning yields the same offer.
+    #[max_len(20)]
+    pub cache_offers: Vec<CacheOffer>,
+    /// Persisted oil offers for Tool Oil Rack POIs (L4).
+    #[max_len(8)]
+    pub oil_offers: Vec<OilOffer>,
 }
 
 impl MapPois {

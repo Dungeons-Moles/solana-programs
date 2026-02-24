@@ -7,7 +7,7 @@
 //! during combat's BattleStart phase to avoid double-counting. Combat stats start
 //! at base values (0) and get their bonuses from BattleStart effects in the combat system.
 
-use crate::constants::{BASE_DIG, BASE_HP};
+use crate::constants::{base_hp, BASE_DIG};
 use combat_system::{EffectType, TriggerType};
 use player_inventory::effects::generate_combat_effects;
 use player_inventory::state::PlayerInventory;
@@ -39,11 +39,11 @@ const BASE_STRIKES: u8 = 1;
 ///
 /// Combat stats (ATK/ARM/SPD) are NOT calculated here - they start at base (0)
 /// and are applied during combat's BattleStart phase via item effects.
-pub fn calculate_stats(inventory: &PlayerInventory) -> PlayerStats {
+pub fn calculate_stats(inventory: &PlayerInventory, campaign_level: u8) -> PlayerStats {
     let effects = generate_combat_effects(inventory);
 
     let mut stats = PlayerStats {
-        max_hp: BASE_HP,
+        max_hp: base_hp(campaign_level),
         dig: BASE_DIG,
         strikes: BASE_STRIKES,
     };
@@ -95,51 +95,52 @@ mod tests {
     #[test]
     fn test_base_stats_empty_inventory() {
         let inventory = make_inventory();
-        let stats = calculate_stats(&inventory);
+        let stats = calculate_stats(&inventory, 20);
 
-        // Only max_hp and dig are calculated here
-        // ATK/ARM/SPD are applied during combat's BattleStart phase
-        assert_eq!(stats.max_hp, BASE_HP);
+        assert_eq!(stats.max_hp, 15);
         assert_eq!(stats.dig, BASE_DIG);
+    }
+
+    #[test]
+    fn test_base_hp_scales_by_campaign_level() {
+        let inventory = make_inventory();
+
+        let stats_low = calculate_stats(&inventory, 1);
+        assert_eq!(stats_low.max_hp, 25, "levels 1-9 should start at 25 HP");
+
+        let stats_mid = calculate_stats(&inventory, 10);
+        assert_eq!(stats_mid.max_hp, 20, "levels 10-19 should start at 20 HP");
+
+        let stats_high = calculate_stats(&inventory, 20);
+        assert_eq!(stats_high.max_hp, 15, "levels 20+ should start at 15 HP");
     }
 
     #[test]
     fn test_stats_with_max_hp_item() {
         let mut inventory = make_inventory();
-        // When Work Vest is fixed to use MaxHp effect, this test will verify
-        // that permanent HP bonuses are calculated here
-        // For now, test with empty inventory shows base values
-        let stats = calculate_stats(&inventory);
-        assert_eq!(stats.max_hp, BASE_HP);
+        let stats = calculate_stats(&inventory, 20);
+        assert_eq!(stats.max_hp, 15);
     }
 
     #[test]
     fn test_stats_with_dig_item() {
         let mut inventory = make_inventory();
-        // G-MV-05 (Mining Lantern): +1 DIG at BattleStart
         inventory.gear[0] = Some(ItemInstance::new(*b"G-MV-05\0", Tier::I));
 
-        let stats = calculate_stats(&inventory);
+        let stats = calculate_stats(&inventory, 20);
 
-        // Base DIG (1) + Mining Lantern effect
-        // Note: The actual value depends on the item definition
         assert!(stats.dig >= BASE_DIG);
     }
 
     #[test]
     fn test_stats_only_calculates_permanent_bonuses() {
         let mut inventory = make_inventory();
-        // Tool with ATK (T-FR-01 Rime Pike): This should NOT affect stats
-        // because ATK is applied during combat's BattleStart phase, not here
         inventory.tool = Some(ItemInstance::new(*b"T-FR-01\0", Tier::II));
-        // Gear with ARM (G-ST-01 Miner Helmet): This should NOT affect stats
         inventory.gear[0] = Some(ItemInstance::new(*b"G-ST-01\0", Tier::I));
 
-        let stats = calculate_stats(&inventory);
+        let stats = calculate_stats(&inventory, 20);
 
-        // max_hp and dig should be at base values since these items
-        // only provide ATK/ARM bonuses (applied in combat, not here)
-        assert_eq!(stats.max_hp, BASE_HP);
+        assert_eq!(stats.max_hp, 15);
         assert_eq!(stats.dig, BASE_DIG);
     }
 }

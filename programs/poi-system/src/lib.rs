@@ -533,7 +533,7 @@ pub mod poi_system {
         let inventory = &ctx.accounts.inventory;
 
         let (poi, _) = get_and_validate_poi(map_pois, game_state, poi_index, false)?;
-        let player_stats = gameplay_state::stats::calculate_stats(inventory);
+        let player_stats = gameplay_state::stats::calculate_stats(inventory, game_state.campaign_level);
 
         // Get values for rest interaction (i16 to handle HP > 255 or negative values)
         let current_hp = game_state.hp;
@@ -596,10 +596,11 @@ pub mod poi_system {
     /// Generate and store cache offers for a pick-item POI (L2, L3, L12, L13).
     ///
     /// This instruction generates offers using an on-chain derived seed (Clock)
-    /// and stores them in `MapPois.current_offer` so the frontend can read them.
+    /// and stores them in `MapPois.cache_offers` so the frontend can read them.
     /// The user then calls `interact_pick_item` with their chosen index.
     ///
-    /// Must be called before `interact_pick_item` for pick-item POIs.
+    /// Offers persist for the entire session — revisiting a POI returns the
+    /// same offer instead of regenerating (VRF-ready).
     pub fn generate_cache_offer(ctx: Context<InteractPickItem>, poi_index: u8) -> Result<()> {
         let map_pois = &mut ctx.accounts.map_pois;
         let game_state = &ctx.accounts.game_state;
@@ -611,16 +612,20 @@ pub mod poi_system {
         let poi_type = poi.poi_type;
         let act = map_pois.act;
 
+        // Reject if an offer already exists for this exact POI (prevents rerolls).
         require!(
-            map_pois.current_offer.is_none(),
+            !map_pois
+                .cache_offers
+                .iter()
+                .any(|o| o.poi_index == poi_index),
             PoiSystemError::OfferAlreadyGenerated
         );
 
-        // Deterministic per-session/per-position seed prevents free timing rerolls.
+        // Deterministic per-session/per-POI seed — same POI always yields the same
+        // offer within a session, so walking away and coming back is not a free reroll.
         let seed = map_pois.seed
             ^ ((poi_index as u64) << 8)
-            ^ ((act as u64) << 16)
-            ^ ((game_state.total_moves as u64) << 32);
+            ^ ((act as u64) << 16);
 
         // Fetch boss weaknesses on-chain
         let week = to_boss_week(game_state.week)?;
@@ -760,7 +765,7 @@ pub mod poi_system {
             }
         }
 
-        map_pois.current_offer = Some(state::CacheOffer {
+        map_pois.cache_offers.push(state::CacheOffer {
             poi_index,
             items,
             generated_at_seed: seed,
@@ -786,7 +791,7 @@ pub mod poi_system {
     /// - L13 (Counter Cache): Pick 1 of 3 weakness-tagged items
     ///
     /// Requires `generate_cache_offer` to have been called first.
-    /// Reads the stored offers from `current_offer` and applies the user's choice.
+    /// Reads the stored offer from `cache_offers` and applies the user's choice.
     ///
     /// After validating the pick, this instruction calls player-inventory to
     /// equip the item via CPI (equip_gear_authorized or equip_tool_authorized).
@@ -808,14 +813,13 @@ pub mod poi_system {
         let y = poi.y;
         let is_night = game_state.phase.is_night();
 
-        // Read cached offers instead of regenerating
-        let cached = map_pois
-            .current_offer
+        // Find the saved offer for this POI
+        let offer_pos = map_pois
+            .cache_offers
+            .iter()
+            .position(|o| o.poi_index == poi_index)
             .ok_or(PoiSystemError::NoActiveInteraction)?;
-        require!(
-            cached.poi_index == poi_index,
-            PoiSystemError::InvalidPoiIndex
-        );
+        let cached = map_pois.cache_offers[offer_pos];
 
         // Convert cached OfferItems to ItemOffers for pick interaction
         let offers: Vec<state::ItemOffer> = cached
@@ -851,8 +855,8 @@ pub mod poi_system {
             map_pois.pois[poi_index as usize].used = true;
         }
 
-        // Clear current offer after pick
-        map_pois.current_offer = None;
+        // Remove the consumed offer from saved offers
+        map_pois.cache_offers.swap_remove(offer_pos);
 
         emit!(ItemPicked {
             session: map_pois.session,
@@ -875,10 +879,11 @@ pub mod poi_system {
     /// Generate and store oil offers for a Tool Oil Rack (L4).
     ///
     /// This instruction generates 3 of 4 possible oils using an on-chain derived seed
-    /// and stores them in `MapPois.current_oil_offer` so the frontend can read them.
+    /// and stores them in `MapPois.oil_offers` so the frontend can read them.
     /// The user then calls `interact_tool_oil` with their chosen oil.
     ///
-    /// Must be called before `interact_tool_oil` for Tool Oil Rack POIs.
+    /// Offers persist for the entire session — revisiting a POI returns the
+    /// same offer instead of regenerating (VRF-ready).
     pub fn generate_oil_offer(ctx: Context<InteractToolOil>, poi_index: u8) -> Result<()> {
         let map_pois = &mut ctx.accounts.map_pois;
         let game_state = &ctx.accounts.game_state;
@@ -893,22 +898,26 @@ pub mod poi_system {
         // Validate it's a Tool Oil Rack (L4 = poi_type 4)
         require!(poi_type == 4, PoiSystemError::InvalidInteraction);
 
+        // Reject if an offer already exists for this exact POI (prevents rerolls).
         require!(
-            map_pois.current_oil_offer.is_none(),
+            !map_pois
+                .oil_offers
+                .iter()
+                .any(|o| o.poi_index == poi_index),
             PoiSystemError::OfferAlreadyGenerated
         );
 
-        // Deterministic per-session/per-position seed prevents free timing rerolls.
+        // Deterministic per-session/per-POI seed — same POI always yields the same
+        // offer within a session, so walking away and coming back is not a free reroll.
         let seed = map_pois.seed
             ^ ((poi_index as u64) << 8)
-            ^ ((game_state.total_moves as u64) << 32)
             ^ 0x4f494c_u64; // "OIL" domain separator
 
         // Generate oil offer
         let oil_offer = offers::create_oil_offer(poi_index, seed);
 
-        // Store in MapPois
-        map_pois.current_oil_offer = Some(oil_offer);
+        // Persist in MapPois
+        map_pois.oil_offers.push(oil_offer);
 
         emit!(OilOfferGenerated {
             session: map_pois.session,
@@ -950,14 +959,13 @@ pub mod poi_system {
         let y = poi.y;
         let is_night = game_state.phase.is_night();
 
-        // Read cached oil offer and validate selection
-        let oil_offer = map_pois
-            .current_oil_offer
+        // Find the saved oil offer for this POI
+        let offer_pos = map_pois
+            .oil_offers
+            .iter()
+            .position(|o| o.poi_index == poi_index)
             .ok_or(PoiSystemError::NoActiveInteraction)?;
-        require!(
-            oil_offer.poi_index == poi_index,
-            PoiSystemError::InvalidPoiIndex
-        );
+        let oil_offer = map_pois.oil_offers[offer_pos];
         require!(
             offers::validate_oil_selection(&oil_offer, modification),
             PoiSystemError::InvalidOilSelection
@@ -996,8 +1004,8 @@ pub mod poi_system {
         // Mark POI as used (one-time use)
         map_pois.pois[poi_index as usize].used = true;
 
-        // Clear oil offer after selection
-        map_pois.current_oil_offer = None;
+        // Remove the consumed offer from saved offers
+        map_pois.oil_offers.swap_remove(offer_pos);
 
         emit!(ToolOilApplied {
             session: map_pois.session,
@@ -1057,13 +1065,8 @@ pub mod poi_system {
         let w2 = offers::WeaknessTag::try_from(weaknesses[1] as u8)
             .unwrap_or(offers::WeaknessTag::Frost);
 
-        let generated = offers::generate_smuggler_hatch_offers(act, w1, w2, seed);
-
-        // Filter offers by active item pool from session
-        let filtered = offers::filter_offers_by_pool(
-            &generated.offers,
-            &ctx.accounts.game_session.active_item_pool,
-        );
+        let pool = &ctx.accounts.game_session.active_item_pool;
+        let generated = offers::generate_smuggler_hatch_offers(act, w1, w2, seed, pool);
 
         // Initialize shop state
         map_pois.shop_state.active = true;
@@ -1071,7 +1074,7 @@ pub mod poi_system {
         map_pois.shop_state.reroll_count = 0;
         map_pois.shop_state.rng_state = seed;
 
-        copy_shop_offers(&mut map_pois.shop_state, &filtered, false);
+        copy_shop_offers(&mut map_pois.shop_state, &generated.offers, false);
 
         emit!(ShopEntered {
             session: map_pois.session,
@@ -1188,18 +1191,13 @@ pub mod poi_system {
         let w2 = offers::WeaknessTag::try_from(weaknesses[1] as u8)
             .unwrap_or(offers::WeaknessTag::Frost);
 
-        // Generate new offers
+        // Generate new offers (pool-filtered during generation)
         let act = map_pois.act;
+        let pool = &ctx.accounts.game_session.active_item_pool;
 
-        let generated = offers::generate_smuggler_hatch_offers(act, w1, w2, seed);
+        let generated = offers::generate_smuggler_hatch_offers(act, w1, w2, seed, pool);
 
-        // Filter offers by active item pool from session
-        let filtered = offers::filter_offers_by_pool(
-            &generated.offers,
-            &ctx.accounts.game_session.active_item_pool,
-        );
-
-        copy_shop_offers(&mut map_pois.shop_state, &filtered, true);
+        copy_shop_offers(&mut map_pois.shop_state, &generated.offers, true);
 
         emit!(ShopRerolled {
             session: map_pois.session,

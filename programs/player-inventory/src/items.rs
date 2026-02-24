@@ -453,7 +453,14 @@ pub const G_SC_08: ItemDefinition = ItemDefinition {
             TriggerType::BattleStart,
             EffectType::DoubleOnHitEffects,
             false,
-            [1, 1, 1], // Value doesn't matter, enables doubling
+            [1, 1, 1], // Toggle flag, stays flat
+        ),
+        // Tier bonus: better medallion = faster reaction
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainSpd,
+            false,
+            [0, 1, 2],
         ),
     ],
 };
@@ -491,33 +498,33 @@ pub const T_GR_02: ItemDefinition = ItemDefinition {
     tag: ItemTag::Greed,
     rarity: Rarity::Heroic,
     effects: &[
-        // +1 ATK (flat across tiers per GDD)
+        // +1/1/2 ATK
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::GainAtk,
             false,
-            [1, 1, 1],
+            [1, 1, 2],
         ),
-        // +1 ARM (flat across tiers per GDD)
+        // +1/2/2 ARM
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::GainArmor,
             false,
-            [1, 1, 1],
+            [1, 2, 2],
         ),
-        // +1 DIG (flat across tiers per GDD)
+        // +1/1/2 DIG
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::GainDig,
             false,
-            [1, 1, 1],
+            [1, 1, 2],
         ),
         // First hit each turn triggers all your Shard effects
         EffectDefinition::new(
             TriggerType::OnHit,
             EffectType::TriggerAllShards,
             true, // once per turn (first hit only)
-            [1, 1, 1],
+            [1, 1, 1], // Toggle flag, stays flat
         ),
     ],
 };
@@ -803,7 +810,14 @@ pub const G_BL_05: ItemDefinition = ItemDefinition {
             TriggerType::BattleStart,
             EffectType::ReduceAllCountdowns,
             false,
-            [1, 1, 1], // Reduce by 1 at all tiers
+            [1, 1, 1], // Stays flat (scaling to 2 would make countdown-2 bombs instant)
+        ),
+        // Tier bonus: sturdier satchel gives blast protection
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainArmor,
+            false,
+            [0, 1, 2],
         ),
     ],
 };
@@ -869,7 +883,14 @@ pub const G_BL_08: ItemDefinition = ItemDefinition {
             TriggerType::BattleStart,
             EffectType::DoubleBombTrigger,
             false,
-            [1, 1, 1], // Value doesn't matter, just enables doubling
+            [1, 1, 1], // Toggle flag, stays flat
+        ),
+        // Tier bonus: refined fuse engineering = less backlash from double detonation
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::ReduceNextBombSelfDamage,
+            false,
+            [0, 1, 2],
         ),
     ],
 };
@@ -1089,26 +1110,26 @@ pub const G_FR_07: ItemDefinition = ItemDefinition {
     tag: ItemTag::Frost,
     rarity: Rarity::Heroic,
     effects: &[
-        // Every other turn: apply 1 Chill
+        // Every other turn: apply 1 Chill (status application, stays flat)
         EffectDefinition::new(
             TriggerType::EveryOtherTurn,
             EffectType::ApplyChill,
             false,
             [1, 1, 1],
         ),
-        // Every other turn: deal 1 non-weapon damage
+        // Every other turn: deal 1/2/3 non-weapon damage
         EffectDefinition::new(
             TriggerType::EveryOtherTurn,
             EffectType::DealNonWeaponDamage,
             false,
-            [1, 1, 1],
+            [1, 2, 3],
         ),
-        // If enemy already has Chill, gain +1 SPD this turn
+        // If enemy already has Chill, gain +1/1/2 SPD this turn
         EffectDefinition::with_condition(
             TriggerType::EveryOtherTurn,
             EffectType::GainSpd,
             false,
-            [1, 1, 1],
+            [1, 1, 2],
             Condition::EnemyHasStatus(StatusType::Chill),
         ),
     ],
@@ -1334,14 +1355,14 @@ pub const G_RU_07: ItemDefinition = ItemDefinition {
     tag: ItemTag::Rust,
     rarity: Rarity::Mythic,
     effects: &[
-        // OnHit (1/turn): apply +2 additional Rust
-        EffectDefinition::new(TriggerType::OnHit, EffectType::ApplyRust, true, [2, 2, 2]),
-        // OnHit (1/turn): if enemy has 0 Armor, deal 2 non-weapon damage
+        // OnHit (1/turn): apply +2/3/4 additional Rust
+        EffectDefinition::new(TriggerType::OnHit, EffectType::ApplyRust, true, [2, 3, 4]),
+        // OnHit (1/turn): if enemy has 0 Armor, deal 2/3/4 non-weapon damage
         EffectDefinition::with_condition(
             TriggerType::OnHit,
             EffectType::DealNonWeaponDamage,
             true,
-            [2, 2, 2],
+            [2, 3, 4],
             Condition::EnemyHasNoArmor,
         ),
     ],
@@ -1354,12 +1375,12 @@ pub const G_RU_08: ItemDefinition = ItemDefinition {
     tag: ItemTag::Rust,
     rarity: Rarity::Common,
     effects: &[
-        // Whenever you apply Rust (once/turn): gain 1 Gold
+        // Whenever you apply Rust (once/turn): gain 1/2/3 Gold
         EffectDefinition::new(
             TriggerType::OnApplyRust,
             EffectType::GainGold,
             true,      // once per turn
-            [1, 1, 1], // Flat 1 gold per GDD
+            [1, 2, 3],
         ),
         // Battle Start: if enemy has no Armor, apply 1 Rust anyway.
         EffectDefinition::with_condition(
@@ -1547,12 +1568,12 @@ pub const G_BO_08: ItemDefinition = ItemDefinition {
     tag: ItemTag::Blood,
     rarity: Rarity::Mythic, // GDD says Mythic
     effects: &[
-        // Your first hit each turn vs a Bleeding enemy heals more (capped approximation)
+        // Your first hit each turn vs a Bleeding enemy heals more (cap 5/7/9)
         EffectDefinition::with_condition(
             TriggerType::OnHit,
             EffectType::Heal,
             true, // once per turn (first hit only)
-            [5, 5, 5],
+            [5, 7, 9],
             Condition::EnemyHasStatus(StatusType::Bleed),
         ),
         // Self-enable bleed on hit

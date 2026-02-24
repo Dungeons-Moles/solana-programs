@@ -21,12 +21,12 @@ use combat_system::{
     ItemEffect,
 };
 use constants::{
-    BASE_ARM, BASE_ATK, BASE_HP, BASE_SPD, COMPANY_TREASURY_ADDRESS, DAY_MOVES,
+    base_hp, BASE_ARM, BASE_ATK, BASE_SPD, COMPANY_TREASURY_ADDRESS, DAY_MOVES,
     DUEL_ENTRY_LAMPORTS, DUEL_ENTRY_SEED, DUEL_OPEN_QUEUE_SEED, DUEL_QUEUE_SEED, DUEL_VAULT_SEED,
-    GAME_STATE_SEED, GAUNTLET_BOOTSTRAP_ECHOES_PER_WEEK, GAUNTLET_COMPANY_FEE_BPS,
-    GAUNTLET_CONFIG_SEED, GAUNTLET_ENTRY_LAMPORTS, GAUNTLET_EPOCH_DURATION_SECONDS,
-    GAUNTLET_EPOCH_POOL_SEED, GAUNTLET_MAX_WEEKLY_ECHOES, GAUNTLET_PLAYER_SCORE_SEED,
-    GAUNTLET_POOL_FEE_BPS, GAUNTLET_POOL_VAULT_SEED,
+    GAME_STATE_SEED, GAUNTLET_BOOTSTRAP_ECHOES_PER_WEEK, GAUNTLET_CAMPAIGN_LEVEL,
+    GAUNTLET_COMPANY_FEE_BPS, GAUNTLET_CONFIG_SEED, GAUNTLET_ENTRY_LAMPORTS,
+    GAUNTLET_EPOCH_DURATION_SECONDS, GAUNTLET_EPOCH_POOL_SEED, GAUNTLET_MAX_WEEKLY_ECHOES,
+    GAUNTLET_PLAYER_SCORE_SEED, GAUNTLET_POOL_FEE_BPS, GAUNTLET_POOL_VAULT_SEED,
     GAUNTLET_WEEK_POOL_SEED, INITIAL_GEAR_SLOTS, MAX_GEAR_SLOTS, PIT_DRAFT_BPS_DENOMINATOR,
     PIT_DRAFT_COMPANY_FEE_BPS, PIT_DRAFT_ENTRY_LAMPORTS, PIT_DRAFT_GAUNTLET_FEE_BPS,
     PIT_DRAFT_QUEUE_SEED, PIT_DRAFT_VAULT_SEED, PIT_DRAFT_WINNER_BPS,
@@ -110,7 +110,7 @@ pub mod gameplay_state {
         );
 
         require!(
-            campaign_level >= 1 && campaign_level <= 40,
+            (1..=40).contains(&campaign_level),
             GameplayStateError::InvalidCampaignLevel
         );
         require!(
@@ -126,7 +126,7 @@ pub mod gameplay_state {
         game_state.position_y = start_y;
         game_state.map_width = map_width;
         game_state.map_height = map_height;
-        game_state.hp = BASE_HP;
+        game_state.hp = base_hp(campaign_level);
         game_state.gear_slots = INITIAL_GEAR_SLOTS;
         game_state.week = 1;
         game_state.phase = Phase::Day1;
@@ -850,8 +850,8 @@ pub mod gameplay_state {
             let creator_inventory = snapshot_creator_inventory(creator);
             if duel_entry.outcome == DuelRunOutcome::CompletedWeek3 {
                 let opponent_inventory = snapshot_duel_entry_inventory(duel_entry);
-                let creator_stats = calculate_stats(&creator_inventory);
-                let opponent_stats = calculate_stats(&opponent_inventory);
+                let creator_stats = calculate_stats(&creator_inventory, GAUNTLET_CAMPAIGN_LEVEL);
+                let opponent_stats = calculate_stats(&opponent_inventory, GAUNTLET_CAMPAIGN_LEVEL);
                 let creator_effects = generate_combat_effects(&creator_inventory);
                 let opponent_effects = generate_combat_effects(&opponent_inventory);
                 let combat_outcome = resolve_combat_with_both_gold(
@@ -1144,8 +1144,8 @@ pub mod gameplay_state {
             clock.slot,
         )?;
 
-        let waiting_stats = calculate_stats(&waiting_inventory);
-        let entrant_stats = calculate_stats(&entrant_inventory);
+        let waiting_stats = calculate_stats(&waiting_inventory, GAUNTLET_CAMPAIGN_LEVEL);
+        let entrant_stats = calculate_stats(&entrant_inventory, GAUNTLET_CAMPAIGN_LEVEL);
         let waiting_effects = generate_combat_effects(&waiting_inventory);
         let entrant_effects = generate_combat_effects(&entrant_inventory);
 
@@ -1290,7 +1290,7 @@ pub mod gameplay_state {
     pub fn heal_player(ctx: Context<HealPlayer>, amount: u16) -> Result<()> {
         let game_state = &mut ctx.accounts.game_state;
         let inventory = &ctx.accounts.inventory;
-        let player_stats = calculate_stats(inventory);
+        let player_stats = calculate_stats(inventory, game_state.campaign_level);
 
         let old_hp = game_state.hp;
         let new_hp = (game_state.hp as i32)
@@ -1462,7 +1462,10 @@ pub mod gameplay_state {
         let game_state = &mut ctx.accounts.game_state;
 
         require!(hp_bonus > 0, GameplayStateError::InvalidHpBonus);
-        require!(new_max_hp >= BASE_HP, GameplayStateError::InvalidHpBonus);
+        require!(
+            new_max_hp >= base_hp(game_state.campaign_level),
+            GameplayStateError::InvalidHpBonus
+        );
 
         let old_hp = game_state.hp;
         // Cap current HP at the new max HP
@@ -1599,7 +1602,7 @@ pub mod gameplay_state {
             DAY_VISION_RADIUS
         };
         let is_wall = !generated_map.is_walkable(target_x, target_y);
-        let player_stats = calculate_stats(inventory);
+        let player_stats = calculate_stats(inventory, game_state.campaign_level);
         let move_cost = calculate_move_cost(is_wall, player_stats.dig);
 
         // Check if move can be afforded in current phase or by spanning phases
@@ -2467,7 +2470,7 @@ fn resolve_enemy_combat(
         None => return Ok(true),
     };
 
-    let player_stats = calculate_stats(inventory);
+    let player_stats = calculate_stats(inventory, game_state.campaign_level);
     let player_effects = generate_combat_effects(inventory);
     let player_input = build_player_combatant(game_state.hp, &player_stats, &player_effects);
     let enemy_effects = preprocess_enemy_effects(enemy.archetype_id, game_state.gold);
@@ -2570,7 +2573,7 @@ fn resolve_boss_fight<'info>(
     let boss_definition = boss_system::get_boss(&boss_id).ok_or(GameplayStateError::InvalidWeek)?;
     let boss_effects = boss_system::get_boss_item_effects(boss_definition);
 
-    let player_stats = calculate_stats(inventory);
+    let player_stats = calculate_stats(inventory, game_state.campaign_level);
     let player_effects = generate_combat_effects(inventory);
     let player_input = build_player_combatant(game_state.hp, &player_stats, &player_effects);
 
@@ -2685,7 +2688,7 @@ fn resolve_gauntlet_echo_inline<'info>(
 ) -> Result<bool> {
     let week = game_state.week;
     require!(
-        week >= 1 && week <= 5,
+        (1..=5).contains(&week),
         GameplayStateError::InvalidGauntletWeek
     );
 
@@ -2694,11 +2697,11 @@ fn resolve_gauntlet_echo_inline<'info>(
         None => return Err(GameplayStateError::GauntletNotInitialized.into()),
     };
 
-    let player_stats = calculate_stats(inventory);
+    let player_stats = calculate_stats(inventory, GAUNTLET_CAMPAIGN_LEVEL);
     let player_effects = generate_combat_effects(inventory);
     let echo_inventory =
         snapshot_to_inventory(echo, game_state.session, game_state.player);
-    let echo_stats = calculate_stats(&echo_inventory);
+    let echo_stats = calculate_stats(&echo_inventory, GAUNTLET_CAMPAIGN_LEVEL);
     let echo_effects = generate_combat_effects(&echo_inventory);
 
     let outcome = resolve_combat_with_both_gold(
@@ -3002,13 +3005,13 @@ fn build_bootstrap_echo(week: u8, index: u64) -> Result<GauntletEchoSnapshot> {
         .ok_or(GameplayStateError::GauntletNotInitialized)?;
     let capacity = gauntlet_gear_capacity(week);
     let mut gear = [None; 12];
-    for slot in 0..capacity {
+    for (slot, gear_slot) in gear.iter_mut().enumerate().take(capacity) {
         let item_idx = item_index_by_type(
             ItemType::Gear,
             ((index as usize) + (slot * week as usize)) % gear_count,
         )
         .ok_or(GameplayStateError::GauntletNotInitialized)?;
-        gear[slot] = Some(ItemInstance::new(*ITEMS[item_idx].id, Tier::I));
+        *gear_slot = Some(ItemInstance::new(*ITEMS[item_idx].id, Tier::I));
     }
 
     let mut tool = ItemInstance::new(*ITEMS[tool_idx].id, Tier::I);
@@ -3182,8 +3185,8 @@ fn maybe_insert_player_echo(
 ) -> Result<()> {
     let capacity = gauntlet_gear_capacity(week);
     let mut capped_gear = inventory.gear;
-    for slot in capacity..capped_gear.len() {
-        capped_gear[slot] = None;
+    for gear_slot in &mut capped_gear[capacity..] {
+        *gear_slot = None;
     }
     let snapshot = GauntletEchoSnapshot {
         week,

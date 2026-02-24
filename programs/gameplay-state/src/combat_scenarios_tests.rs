@@ -93,7 +93,7 @@ fn run_combat(
         inventory.gear[slot] = Some(*item);
     }
 
-    let player_stats = calculate_stats(&inventory);
+    let player_stats = calculate_stats(&inventory, 20);
     let player_effects = generate_combat_effects(&inventory);
     let player_input = build_player_combatant(player_hp, &player_stats, &player_effects);
 
@@ -696,7 +696,7 @@ fn test_work_vest_atk_oil_vs_spore_slime_t1() {
     inventory.tool = Some(basic_pickaxe_with_oils(&[ToolOilModification::PlusAtk]));
     inventory.gear[0] = Some(work_vest());
 
-    let player_stats = calculate_stats(&inventory);
+    let player_stats = calculate_stats(&inventory, 20);
     assert_eq!(
         player_stats.max_hp, 19,
         "max_hp should be 15 base + 4 Work Vest"
@@ -747,7 +747,7 @@ fn test_work_vest_max_hp_not_double_counted() {
     let mut inventory = make_inventory();
     inventory.gear[0] = Some(work_vest());
 
-    let player_stats = calculate_stats(&inventory);
+    let player_stats = calculate_stats(&inventory, 20);
     let player_effects = generate_combat_effects(&inventory);
     let player_input = build_player_combatant(19, &player_stats, &player_effects);
 

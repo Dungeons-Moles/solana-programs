@@ -572,17 +572,23 @@ pub mod session_manager {
 
     /// Delegates gameplay-state account to the MagicBlock delegation program.
     pub fn delegate_game_state(ctx: Context<DelegateGameState>, campaign_level: u8) -> Result<()> {
-        let game_session_key = derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level);
-        let (expected_game_state, _) =
-            Pubkey::find_program_address(&[b"game_state", game_session_key.as_ref()], &gameplay_state::ID);
+        let game_session_key =
+            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level);
+        let (expected_game_state, _) = Pubkey::find_program_address(
+            &[b"game_state", game_session_key.as_ref()],
+            &gameplay_state::ID,
+        );
         require_keys_eq!(
             ctx.accounts.game_state.key(),
             expected_game_state,
             SessionManagerError::Unauthorized
         );
         let game_state_seeds: &[&[u8]] = &[b"game_state", game_session_key.as_ref()];
-        ctx.accounts
-            .delegate_game_state(&ctx.accounts.player, game_state_seeds, local_delegate_config())?;
+        ctx.accounts.delegate_game_state(
+            &ctx.accounts.player,
+            game_state_seeds,
+            local_delegate_config(),
+        )?;
         Ok(())
     }
 
@@ -591,7 +597,8 @@ pub mod session_manager {
         ctx: Context<DelegateMapEnemies>,
         campaign_level: u8,
     ) -> Result<()> {
-        let game_session_key = derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level);
+        let game_session_key =
+            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level);
         let (expected_map_enemies, _) = Pubkey::find_program_address(
             &[MapEnemies::SEED_PREFIX, game_session_key.as_ref()],
             &gameplay_state::ID,
@@ -615,7 +622,8 @@ pub mod session_manager {
         ctx: Context<DelegateGeneratedMap>,
         campaign_level: u8,
     ) -> Result<()> {
-        let game_session_key = derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level);
+        let game_session_key =
+            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level);
         let (expected_generated_map, _) = Pubkey::find_program_address(
             &[GeneratedMap::SEED_PREFIX, game_session_key.as_ref()],
             &map_generator::ID,
@@ -636,7 +644,8 @@ pub mod session_manager {
 
     /// Delegates inventory account to the MagicBlock delegation program.
     pub fn delegate_inventory(ctx: Context<DelegateInventory>, campaign_level: u8) -> Result<()> {
-        let game_session_key = derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level);
+        let game_session_key =
+            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level);
         let (expected_inventory, _) = Pubkey::find_program_address(
             &[b"inventory", game_session_key.as_ref()],
             &player_inventory::ID,
@@ -647,14 +656,18 @@ pub mod session_manager {
             SessionManagerError::Unauthorized
         );
         let inventory_seeds: &[&[u8]] = &[b"inventory", game_session_key.as_ref()];
-        ctx.accounts
-            .delegate_inventory(&ctx.accounts.player, inventory_seeds, local_delegate_config())?;
+        ctx.accounts.delegate_inventory(
+            &ctx.accounts.player,
+            inventory_seeds,
+            local_delegate_config(),
+        )?;
         Ok(())
     }
 
     /// Delegates map-pois account to the MagicBlock delegation program.
     pub fn delegate_map_pois(ctx: Context<DelegateMapPois>, campaign_level: u8) -> Result<()> {
-        let game_session_key = derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level);
+        let game_session_key =
+            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level);
         let (expected_map_pois, _) = Pubkey::find_program_address(
             &[b"map_pois", game_session_key.as_ref()],
             &POI_SYSTEM_PROGRAM_ID,
@@ -665,8 +678,11 @@ pub mod session_manager {
             SessionManagerError::Unauthorized
         );
         let map_pois_seeds: &[&[u8]] = &[b"map_pois", game_session_key.as_ref()];
-        ctx.accounts
-            .delegate_map_pois(&ctx.accounts.player, map_pois_seeds, local_delegate_config())?;
+        ctx.accounts.delegate_map_pois(
+            &ctx.accounts.player,
+            map_pois_seeds,
+            local_delegate_config(),
+        )?;
         Ok(())
     }
 
@@ -686,7 +702,11 @@ pub mod session_manager {
             let mut data_slice: &[u8] = &data;
             let session = GameSession::try_deserialize(&mut data_slice)?;
 
-            require_keys_eq!(session.player, ctx.accounts.player.key(), SessionManagerError::Unauthorized);
+            require_keys_eq!(
+                session.player,
+                ctx.accounts.player.key(),
+                SessionManagerError::Unauthorized
+            );
             require_keys_eq!(
                 session.session_signer,
                 ctx.accounts.session_signer.key(),
@@ -705,9 +725,13 @@ pub mod session_manager {
         };
 
         let campaign_seed = [campaign_level];
-        let campaign_session_seeds: &[&[u8]] =
-            &[GameSession::SEED_PREFIX, session_player.as_ref(), &campaign_seed];
-        let duel_session_seeds: &[&[u8]] = &[GameSession::DUEL_SEED_PREFIX, session_player.as_ref()];
+        let campaign_session_seeds: &[&[u8]] = &[
+            GameSession::SEED_PREFIX,
+            session_player.as_ref(),
+            &campaign_seed,
+        ];
+        let duel_session_seeds: &[&[u8]] =
+            &[GameSession::DUEL_SEED_PREFIX, session_player.as_ref()];
         let gauntlet_session_seeds: &[&[u8]] =
             &[GameSession::GAUNTLET_SEED_PREFIX, session_player.as_ref()];
 
@@ -742,8 +766,11 @@ pub mod session_manager {
             session.try_serialize(&mut data_ref)?;
         }
 
-        ctx.accounts
-            .delegate_game_session(&ctx.accounts.session_signer, session_seeds, local_delegate_config())?;
+        ctx.accounts.delegate_game_session(
+            &ctx.accounts.session_signer,
+            session_seeds,
+            local_delegate_config(),
+        )?;
 
         emit!(SessionDelegated {
             player: session_player,
@@ -868,8 +895,7 @@ pub mod session_manager {
         let game_state = &ctx.accounts.game_state;
         let clock = Clock::get()?;
         let authority_bump = ctx.bumps.session_manager_authority;
-        let authority_signer_seeds: &[&[u8]] =
-            &[SESSION_MANAGER_AUTHORITY_SEED, &[authority_bump]];
+        let authority_signer_seeds: &[&[u8]] = &[SESSION_MANAGER_AUTHORITY_SEED, &[authority_bump]];
         let signer_seeds: &[&[&[u8]]] = &[authority_signer_seeds];
 
         // Do not trust `session.is_delegated` bit here; legacy undelegate flows can leave
@@ -1433,8 +1459,10 @@ fn validate_gameplay_runtime_accounts(
     game_state: &AccountInfo<'_>,
     map_enemies: &AccountInfo<'_>,
 ) -> Result<()> {
-    let (expected_game_state, _) =
-        Pubkey::find_program_address(&[b"game_state", game_session_key.as_ref()], &gameplay_state::ID);
+    let (expected_game_state, _) = Pubkey::find_program_address(
+        &[b"game_state", game_session_key.as_ref()],
+        &gameplay_state::ID,
+    );
     require_keys_eq!(
         game_state.key(),
         expected_game_state,

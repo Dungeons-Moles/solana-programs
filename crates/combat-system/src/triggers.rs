@@ -21,6 +21,10 @@ pub struct CombatantStats {
     pub active_bomb_self_damage_reduction: i16,
     pub non_weapon_damage_bonus: i16,
     pub next_non_weapon_damage_bonus: i16,
+    pub gold_gain_bonus: i16,
+    pub non_weapon_hits_this_turn: u8,
+    pub double_detonation_first: i16,
+    pub double_detonation_second: i16,
     pub preserve_shrapnel_cap: u8,
     pub shards_every_turn: bool,
 }
@@ -62,6 +66,8 @@ pub fn should_trigger(
         TriggerType::OnEnemyBleedDamage => true,
         // OnApplyRust is handled specially when rust is applied
         TriggerType::OnApplyRust => true,
+        // OnDealNonWeaponDamage is handled specially when non-weapon damage is dealt
+        TriggerType::OnDealNonWeaponDamage => true,
         // OnGainShrapnel is handled specially when shrapnel is gained
         TriggerType::OnGainShrapnel => true,
         // OnGoldArmorConverted is handled specially after conversion succeeds
@@ -87,6 +93,8 @@ pub fn check_condition(
     owner_status: &StatusEffects,
     opponent_stats: &CombatantStats,
     opponent_status: &StatusEffects,
+    owner_gold: u16,
+    opponent_gold: u16,
 ) -> bool {
     match condition {
         Condition::None => true,
@@ -101,6 +109,7 @@ pub fn check_condition(
         Condition::OwnerHasArmor => owner_stats.arm > 0,
         Condition::OwnerArmorAtLeast(value) => owner_stats.arm >= i16::from(value),
         Condition::OwnerHasStatus(status_type) => status_stacks(owner_status, status_type) > 0,
+        Condition::OwnerDigGreaterThanEnemyArmor => owner_stats.dig > opponent_stats.arm,
         Condition::EnemyHasStatusAtLeast(status_type, min_stacks) => {
             status_stacks(opponent_status, status_type) >= min_stacks
         }
@@ -113,6 +122,8 @@ pub fn check_condition(
         Condition::EnemyHasStatusOrNoArmor(status_type) => {
             status_stacks(opponent_status, status_type) > 0 || opponent_stats.arm <= 0
         }
+        Condition::OwnerGoldAtLeast(min_gold) => owner_gold >= min_gold,
+        Condition::EnemyGoldAtLeast(min_gold) => opponent_gold >= min_gold,
     }
 }
 
@@ -135,6 +146,17 @@ fn status_stacks(status: &StatusEffects, status_type: StatusType) -> u8 {
         StatusType::Bleed => status.bleed,
         StatusType::Reflection => status.reflection,
     }
+}
+
+#[inline]
+fn apply_gold_gain_bonus(value: i16, bonus_percent: i16) -> i16 {
+    let base = value.max(0);
+    if base == 0 || bonus_percent <= 0 {
+        return base;
+    }
+
+    let total = i32::from(base) + (i32::from(base) * i32::from(bonus_percent) / 100);
+    i16::try_from(total).unwrap_or(i16::MAX)
 }
 
 #[inline]
@@ -420,10 +442,11 @@ pub fn apply_effect(
             stats.preserve_shrapnel_cap = stats.preserve_shrapnel_cap.max(cap);
         }
         EffectType::GainGold => {
+            let gain = apply_gold_gain_bonus(value, stats.gold_gain_bonus);
             if is_target_player {
-                increase_gold(player_gold, Some(gold_change), value);
+                increase_gold(player_gold, Some(gold_change), gain);
             } else {
-                increase_gold(enemy_gold, None, value);
+                increase_gold(enemy_gold, None, gain);
             }
         }
         EffectType::ConsumeGoldForArmor => {
@@ -454,7 +477,10 @@ pub fn apply_effect(
         | EffectType::BlastImmunity
         | EffectType::DoubleBombTrigger
         | EffectType::DoubleOnHitEffects
-        | EffectType::TriggerAllShards => {}
+        | EffectType::TriggerAllShards
+        | EffectType::AmplifyGoldGain
+        | EffectType::DoubleDetonationFirst
+        | EffectType::DoubleDetonationSecond => {}
     }
 }
 
@@ -483,6 +509,10 @@ pub fn process_triggers_for_phase(
     gold_change: &mut i16,
     log: &mut Vec<CombatLogEntry>,
 ) {
+    if phase == TriggerType::TurnStart {
+        owner_stats.non_weapon_hits_this_turn = 0;
+    }
+
     // Two-pass processing to ensure status effects are applied before conditional effects
     // that check status are evaluated. This makes item synergies (e.g., Frost Lantern +
     // Frostguard Buckler) work regardless of inventory slot order.
@@ -548,6 +578,7 @@ fn process_effects_pass(
     let is_first_turn = turn == 1;
     let mut gold_armor_conversion_happened = false;
     let mut pending_countdown_reduction: u8 = 0;
+    let mut dealt_non_weapon_damage = false;
 
     for (index, effect) in effects.iter_mut().enumerate() {
         if effect.trigger != phase {
@@ -576,21 +607,58 @@ fn process_effects_pass(
         }
 
         // Check condition if one is specified
+        let owner_gold_amount = if is_owner_player {
+            *player_gold
+        } else {
+            *enemy_gold
+        };
+        let opponent_gold_amount = if is_owner_player {
+            *enemy_gold
+        } else {
+            *player_gold
+        };
+
         if !check_condition(
             effect.condition,
             owner_stats,
             owner_status,
             opponent_stats,
             opponent_status,
+            owner_gold_amount,
+            opponent_gold_amount,
         ) {
             continue;
+        }
+
+        match effect.effect_type {
+            EffectType::AmplifyGoldGain => {
+                owner_stats.gold_gain_bonus =
+                    owner_stats.gold_gain_bonus.saturating_add(effect.value.max(0));
+            }
+            EffectType::DoubleDetonationFirst => {
+                owner_stats.double_detonation_first = effect.value.max(0);
+            }
+            EffectType::DoubleDetonationSecond => {
+                owner_stats.double_detonation_second = effect.value.max(0);
+            }
+            _ => {}
         }
 
         let mut effect_value = effect.value;
         if matches!(effect.effect_type, EffectType::DealNonWeaponDamage)
             && targets_opponent(effect.effect_type)
         {
-            effect_value = effect_value.saturating_add(owner_stats.non_weapon_damage_bonus.max(0));
+            let mut extra = 0;
+            match owner_stats.non_weapon_hits_this_turn {
+                0 => extra += owner_stats.double_detonation_first.max(0),
+                1 => extra += owner_stats.double_detonation_second.max(0),
+                _ => {}
+            }
+            owner_stats.non_weapon_hits_this_turn =
+                owner_stats.non_weapon_hits_this_turn.saturating_add(1);
+            effect_value = effect_value
+                .saturating_add(extra)
+                .saturating_add(owner_stats.non_weapon_damage_bonus.max(0));
             if owner_stats.next_non_weapon_damage_bonus > 0 {
                 effect_value =
                     effect_value.saturating_add(owner_stats.next_non_weapon_damage_bonus.max(0));
@@ -656,6 +724,13 @@ fn process_effects_pass(
                     log,
                 );
             }
+
+            if phase != TriggerType::OnDealNonWeaponDamage
+                && matches!(effect.effect_type, EffectType::DealNonWeaponDamage)
+                && effect_value > 0
+            {
+                dealt_non_weapon_damage = true;
+            }
         } else {
             let owner_gold_before = if is_owner_player {
                 *player_gold
@@ -700,6 +775,25 @@ fn process_effects_pass(
     }
     if !first_pass && pending_countdown_reduction > 0 {
         reduce_all_countdowns(effects, pending_countdown_reduction);
+    }
+
+    if !first_pass && dealt_non_weapon_damage {
+        process_triggers_for_phase(
+            effects,
+            TriggerType::OnDealNonWeaponDamage,
+            turn,
+            owner_stats,
+            owner_status,
+            opponent_stats,
+            opponent_status,
+            triggered_flags,
+            is_owner_player,
+            owner_acts_first,
+            player_gold,
+            enemy_gold,
+            gold_change,
+            log,
+        );
     }
 
     if !first_pass && gold_armor_conversion_happened {
@@ -855,6 +949,7 @@ mod tests {
             next_non_weapon_damage_bonus: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
+                    ..Default::default()
         };
         let mut owner_status = StatusEffects::default();
         let mut opponent_stats = CombatantStats {
@@ -875,6 +970,7 @@ mod tests {
             next_non_weapon_damage_bonus: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
+                    ..Default::default()
         };
         let mut opponent_status = StatusEffects::default();
 
@@ -938,6 +1034,7 @@ mod tests {
             next_non_weapon_damage_bonus: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
+                    ..Default::default()
         };
         let mut owner_status = StatusEffects::default();
         let mut opponent_stats = CombatantStats {
@@ -958,6 +1055,7 @@ mod tests {
             next_non_weapon_damage_bonus: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
+                    ..Default::default()
         };
         let mut opponent_status = StatusEffects::default();
 
@@ -1058,6 +1156,7 @@ mod tests {
             next_non_weapon_damage_bonus: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
+                    ..Default::default()
         };
         let mut status = StatusEffects::default();
         let mut opponent_stats = CombatantStats {
@@ -1078,6 +1177,7 @@ mod tests {
             next_non_weapon_damage_bonus: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
+                    ..Default::default()
         };
         let mut opponent_status = StatusEffects::default();
 
@@ -1145,6 +1245,7 @@ mod tests {
             next_non_weapon_damage_bonus: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
+                    ..Default::default()
         };
         let mut owner_status = StatusEffects::default();
         let mut opponent_stats = CombatantStats {
@@ -1165,6 +1266,7 @@ mod tests {
             next_non_weapon_damage_bonus: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
+                    ..Default::default()
         };
         let mut opponent_status = StatusEffects::default();
 
@@ -1238,6 +1340,7 @@ mod tests {
             next_non_weapon_damage_bonus: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
+                    ..Default::default()
         };
         let mut owner_status = StatusEffects::default();
         let mut opponent_stats = CombatantStats::default();
@@ -1318,6 +1421,7 @@ mod tests {
                 next_non_weapon_damage_bonus: 0,
                 preserve_shrapnel_cap: 0,
                 shards_every_turn: false,
+                        ..Default::default()
             },
             StatusEffects::default(),
         )
@@ -1720,6 +1824,7 @@ mod tests {
             next_non_weapon_damage_bonus: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
+                    ..Default::default()
         };
         let mut owner_status = StatusEffects::default();
         let mut opponent_stats = CombatantStats {
@@ -1740,6 +1845,7 @@ mod tests {
             next_non_weapon_damage_bonus: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
+                    ..Default::default()
         };
         let mut opponent_status = StatusEffects::default();
 
@@ -1822,6 +1928,7 @@ mod tests {
             next_non_weapon_damage_bonus: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
+                    ..Default::default()
         };
         let mut owner_status = StatusEffects::default();
         let mut opponent_stats = CombatantStats {
@@ -1842,6 +1949,7 @@ mod tests {
             next_non_weapon_damage_bonus: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
+                    ..Default::default()
         };
         let mut opponent_status = StatusEffects::default();
 
@@ -1899,5 +2007,114 @@ mod tests {
             owner_stats.arm, 3,
             "Frostguard Buckler should gain ARM - two-pass processing makes order irrelevant"
         );
+    }
+
+    #[test]
+    fn test_on_deal_non_weapon_damage_triggers_once_per_turn() {
+        let mut owner_stats = CombatantStats {
+            hp: 20,
+            max_hp: 20,
+            atk: 0,
+            arm: 0,
+            spd: 0,
+            dig: 0,
+            armor_piercing: 0,
+            stored_damage: 0,
+            gear_atk_bonus: 0,
+            half_gear_atk_after_second_strike: false,
+            next_bomb_damage_bonus: 0,
+            next_bomb_self_damage_reduction: 0,
+            active_bomb_self_damage_reduction: 0,
+            non_weapon_damage_bonus: 0,
+            next_non_weapon_damage_bonus: 0,
+            preserve_shrapnel_cap: 0,
+            shards_every_turn: false,
+            ..Default::default()
+        };
+        let mut owner_status = StatusEffects::default();
+        let mut opponent_stats = CombatantStats {
+            hp: 20,
+            max_hp: 20,
+            ..Default::default()
+        };
+        let mut opponent_status = StatusEffects::default();
+
+        let mut effects = vec![
+            ItemEffect {
+                trigger: TriggerType::OnHit,
+                once_per_turn: false,
+                effect_type: EffectType::DealNonWeaponDamage,
+                value: 2,
+                condition: Condition::None,
+            },
+            ItemEffect {
+                trigger: TriggerType::OnDealNonWeaponDamage,
+                once_per_turn: true,
+                effect_type: EffectType::GainArmor,
+                value: 1,
+                condition: Condition::None,
+            },
+        ];
+        let mut flags = vec![false; effects.len()];
+        let mut player_gold = 0u16;
+        let mut enemy_gold = 0u16;
+        let mut gold_change = 0i16;
+        let mut log = Vec::new();
+
+        // Two OnHit passes in same turn: non-weapon damage occurs twice.
+        process_triggers_for_phase(
+            &mut effects,
+            TriggerType::OnHit,
+            1,
+            &mut owner_stats,
+            &mut owner_status,
+            &mut opponent_stats,
+            &mut opponent_status,
+            &mut flags,
+            true,
+            true,
+            &mut player_gold,
+            &mut enemy_gold,
+            &mut gold_change,
+            &mut log,
+        );
+        process_triggers_for_phase(
+            &mut effects,
+            TriggerType::OnHit,
+            1,
+            &mut owner_stats,
+            &mut owner_status,
+            &mut opponent_stats,
+            &mut opponent_status,
+            &mut flags,
+            true,
+            true,
+            &mut player_gold,
+            &mut enemy_gold,
+            &mut gold_change,
+            &mut log,
+        );
+
+        assert_eq!(owner_stats.arm, 1, "Armor gain should trigger once per turn");
+
+        // Next turn: reset once/turn flags and verify it can trigger again.
+        reset_once_per_turn_flags(&mut flags);
+        process_triggers_for_phase(
+            &mut effects,
+            TriggerType::OnHit,
+            2,
+            &mut owner_stats,
+            &mut owner_status,
+            &mut opponent_stats,
+            &mut opponent_status,
+            &mut flags,
+            true,
+            true,
+            &mut player_gold,
+            &mut enemy_gold,
+            &mut gold_change,
+            &mut log,
+        );
+        assert_eq!(owner_stats.arm, 2, "Armor gain should trigger again next turn");
     }
 }

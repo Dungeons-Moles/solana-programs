@@ -8,9 +8,8 @@ pub const NIGHT_MOVES: u8 = 30;
 // Base Stats (derived from inventory at runtime)
 // =============================================================================
 
-/// Base HP before item bonuses, scaled by campaign level.
+/// Base HP before item bonuses, scaled by campaign level (campaign only).
 /// Levels 1-9: 25 HP, 10-19: 20 HP, 20+: 15 HP.
-/// PvP modes use GAUNTLET_CAMPAIGN_LEVEL (20) → always 15 HP.
 pub fn base_hp(campaign_level: u8) -> i16 {
     match campaign_level {
         1..=9 => 25,
@@ -18,6 +17,9 @@ pub fn base_hp(campaign_level: u8) -> i16 {
         _ => 15,
     }
 }
+
+/// PvP base HP (used for Duel/Gauntlet player stats)
+pub const PVP_BASE_HP: i16 = 20;
 
 /// Base attack stat before item bonuses
 pub const BASE_ATK: i16 = 0;

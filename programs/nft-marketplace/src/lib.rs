@@ -27,10 +27,8 @@ pub mod nft_marketplace {
         items_collection: Pubkey,
     ) -> Result<()> {
         // Validate gauntlet_pool is the canonical gameplay-state PDA
-        let (expected_pool, _) = Pubkey::find_program_address(
-            &[GAUNTLET_POOL_VAULT_SEED],
-            &GAMEPLAY_STATE_PROGRAM_ID,
-        );
+        let (expected_pool, _) =
+            Pubkey::find_program_address(&[GAUNTLET_POOL_VAULT_SEED], &GAMEPLAY_STATE_PROGRAM_ID);
         require_keys_eq!(
             ctx.accounts.gauntlet_pool.key(),
             expected_pool,
@@ -140,13 +138,10 @@ pub mod nft_marketplace {
                     .checked_add(name_len)
                     .and_then(|v| v.checked_add(4 + 1 + 4 + 8 + 1 + 10 + 10))
                     .ok_or(MarketplaceError::ArithmeticOverflow)?;
-                if profile_data.len() > equipped_offset + 33
-                    && profile_data[equipped_offset] == 1
-                {
+                if profile_data.len() > equipped_offset + 33 && profile_data[equipped_offset] == 1 {
                     let mut skin_bytes = [0u8; 32];
-                    skin_bytes.copy_from_slice(
-                        &profile_data[equipped_offset + 1..equipped_offset + 33],
-                    );
+                    skin_bytes
+                        .copy_from_slice(&profile_data[equipped_offset + 1..equipped_offset + 33]);
                     let equipped_pubkey = Pubkey::new_from_array(skin_bytes);
                     require!(
                         equipped_pubkey != ctx.accounts.asset.key(),
@@ -382,7 +377,10 @@ pub mod nft_marketplace {
     pub fn claim_quest_reward(ctx: Context<ClaimQuestReward>, _quest_id: u16) -> Result<()> {
         let progress = &mut ctx.accounts.quest_progress;
         require!(progress.completed, MarketplaceError::QuestNotCompleted);
-        require!(!progress.claimed, MarketplaceError::QuestRewardAlreadyClaimed);
+        require!(
+            !progress.claimed,
+            MarketplaceError::QuestRewardAlreadyClaimed
+        );
 
         progress.claimed = true;
         Ok(())

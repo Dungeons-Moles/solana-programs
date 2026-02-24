@@ -11,9 +11,9 @@ pub fn calculate_tier(level_in_act: u8) -> u8 {
 }
 
 /// Scale Week 1 boss stats based on tier
-/// +2 HP per tier, +1 ARM per tier
+/// +1 HP per tier, +1 ARM per tier
 pub fn scale_week1_stats(base_hp: u16, base_arm: u8, tier: u8) -> (u16, u8, u8) {
-    let hp_bonus = 2 * tier as u16;
+    let hp_bonus = 1 * tier as u16;
     let arm_bonus = tier;
     let atk_bonus = 0u8;
 
@@ -21,9 +21,9 @@ pub fn scale_week1_stats(base_hp: u16, base_arm: u8, tier: u8) -> (u16, u8, u8) 
 }
 
 /// Scale Week 2 boss stats based on tier
-/// +3 HP per tier, +1 ARM per tier, +1 ATK at tier >= 2
+/// +2 HP per tier, +1 ARM per tier, +1 ATK at tier >= 2
 pub fn scale_week2_stats(base_hp: u16, base_arm: u8, tier: u8) -> (u16, u8, u8) {
-    let hp_bonus = 3 * tier as u16;
+    let hp_bonus = 2 * tier as u16;
     let arm_bonus = tier;
     let atk_bonus = if tier >= 2 { 1u8 } else { 0u8 };
 
@@ -31,14 +31,18 @@ pub fn scale_week2_stats(base_hp: u16, base_arm: u8, tier: u8) -> (u16, u8, u8) 
 }
 
 /// Scale Week 3 boss stats based on tier
-/// +4 HP per tier, +1 ARM per tier, +1 ATK at tier >= 1
+/// +3 HP per tier, +1 ARM per tier, +1 ATK at tier >= 1
 pub fn scale_week3_stats(base_hp: u16, base_arm: u8, tier: u8) -> (u16, u8, u8) {
-    let hp_bonus = 4 * tier as u16;
+    let hp_bonus = 3 * tier as u16;
     let arm_bonus = tier;
     let arm_reduction = if tier == 0 { 3u8 } else { 0u8 };
     let atk_bonus = if tier >= 1 { 1u8 } else { 0u8 };
 
-    (base_hp + hp_bonus, base_arm.saturating_sub(arm_reduction) + arm_bonus, atk_bonus)
+    (
+        base_hp + hp_bonus,
+        base_arm.saturating_sub(arm_reduction) + arm_bonus,
+        atk_bonus,
+    )
 }
 
 /// Apply act baseline bonuses to stats
@@ -57,6 +61,9 @@ pub fn apply_act_baseline(atk: u8, spd: u8, act: u8, week: Week) -> (u8, u8) {
             // Act 4 (B+)
             atk += if week == Week::Three { 2 } else { 1 };
             spd += 1;
+            if week != Week::Three {
+                spd = spd.min(3);
+            }
         }
         _ => {}
     }
@@ -129,13 +136,13 @@ mod tests {
         assert_eq!((hp, arm, atk), (32, 2, 0)); // Tier 0: no bonuses
 
         let (hp, arm, atk) = scale_week1_stats(32, 2, 1);
-        assert_eq!((hp, arm, atk), (34, 3, 0)); // Tier 1: +2 HP, +1 ARM
+        assert_eq!((hp, arm, atk), (33, 3, 0)); // Tier 1: +1 HP, +1 ARM
 
         let (hp, arm, atk) = scale_week1_stats(32, 2, 2);
-        assert_eq!((hp, arm, atk), (36, 4, 0)); // Tier 2: +4 HP, +2 ARM
+        assert_eq!((hp, arm, atk), (34, 4, 0)); // Tier 2: +2 HP, +2 ARM
 
         let (hp, arm, atk) = scale_week1_stats(32, 2, 3);
-        assert_eq!((hp, arm, atk), (38, 5, 0)); // Tier 3: +6 HP, +3 ARM
+        assert_eq!((hp, arm, atk), (35, 5, 0)); // Tier 3: +3 HP, +3 ARM
     }
 
     #[test]
@@ -145,13 +152,13 @@ mod tests {
         assert_eq!((hp, arm, atk), (46, 10, 0)); // Tier 0: no bonuses
 
         let (hp, arm, atk) = scale_week2_stats(46, 10, 1);
-        assert_eq!((hp, arm, atk), (49, 11, 0)); // Tier 1: +3 HP, +1 ARM
+        assert_eq!((hp, arm, atk), (48, 11, 0)); // Tier 1: +2 HP, +1 ARM
 
         let (hp, arm, atk) = scale_week2_stats(46, 10, 2);
-        assert_eq!((hp, arm, atk), (52, 12, 1)); // Tier 2: +6 HP, +2 ARM, +1 ATK
+        assert_eq!((hp, arm, atk), (50, 12, 1)); // Tier 2: +4 HP, +2 ARM, +1 ATK
 
         let (hp, arm, atk) = scale_week2_stats(46, 10, 3);
-        assert_eq!((hp, arm, atk), (55, 13, 1)); // Tier 3: +9 HP, +3 ARM, +1 ATK
+        assert_eq!((hp, arm, atk), (52, 13, 1)); // Tier 3: +6 HP, +3 ARM, +1 ATK
     }
 
     #[test]
@@ -161,13 +168,13 @@ mod tests {
         assert_eq!((hp, arm, atk), (72, 9, 0)); // Tier 0: -3 ARM reduction
 
         let (hp, arm, atk) = scale_week3_stats(72, 12, 1);
-        assert_eq!((hp, arm, atk), (76, 13, 1)); // Tier 1: +4 HP, +1 ARM, +1 ATK
+        assert_eq!((hp, arm, atk), (75, 13, 1)); // Tier 1: +3 HP, +1 ARM, +1 ATK
 
         let (hp, arm, atk) = scale_week3_stats(72, 12, 2);
-        assert_eq!((hp, arm, atk), (80, 14, 1)); // Tier 2: +8 HP, +2 ARM, +1 ATK
+        assert_eq!((hp, arm, atk), (78, 14, 1)); // Tier 2: +6 HP, +2 ARM, +1 ATK
 
         let (hp, arm, atk) = scale_week3_stats(72, 12, 3);
-        assert_eq!((hp, arm, atk), (84, 15, 1)); // Tier 3: +12 HP, +3 ARM, +1 ATK
+        assert_eq!((hp, arm, atk), (81, 15, 1)); // Tier 3: +9 HP, +3 ARM, +1 ATK
     }
 
     #[test]
@@ -195,11 +202,20 @@ mod tests {
     }
 
     #[test]
+    fn test_act_baseline_biome_b_week1_and_2_spd_cap() {
+        let (atk_week1, spd_week1) = apply_act_baseline(3, 3, 3, Week::One);
+        assert_eq!((atk_week1, spd_week1), (4, 3));
+
+        let (atk_week2, spd_week2) = apply_act_baseline(3, 3, 3, Week::Two);
+        assert_eq!((atk_week2, spd_week2), (4, 3));
+    }
+
+    #[test]
     fn test_full_scaling_example() {
         // Level 35 in Act 4 (B+), Week 3 Final
         // level_in_act = 5, tier = (5-1)/5 = 0
         // Boss: The Frostbound Leviathan (B-B-W3-01) - odd level = Final 1
-        // Base: HP=74, ATK=4, ARM=14, SPD=2, DIG=3
+        // Base: HP=52, ATK=3, ARM=10, SPD=2, DIG=3
 
         let boss = select_boss(35, Week::Three);
         assert_eq!(boss.name, "The Frostbound Leviathan");
@@ -208,19 +224,19 @@ mod tests {
 
         // Week 3 tier 0 scaling: -3 ARM reduction
         // Act 4 baseline: +2 ATK, +1 SPD
-        assert_eq!(scaled.hp, 74); // no tier bonus
-        assert_eq!(scaled.atk, 4 + 2); // 6 (base + act bonus)
-        assert_eq!(scaled.arm, 11); // 14 - 3 ARM reduction at tier 0
+        assert_eq!(scaled.hp, 52); // no tier bonus
+        assert_eq!(scaled.atk, 3 + 2); // 5 (base + act bonus)
+        assert_eq!(scaled.arm, 7); // 10 - 3 ARM reduction at tier 0
         assert_eq!(scaled.spd, 2 + 1); // 3 (act 4 bonus)
         assert_eq!(scaled.dig, 3); // unchanged
     }
 
     #[test]
     fn test_broodmother_strikes() {
-        // Broodmother has +2 strikes at battle start, should report 3 total
+        // Broodmother has +1 strike at battle start, should report 2 total
         let boss = select_boss(1, Week::One);
         assert_eq!(boss.name, "The Broodmother");
         let scaled = scale_boss(boss, 1, Week::One);
-        assert_eq!(scaled.strikes, 3); // 1 base + 2 from trait
+        assert_eq!(scaled.strikes, 2); // 1 base + 1 from trait
     }
 }

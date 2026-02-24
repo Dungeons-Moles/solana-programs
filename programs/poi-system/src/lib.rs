@@ -407,8 +407,9 @@ pub mod poi_system {
             expected_map_pois,
             PoiSystemError::Unauthorized
         );
+        let map_pois = read_map_pois(&ctx.accounts.map_pois)?;
         require_keys_eq!(
-            ctx.accounts.map_pois.session,
+            map_pois.session,
             session_key,
             PoiSystemError::Unauthorized
         );
@@ -420,8 +421,10 @@ pub mod poi_system {
             PoiSystemError::InvalidSession
         );
         let stored_session_signer = Pubkey::from(
-            <[u8; 32]>::try_from(&session_data[GameSession::SESSION_SIGNER_OFFSET..session_signer_end])
-                .unwrap(),
+            <[u8; 32]>::try_from(
+                &session_data[GameSession::SESSION_SIGNER_OFFSET..session_signer_end],
+            )
+            .unwrap(),
         );
         require_keys_eq!(
             stored_session_signer,
@@ -464,7 +467,9 @@ pub mod poi_system {
     /// Close MapPois account via session key signer authorization.
     /// Used by session-manager CPI during end_session to clean up.
     /// Rent is returned to the player wallet.
-    pub fn close_map_pois_via_session_signer(ctx: Context<CloseMapPoisViaSessionSigner>) -> Result<()> {
+    pub fn close_map_pois_via_session_signer(
+        ctx: Context<CloseMapPoisViaSessionSigner>,
+    ) -> Result<()> {
         use session_manager::state::GameSession;
         let player_end = GameSession::PLAYER_OFFSET + 32;
         let session_signer_end = GameSession::SESSION_SIGNER_OFFSET + 32;
@@ -479,8 +484,10 @@ pub mod poi_system {
             <[u8; 32]>::try_from(&session_data[GameSession::PLAYER_OFFSET..player_end]).unwrap(),
         );
         let stored_session_signer = Pubkey::from(
-            <[u8; 32]>::try_from(&session_data[GameSession::SESSION_SIGNER_OFFSET..session_signer_end])
-                .unwrap(),
+            <[u8; 32]>::try_from(
+                &session_data[GameSession::SESSION_SIGNER_OFFSET..session_signer_end],
+            )
+            .unwrap(),
         );
 
         require!(
@@ -533,7 +540,11 @@ pub mod poi_system {
         let inventory = &ctx.accounts.inventory;
 
         let (poi, _) = get_and_validate_poi(map_pois, game_state, poi_index, false)?;
-        let player_stats = gameplay_state::stats::calculate_stats(inventory, game_state.campaign_level);
+        let player_stats = gameplay_state::stats::calculate_stats(
+            inventory,
+            game_state.campaign_level,
+            game_state.run_mode,
+        );
 
         // Get values for rest interaction (i16 to handle HP > 255 or negative values)
         let current_hp = game_state.hp;
@@ -623,9 +634,7 @@ pub mod poi_system {
 
         // Deterministic per-session/per-POI seed — same POI always yields the same
         // offer within a session, so walking away and coming back is not a free reroll.
-        let seed = map_pois.seed
-            ^ ((poi_index as u64) << 8)
-            ^ ((act as u64) << 16);
+        let seed = map_pois.seed ^ ((poi_index as u64) << 8) ^ ((act as u64) << 16);
 
         // Fetch boss weaknesses on-chain
         let week = to_boss_week(game_state.week)?;
@@ -900,18 +909,13 @@ pub mod poi_system {
 
         // Reject if an offer already exists for this exact POI (prevents rerolls).
         require!(
-            !map_pois
-                .oil_offers
-                .iter()
-                .any(|o| o.poi_index == poi_index),
+            !map_pois.oil_offers.iter().any(|o| o.poi_index == poi_index),
             PoiSystemError::OfferAlreadyGenerated
         );
 
         // Deterministic per-session/per-POI seed — same POI always yields the same
         // offer within a session, so walking away and coming back is not a free reroll.
-        let seed = map_pois.seed
-            ^ ((poi_index as u64) << 8)
-            ^ 0x4f494c_u64; // "OIL" domain separator
+        let seed = map_pois.seed ^ ((poi_index as u64) << 8) ^ 0x4f494c_u64; // "OIL" domain separator
 
         // Generate oil offer
         let oil_offer = offers::create_oil_offer(poi_index, seed);
@@ -1662,10 +1666,17 @@ pub struct DelegateMapPois<'info> {
 #[derive(Accounts)]
 pub struct UndelegateMapPois<'info> {
     #[account(mut)]
-    pub map_pois: Account<'info, MapPois>,
+    /// CHECK: PDA is validated and deserialized in handler.
+    pub map_pois: AccountInfo<'info>,
     /// CHECK: Session account is read for session signer authorization.
     pub game_session: UncheckedAccount<'info>,
     pub session_signer: Signer<'info>,
+}
+
+fn read_map_pois(map_pois: &AccountInfo<'_>) -> Result<MapPois> {
+    let data = map_pois.try_borrow_data()?;
+    let mut slice: &[u8] = &data;
+    MapPois::try_deserialize(&mut slice).map_err(|_| PoiSystemError::InvalidSession.into())
 }
 
 #[derive(Accounts)]

@@ -714,8 +714,8 @@ pub fn generate_smuggler_hatch_offers(
         let price = calculate_price(ItemType::Tool, rarity);
 
         // Check pool membership and deduplication
-        let in_pool = item_id_to_pool_index(&item_id)
-            .map_or(false, |idx| is_item_in_pool(pool, idx));
+        let in_pool =
+            item_id_to_pool_index(&item_id).map_or(false, |idx| is_item_in_pool(pool, idx));
         let is_duplicate = used_ids[..count].contains(&item_id);
 
         if in_pool && !is_duplicate {
@@ -736,9 +736,7 @@ pub fn generate_smuggler_hatch_offers(
         if count >= 6 {
             break;
         }
-        let attempt_seed = seed
-            ^ ((count as u64) << 48)
-            ^ attempt.wrapping_mul(0x517cc1b727220a95);
+        let attempt_seed = seed ^ ((count as u64) << 48) ^ attempt.wrapping_mul(0x517cc1b727220a95);
         let mut rng = Xorshift64::new(attempt_seed);
 
         let item_seed = rng.next_u64();
@@ -746,8 +744,8 @@ pub fn generate_smuggler_hatch_offers(
         let item_id = select_gear_by_rarity_weighted(rarity, &tag_weights, rng.next_u64());
         let price = calculate_price(ItemType::Gear, rarity);
 
-        let in_pool = item_id_to_pool_index(&item_id)
-            .map_or(false, |idx| is_item_in_pool(pool, idx));
+        let in_pool =
+            item_id_to_pool_index(&item_id).map_or(false, |idx| is_item_in_pool(pool, idx));
         let is_duplicate = used_ids[..count].contains(&item_id);
 
         if in_pool && !is_duplicate {
@@ -1068,7 +1066,11 @@ mod tests {
                 }
             }
 
-            assert_eq!(mythic_count, 10, "Act {} Geode Vault should have 10% Mythic", act);
+            assert_eq!(
+                mythic_count, 10,
+                "Act {} Geode Vault should have 10% Mythic",
+                act
+            );
         }
     }
 
@@ -1269,7 +1271,8 @@ mod tests {
         assert!(generate_poi_offers(5, 1, WeaknessTag::Stone, WeaknessTag::Frost, 123).is_none()); // Rest Alcove
         assert!(generate_poi_offers(6, 1, WeaknessTag::Stone, WeaknessTag::Frost, 123).is_none()); // Survey Beacon
         assert!(generate_poi_offers(8, 1, WeaknessTag::Stone, WeaknessTag::Frost, 123).is_none()); // Rail Waypoint
-        assert!(generate_poi_offers(9, 1, WeaknessTag::Stone, WeaknessTag::Frost, 123).is_none()); // Smuggler Hatch (uses own path)
+        assert!(generate_poi_offers(9, 1, WeaknessTag::Stone, WeaknessTag::Frost, 123).is_none());
+        // Smuggler Hatch (uses own path)
     }
 
     #[test]

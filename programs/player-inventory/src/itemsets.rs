@@ -175,7 +175,7 @@ pub const SWIFT_DIGGER_KIT: ItemsetDefinition = ItemsetDefinition {
             TriggerType::BattleStart,
             EffectType::GainAtk,
             false,
-            [2, 2, 2],
+            [3, 3, 3],
             Condition::DigGreaterThanEnemyDig,
         ),
     ],
@@ -245,7 +245,7 @@ pub const BLOODRUSH_PROTOCOL: ItemsetDefinition = ItemsetDefinition {
             TriggerType::FirstTurn,
             EffectType::ApplyBleed,
             false,
-            [2, 2, 2],
+            [3, 3, 3],
         ),
         EffectDefinition::new(
             TriggerType::OnEnemyBleedDamage,

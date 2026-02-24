@@ -7,7 +7,8 @@
 //! during combat's BattleStart phase to avoid double-counting. Combat stats start
 //! at base values (0) and get their bonuses from BattleStart effects in the combat system.
 
-use crate::constants::{base_hp, BASE_DIG};
+use crate::constants::{base_hp, BASE_DIG, PVP_BASE_HP};
+use crate::state::RunMode;
 use combat_system::{EffectType, TriggerType};
 use player_inventory::effects::generate_combat_effects;
 use player_inventory::state::PlayerInventory;
@@ -39,11 +40,20 @@ const BASE_STRIKES: u8 = 1;
 ///
 /// Combat stats (ATK/ARM/SPD) are NOT calculated here - they start at base (0)
 /// and are applied during combat's BattleStart phase via item effects.
-pub fn calculate_stats(inventory: &PlayerInventory, campaign_level: u8) -> PlayerStats {
+pub fn calculate_stats(
+    inventory: &PlayerInventory,
+    campaign_level: u8,
+    run_mode: RunMode,
+) -> PlayerStats {
     let effects = generate_combat_effects(inventory);
 
+    let base_hp_value = match run_mode {
+        RunMode::Campaign => base_hp(campaign_level),
+        _ => PVP_BASE_HP,
+    };
+
     let mut stats = PlayerStats {
-        max_hp: base_hp(campaign_level),
+        max_hp: base_hp_value,
         dig: BASE_DIG,
         strikes: BASE_STRIKES,
     };
@@ -95,7 +105,7 @@ mod tests {
     #[test]
     fn test_base_stats_empty_inventory() {
         let inventory = make_inventory();
-        let stats = calculate_stats(&inventory, 20);
+        let stats = calculate_stats(&inventory, 20, RunMode::Campaign);
 
         assert_eq!(stats.max_hp, 15);
         assert_eq!(stats.dig, BASE_DIG);
@@ -105,20 +115,20 @@ mod tests {
     fn test_base_hp_scales_by_campaign_level() {
         let inventory = make_inventory();
 
-        let stats_low = calculate_stats(&inventory, 1);
+        let stats_low = calculate_stats(&inventory, 1, RunMode::Campaign);
         assert_eq!(stats_low.max_hp, 25, "levels 1-9 should start at 25 HP");
 
-        let stats_mid = calculate_stats(&inventory, 10);
+        let stats_mid = calculate_stats(&inventory, 10, RunMode::Campaign);
         assert_eq!(stats_mid.max_hp, 20, "levels 10-19 should start at 20 HP");
 
-        let stats_high = calculate_stats(&inventory, 20);
+        let stats_high = calculate_stats(&inventory, 20, RunMode::Campaign);
         assert_eq!(stats_high.max_hp, 15, "levels 20+ should start at 15 HP");
     }
 
     #[test]
     fn test_stats_with_max_hp_item() {
         let mut inventory = make_inventory();
-        let stats = calculate_stats(&inventory, 20);
+        let stats = calculate_stats(&inventory, 20, RunMode::Campaign);
         assert_eq!(stats.max_hp, 15);
     }
 
@@ -127,7 +137,7 @@ mod tests {
         let mut inventory = make_inventory();
         inventory.gear[0] = Some(ItemInstance::new(*b"G-MV-05\0", Tier::I));
 
-        let stats = calculate_stats(&inventory, 20);
+        let stats = calculate_stats(&inventory, 20, RunMode::Campaign);
 
         assert!(stats.dig >= BASE_DIG);
     }
@@ -138,9 +148,17 @@ mod tests {
         inventory.tool = Some(ItemInstance::new(*b"T-FR-01\0", Tier::II));
         inventory.gear[0] = Some(ItemInstance::new(*b"G-ST-01\0", Tier::I));
 
-        let stats = calculate_stats(&inventory, 20);
+        let stats = calculate_stats(&inventory, 20, RunMode::Campaign);
 
         assert_eq!(stats.max_hp, 15);
         assert_eq!(stats.dig, BASE_DIG);
+    }
+
+    #[test]
+    fn pvp_run_mode_uses_pvp_base_hp() {
+        let inventory = make_inventory();
+        let stats = calculate_stats(&inventory, 1, RunMode::Duel);
+
+        assert_eq!(stats.max_hp, PVP_BASE_HP);
     }
 }

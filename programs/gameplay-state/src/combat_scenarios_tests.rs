@@ -1,4 +1,5 @@
 use super::{build_player_combatant, preprocess_enemy_effects};
+use crate::state::RunMode;
 use crate::stats::calculate_stats;
 use anchor_lang::prelude::Pubkey;
 use combat_system::{
@@ -93,7 +94,7 @@ fn run_combat(
         inventory.gear[slot] = Some(*item);
     }
 
-    let player_stats = calculate_stats(&inventory, 20);
+    let player_stats = calculate_stats(&inventory, 20, RunMode::Campaign);
     let player_effects = generate_combat_effects(&inventory);
     let player_input = build_player_combatant(player_hp, &player_stats, &player_effects);
 
@@ -381,9 +382,9 @@ fn test_tunnel_rat_t1_basic_pickaxe() {
         enemy_archetype: ids::TUNNEL_RAT,
         enemy_tier: 0,
         player_gold: 10,
-        expected_player_won: true,
-        expected_final_player_hp: ExpectedHp::Exact(5),
-        expected_final_enemy_hp: ExpectedHp::Exact(0),
+        expected_player_won: false,
+        expected_final_player_hp: ExpectedHp::Exact(0),
+        expected_final_enemy_hp: ExpectedHp::Exact(1),
         expected_turns: 5,
         expected_gold_change: Some(-5),
     });
@@ -400,7 +401,7 @@ fn test_tunnel_rat_t1_atk_oil() {
         enemy_tier: 0,
         player_gold: 10,
         expected_player_won: true,
-        expected_final_player_hp: ExpectedHp::Exact(7),
+        expected_final_player_hp: ExpectedHp::Exact(4),
         expected_final_enemy_hp: ExpectedHp::NonPositive,
         expected_turns: 3,
         expected_gold_change: Some(-3),
@@ -418,7 +419,7 @@ fn test_cave_bat_t1_atk_oil() {
         enemy_tier: 0,
         player_gold: 0,
         expected_player_won: true,
-        expected_final_player_hp: ExpectedHp::Exact(6),
+        expected_final_player_hp: ExpectedHp::Exact(2),
         expected_final_enemy_hp: ExpectedHp::Exact(0),
         expected_turns: 4,
         expected_gold_change: None,
@@ -437,8 +438,8 @@ fn test_cave_bat_t1_basic_pickaxe() {
         player_gold: 0,
         expected_player_won: false,
         expected_final_player_hp: ExpectedHp::NonPositive,
-        expected_final_enemy_hp: ExpectedHp::Exact(2),
-        expected_turns: 10,
+        expected_final_enemy_hp: ExpectedHp::Exact(4),
+        expected_turns: 5,
         expected_gold_change: None,
     });
 }
@@ -453,10 +454,10 @@ fn test_rust_mite_t1_basic_pickaxe() {
         enemy_archetype: ids::RUST_MITE_SWARM,
         enemy_tier: 0,
         player_gold: 0,
-        expected_player_won: true,
-        expected_final_player_hp: ExpectedHp::Exact(4),
-        expected_final_enemy_hp: ExpectedHp::Exact(0),
-        expected_turns: 6,
+        expected_player_won: false,
+        expected_final_player_hp: ExpectedHp::Exact(0),
+        expected_final_enemy_hp: ExpectedHp::Exact(2),
+        expected_turns: 5,
         expected_gold_change: None,
     });
 }
@@ -696,7 +697,7 @@ fn test_work_vest_atk_oil_vs_spore_slime_t1() {
     inventory.tool = Some(basic_pickaxe_with_oils(&[ToolOilModification::PlusAtk]));
     inventory.gear[0] = Some(work_vest());
 
-    let player_stats = calculate_stats(&inventory, 20);
+    let player_stats = calculate_stats(&inventory, 20, RunMode::Campaign);
     assert_eq!(
         player_stats.max_hp, 19,
         "max_hp should be 15 base + 4 Work Vest"
@@ -747,7 +748,7 @@ fn test_work_vest_max_hp_not_double_counted() {
     let mut inventory = make_inventory();
     inventory.gear[0] = Some(work_vest());
 
-    let player_stats = calculate_stats(&inventory, 20);
+    let player_stats = calculate_stats(&inventory, 20, RunMode::Campaign);
     let player_effects = generate_combat_effects(&inventory);
     let player_input = build_player_combatant(19, &player_stats, &player_effects);
 

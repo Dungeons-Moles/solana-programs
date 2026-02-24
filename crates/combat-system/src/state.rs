@@ -82,6 +82,12 @@ pub enum Condition {
     EnemyHasNoArmorAndStatusAtLeast(StatusType, u8) = 13,
     /// Enemy has the specified status OR has no armor (disjunctive)
     EnemyHasStatusOrNoArmor(StatusType) = 14,
+    /// Owner must have at least N gold
+    OwnerGoldAtLeast(u16) = 15,
+    /// Enemy must have at least N gold
+    EnemyGoldAtLeast(u16) = 16,
+    /// Owner's DIG must be greater than enemy's Armor
+    OwnerDigGreaterThanEnemyArmor = 17,
 }
 
 /// A single entry in the combat log.
@@ -96,7 +102,7 @@ pub struct CombatLogEntry {
     pub action: LogAction,
     /// Primary value (damage, healing, stacks, etc.)
     pub value: i16,
-    /// Extra data (status_id for ApplyStatus, 0 otherwise)
+    /// Extra data (status_id for ApplyStatus, SPD bonus for Attack, 0 otherwise)
     pub extra: u8,
 }
 
@@ -113,6 +119,10 @@ impl CombatLogEntry {
 
     pub fn attack(turn: u8, is_player: bool, damage: i16) -> Self {
         Self::new(turn, is_player, LogAction::Attack, damage, 0)
+    }
+
+    pub fn attack_with_extra(turn: u8, is_player: bool, damage: i16, extra: u8) -> Self {
+        Self::new(turn, is_player, LogAction::Attack, damage, extra)
     }
 
     pub fn heal(turn: u8, is_player: bool, amount: i16) -> Self {
@@ -204,6 +214,8 @@ pub enum TriggerType {
     OnEnemyBleedDamage,
     /// Triggers when rust is applied to enemy
     OnApplyRust,
+    /// Triggers when owner deals non-weapon damage
+    OnDealNonWeaponDamage,
     /// Triggers when owner gains shrapnel
     OnGainShrapnel,
     /// Triggers when owner successfully converts Gold to Armor
@@ -230,6 +242,8 @@ pub enum EffectType {
     GainSpd,
     GainDig,
     GainGold,
+    /// Increase gold gains from all sources by the given percentage.
+    AmplifyGoldGain,
     ApplyBomb,
     ApplyChill,
     ApplyShrapnel,
@@ -264,6 +278,10 @@ pub enum EffectType {
     AmplifyNonWeaponDamage,
     /// Apply +damage to the next non-weapon damage instance only.
     EmpowerNextNonWeaponDamage,
+    /// Assign the bonus added to the first non-weapon damage each turn.
+    DoubleDetonationFirst,
+    /// Assign the bonus added to the second non-weapon damage each turn.
+    DoubleDetonationSecond,
     /// Store damage each turn (released on Exposed trigger)
     StoreDamage,
     /// Apply +damage to the next bomb trigger only.
@@ -308,7 +326,8 @@ pub enum ResolutionType {
 
 /// Per-combatant state during combat. Replaces the flat `player_*`/`enemy_*`
 /// fields that were previously duplicated on `CombatState`.
-pub(crate) struct Combatant {
+ #[derive(Default)]
+ pub(crate) struct Combatant {
     pub hp: i16,
     pub max_hp: u16,
     pub atk: i16,
@@ -325,6 +344,10 @@ pub(crate) struct Combatant {
     pub active_bomb_self_damage_reduction: i16,
     pub non_weapon_damage_bonus: i16,
     pub next_non_weapon_damage_bonus: i16,
+    pub gold_gain_bonus: i16,
+    pub non_weapon_hits_this_turn: u8,
+    pub double_detonation_first: i16,
+    pub double_detonation_second: i16,
     pub preserve_shrapnel_cap: u8,
     pub shards_every_turn: bool,
     pub status: StatusEffects,
@@ -362,6 +385,10 @@ impl Combatant {
             active_bomb_self_damage_reduction: self.active_bomb_self_damage_reduction,
             non_weapon_damage_bonus: self.non_weapon_damage_bonus,
             next_non_weapon_damage_bonus: self.next_non_weapon_damage_bonus,
+            gold_gain_bonus: self.gold_gain_bonus,
+            non_weapon_hits_this_turn: self.non_weapon_hits_this_turn,
+            double_detonation_first: self.double_detonation_first,
+            double_detonation_second: self.double_detonation_second,
             preserve_shrapnel_cap: self.preserve_shrapnel_cap,
             shards_every_turn: self.shards_every_turn,
         }
@@ -383,6 +410,10 @@ impl Combatant {
         self.active_bomb_self_damage_reduction = stats.active_bomb_self_damage_reduction;
         self.non_weapon_damage_bonus = stats.non_weapon_damage_bonus;
         self.next_non_weapon_damage_bonus = stats.next_non_weapon_damage_bonus;
+        self.gold_gain_bonus = stats.gold_gain_bonus;
+        self.non_weapon_hits_this_turn = stats.non_weapon_hits_this_turn;
+        self.double_detonation_first = stats.double_detonation_first;
+        self.double_detonation_second = stats.double_detonation_second;
         self.preserve_shrapnel_cap = stats.preserve_shrapnel_cap;
         self.shards_every_turn = stats.shards_every_turn;
     }
@@ -423,10 +454,14 @@ mod tests {
             active_bomb_self_damage_reduction: 0,
             non_weapon_damage_bonus: 0,
             next_non_weapon_damage_bonus: 0,
+            gold_gain_bonus: 0,
+            non_weapon_hits_this_turn: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
             status: StatusEffects::default(),
             first_time_flags: 0,
+            double_detonation_first: 0,
+            double_detonation_second: 0,
         };
         let updated_stats = CombatantStats {
             hp: 12,
@@ -446,6 +481,7 @@ mod tests {
             next_non_weapon_damage_bonus: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
+            ..Default::default()
         };
 
         combatant.apply_stats(&updated_stats);

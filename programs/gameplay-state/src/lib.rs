@@ -54,6 +54,23 @@ use state::{
 };
 use stats::{calculate_stats, PlayerStats};
 
+fn compute_gold_gain_multiplier(effects: &[ItemEffect]) -> i16 {
+    effects
+        .iter()
+        .filter(|effect| effect.effect_type == EffectType::AmplifyGoldGain)
+        .map(|effect| effect.value.max(0))
+        .sum()
+}
+
+fn apply_gold_reward_multiplier(base: u16, multiplier_percent: i16) -> u16 {
+    if multiplier_percent <= 0 || base == 0 {
+        return base;
+    }
+
+    let total = i32::from(base) + (i32::from(base) * i32::from(multiplier_percent) / 100);
+    total.clamp(0, i32::from(u16::MAX)) as u16
+}
+
 declare_id!("C8hK4qsqsSYQeqyXuTPTUUS3T7N74WnZCuzvChTpK1Mo");
 
 /// Session manager program ID for session ownership checks
@@ -231,17 +248,17 @@ pub mod gameplay_state {
             GameplayStateError::Unauthorized
         );
         require_keys_eq!(
-            ctx.accounts.game_state.session,
+            read_game_state(&ctx.accounts.game_state)?.session,
             session_key,
             GameplayStateError::Unauthorized
         );
         require_keys_eq!(
-            ctx.accounts.map_enemies.session,
+            read_map_enemies(&ctx.accounts.map_enemies)?.session,
             session_key,
             GameplayStateError::Unauthorized
         );
         require_keys_eq!(
-            ctx.accounts.game_state.session_signer,
+            read_game_state(&ctx.accounts.game_state)?.session_signer,
             ctx.accounts.session_signer.key(),
             GameplayStateError::Unauthorized
         );
@@ -850,8 +867,16 @@ pub mod gameplay_state {
             let creator_inventory = snapshot_creator_inventory(creator);
             if duel_entry.outcome == DuelRunOutcome::CompletedWeek3 {
                 let opponent_inventory = snapshot_duel_entry_inventory(duel_entry);
-                let creator_stats = calculate_stats(&creator_inventory, GAUNTLET_CAMPAIGN_LEVEL);
-                let opponent_stats = calculate_stats(&opponent_inventory, GAUNTLET_CAMPAIGN_LEVEL);
+                let creator_stats = calculate_stats(
+                    &creator_inventory,
+                    GAUNTLET_CAMPAIGN_LEVEL,
+                    game_state.run_mode,
+                );
+                let opponent_stats = calculate_stats(
+                    &opponent_inventory,
+                    GAUNTLET_CAMPAIGN_LEVEL,
+                    game_state.run_mode,
+                );
                 let creator_effects = generate_combat_effects(&creator_inventory);
                 let opponent_effects = generate_combat_effects(&opponent_inventory);
                 let combat_outcome = resolve_combat_with_both_gold(
@@ -1144,8 +1169,10 @@ pub mod gameplay_state {
             clock.slot,
         )?;
 
-        let waiting_stats = calculate_stats(&waiting_inventory, GAUNTLET_CAMPAIGN_LEVEL);
-        let entrant_stats = calculate_stats(&entrant_inventory, GAUNTLET_CAMPAIGN_LEVEL);
+        let waiting_stats =
+            calculate_stats(&waiting_inventory, GAUNTLET_CAMPAIGN_LEVEL, RunMode::Duel);
+        let entrant_stats =
+            calculate_stats(&entrant_inventory, GAUNTLET_CAMPAIGN_LEVEL, RunMode::Duel);
         let waiting_effects = generate_combat_effects(&waiting_inventory);
         let entrant_effects = generate_combat_effects(&entrant_inventory);
 
@@ -1257,7 +1284,9 @@ pub mod gameplay_state {
     /// Closes the GameState account via session key signer authorization.
     /// Used by session-manager CPI during end_session to clean up game state.
     /// Rent is returned to the player wallet.
-    pub fn close_game_state_via_session_signer(ctx: Context<CloseGameStateViaSessionSigner>) -> Result<()> {
+    pub fn close_game_state_via_session_signer(
+        ctx: Context<CloseGameStateViaSessionSigner>,
+    ) -> Result<()> {
         let game_state = &ctx.accounts.game_state;
 
         emit!(GameStateClosed {
@@ -1290,7 +1319,8 @@ pub mod gameplay_state {
     pub fn heal_player(ctx: Context<HealPlayer>, amount: u16) -> Result<()> {
         let game_state = &mut ctx.accounts.game_state;
         let inventory = &ctx.accounts.inventory;
-        let player_stats = calculate_stats(inventory, game_state.campaign_level);
+        let player_stats =
+            calculate_stats(inventory, game_state.campaign_level, game_state.run_mode);
 
         let old_hp = game_state.hp;
         let new_hp = (game_state.hp as i32)
@@ -1334,6 +1364,7 @@ pub mod gameplay_state {
         let player_inventory_program = &ctx.accounts.player_inventory_program;
 
         require!(!game_state.is_dead, GameplayStateError::PlayerDead);
+        require!(!game_state.completed, GameplayStateError::RunCompleted);
         require!(
             !game_state.boss_fight_ready,
             GameplayStateError::BossFightAlreadyTriggered
@@ -1602,7 +1633,8 @@ pub mod gameplay_state {
             DAY_VISION_RADIUS
         };
         let is_wall = !generated_map.is_walkable(target_x, target_y);
-        let player_stats = calculate_stats(inventory, game_state.campaign_level);
+        let player_stats =
+            calculate_stats(inventory, game_state.campaign_level, game_state.run_mode);
         let move_cost = calculate_move_cost(is_wall, player_stats.dig);
 
         // Check if move can be afforded in current phase or by spanning phases
@@ -1955,9 +1987,11 @@ pub struct DelegateGameplayAccounts<'info> {
 #[derive(Accounts)]
 pub struct UndelegateGameplayAccounts<'info> {
     #[account(mut)]
-    pub game_state: Account<'info, GameState>,
+    /// CHECK: PDA is validated and deserialized in handler.
+    pub game_state: AccountInfo<'info>,
     #[account(mut)]
-    pub map_enemies: Account<'info, MapEnemies>,
+    /// CHECK: PDA is validated and deserialized in handler.
+    pub map_enemies: AccountInfo<'info>,
     /// CHECK: Session PDA used only for deterministic PDA validation.
     pub game_session: UncheckedAccount<'info>,
     pub session_signer: Signer<'info>,
@@ -1978,6 +2012,18 @@ fn find_enemy_index(map_enemies: &MapEnemies, x: u8, y: u8) -> Option<usize> {
         .enemies
         .iter()
         .position(|enemy| !enemy.defeated && enemy.x == x && enemy.y == y)
+}
+
+fn read_game_state(game_state: &AccountInfo<'_>) -> Result<GameState> {
+    let data = game_state.try_borrow_data()?;
+    let mut slice: &[u8] = &data;
+    GameState::try_deserialize(&mut slice).map_err(|_| GameplayStateError::InvalidSession.into())
+}
+
+fn read_map_enemies(map_enemies: &AccountInfo<'_>) -> Result<MapEnemies> {
+    let data = map_enemies.try_borrow_data()?;
+    let mut slice: &[u8] = &data;
+    MapEnemies::try_deserialize(&mut slice).map_err(|_| GameplayStateError::InvalidSession.into())
 }
 
 fn remove_enemy(map_enemies: &mut MapEnemies, enemy_index: usize) {
@@ -2131,10 +2177,8 @@ fn draw_gauntlet_echoes_from_remaining(
         );
 
         // Verify PDA
-        let (expected_pda, _) = Pubkey::find_program_address(
-            &[GAUNTLET_WEEK_POOL_SEED, &[week]],
-            &program_id,
-        );
+        let (expected_pda, _) =
+            Pubkey::find_program_address(&[GAUNTLET_WEEK_POOL_SEED, &[week]], &program_id);
         require!(
             info.key() == expected_pda,
             GameplayStateError::InvalidGauntletWeek
@@ -2153,17 +2197,11 @@ fn draw_gauntlet_echoes_from_remaining(
         );
 
         // Read week field (offset 8) and validate
-        require!(
-            data[8] == week,
-            GameplayStateError::InvalidGauntletWeek
-        );
+        require!(data[8] == week, GameplayStateError::InvalidGauntletWeek);
 
         // Read vec_len at offset 20 (8 disc + 1 week + 1 bootstrap + 2 echoes_added + 8 seen)
         let vec_len = u32::from_le_bytes(data[20..24].try_into().unwrap()) as usize;
-        require!(
-            vec_len > 0,
-            GameplayStateError::GauntletNotInitialized
-        );
+        require!(vec_len > 0, GameplayStateError::GauntletNotInitialized);
 
         // Pick random index — slot adds per-entry entropy so re-entering gives different echoes
         let rand = derive_u64_random(&[
@@ -2405,6 +2443,7 @@ fn transfer_lamports_from_vault<'info>(
 /// - Heal: Restore HP (capped at max_hp)
 fn process_victory_effects(game_state: &mut GameState, inventory: &PlayerInventory, max_hp: i16) {
     let effects = generate_combat_effects(inventory);
+    let gold_multiplier = compute_gold_gain_multiplier(&effects);
 
     for effect in effects.iter() {
         if effect.trigger != combat_system::TriggerType::Victory {
@@ -2414,7 +2453,8 @@ fn process_victory_effects(game_state: &mut GameState, inventory: &PlayerInvento
         match effect.effect_type {
             EffectType::GainGold => {
                 let gold_gain = effect.value.max(0) as u16;
-                game_state.gold = game_state.gold.saturating_add(gold_gain);
+                let boosted_gain = apply_gold_reward_multiplier(gold_gain, gold_multiplier);
+                game_state.gold = game_state.gold.saturating_add(boosted_gain);
             }
             EffectType::Heal => {
                 let heal_amount = effect.value.max(0);
@@ -2470,8 +2510,9 @@ fn resolve_enemy_combat(
         None => return Ok(true),
     };
 
-    let player_stats = calculate_stats(inventory, game_state.campaign_level);
+    let player_stats = calculate_stats(inventory, game_state.campaign_level, game_state.run_mode);
     let player_effects = generate_combat_effects(inventory);
+    let gold_multiplier = compute_gold_gain_multiplier(&player_effects);
     let player_input = build_player_combatant(game_state.hp, &player_stats, &player_effects);
     let enemy_effects = preprocess_enemy_effects(enemy.archetype_id, game_state.gold);
 
@@ -2495,6 +2536,7 @@ fn resolve_enemy_combat(
     let tier_enum = field_enemies::state::EnemyTier::from_u8(enemy.tier);
     require!(tier_enum.is_some(), GameplayStateError::InvalidEnemyTier);
     let gold_reward = tier_enum.unwrap().gold_reward() as u16;
+    let gold_reward = apply_gold_reward_multiplier(gold_reward, gold_multiplier);
 
     emit!(CombatEnded {
         player: game_state.player,
@@ -2573,7 +2615,7 @@ fn resolve_boss_fight<'info>(
     let boss_definition = boss_system::get_boss(&boss_id).ok_or(GameplayStateError::InvalidWeek)?;
     let boss_effects = boss_system::get_boss_item_effects(boss_definition);
 
-    let player_stats = calculate_stats(inventory, game_state.campaign_level);
+    let player_stats = calculate_stats(inventory, game_state.campaign_level, game_state.run_mode);
     let player_effects = generate_combat_effects(inventory);
     let player_input = build_player_combatant(game_state.hp, &player_stats, &player_effects);
 
@@ -2697,11 +2739,14 @@ fn resolve_gauntlet_echo_inline<'info>(
         None => return Err(GameplayStateError::GauntletNotInitialized.into()),
     };
 
-    let player_stats = calculate_stats(inventory, GAUNTLET_CAMPAIGN_LEVEL);
+    let player_stats = calculate_stats(inventory, GAUNTLET_CAMPAIGN_LEVEL, game_state.run_mode);
     let player_effects = generate_combat_effects(inventory);
-    let echo_inventory =
-        snapshot_to_inventory(echo, game_state.session, game_state.player);
-    let echo_stats = calculate_stats(&echo_inventory, GAUNTLET_CAMPAIGN_LEVEL);
+    let echo_inventory = snapshot_to_inventory(echo, game_state.session, game_state.player);
+    let echo_stats = calculate_stats(
+        &echo_inventory,
+        GAUNTLET_CAMPAIGN_LEVEL,
+        game_state.run_mode,
+    );
     let echo_effects = generate_combat_effects(&echo_inventory);
 
     let outcome = resolve_combat_with_both_gold(

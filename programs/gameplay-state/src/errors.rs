@@ -47,6 +47,9 @@ pub enum GameplayStateError {
     #[msg("Player is dead - no further actions allowed")]
     PlayerDead,
 
+    #[msg("Run is already completed - no further actions allowed")]
+    RunCompleted,
+
     #[msg("Invalid week value")]
     InvalidWeek,
 

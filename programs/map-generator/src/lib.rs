@@ -223,8 +223,9 @@ pub mod map_generator {
             expected_generated_map,
             MapGeneratorError::Unauthorized
         );
+        let generated_map = read_generated_map(&ctx.accounts.generated_map)?;
         require_keys_eq!(
-            ctx.accounts.generated_map.session,
+            generated_map.session,
             session_key,
             MapGeneratorError::Unauthorized
         );
@@ -309,10 +310,17 @@ pub struct DelegateGeneratedMap<'info> {
 #[derive(Accounts)]
 pub struct UndelegateGeneratedMap<'info> {
     #[account(mut)]
-    pub generated_map: Account<'info, GeneratedMap>,
+    /// CHECK: PDA is validated and deserialized in handler.
+    pub generated_map: AccountInfo<'info>,
     /// CHECK: Session PDA used only for deterministic PDA validation.
     pub session: UncheckedAccount<'info>,
     pub session_signer: Signer<'info>,
+}
+
+fn read_generated_map(generated_map: &AccountInfo<'_>) -> Result<GeneratedMap> {
+    let data = generated_map.try_borrow_data()?;
+    let mut slice: &[u8] = &data;
+    GeneratedMap::try_deserialize(&mut slice).map_err(|_| MapGeneratorError::InvalidSession.into())
 }
 
 #[derive(Accounts)]

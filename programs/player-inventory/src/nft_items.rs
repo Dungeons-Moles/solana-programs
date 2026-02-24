@@ -38,12 +38,7 @@ pub const NFT_ITEMS: &[ItemDefinition] = &[
                 false,
                 [3, 5, 7],
             ),
-            EffectDefinition::new(
-                TriggerType::OnHit,
-                EffectType::ApplyChill,
-                true,
-                [1, 1, 2],
-            ),
+            EffectDefinition::new(TriggerType::OnHit, EffectType::ApplyChill, true, [1, 1, 2]),
         ],
     },
     // S-XX-03: Bloodstone Ring — Blood/Gear, Mythic
@@ -61,12 +56,7 @@ pub const NFT_ITEMS: &[ItemDefinition] = &[
                 false,
                 [2, 3, 4],
             ),
-            EffectDefinition::new(
-                TriggerType::OnHit,
-                EffectType::ApplyBleed,
-                true,
-                [2, 3, 4],
-            ),
+            EffectDefinition::new(TriggerType::OnHit, EffectType::ApplyBleed, true, [2, 3, 4]),
         ],
     },
     // S-XX-04: Rusty Crown — Rust/Gear, Heroic

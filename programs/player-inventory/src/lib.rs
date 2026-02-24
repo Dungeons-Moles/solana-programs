@@ -19,8 +19,8 @@ pub mod errors;
 pub mod fusion;
 pub mod items;
 pub mod itemsets;
-pub mod offers;
 pub mod nft_items;
+pub mod offers;
 pub mod state;
 
 use combat_system::{EffectType, TriggerType};
@@ -116,13 +116,14 @@ pub mod player_inventory {
             expected_inventory,
             InventoryError::Unauthorized
         );
+        let inventory = read_inventory(&ctx.accounts.inventory)?;
         require_keys_eq!(
-            ctx.accounts.inventory.session,
+            inventory.session,
             session_key,
             InventoryError::Unauthorized
         );
         require_keys_eq!(
-            ctx.accounts.inventory.player,
+            inventory.player,
             ctx.accounts.session_signer.key(),
             InventoryError::Unauthorized
         );
@@ -548,8 +549,7 @@ pub mod player_inventory {
         use crate::nft_items::get_nft_item;
 
         // Validate the NFT item exists in catalog
-        let _item_def =
-            get_nft_item(&nft_item_id).ok_or(InventoryError::InvalidItemId)?;
+        let _item_def = get_nft_item(&nft_item_id).ok_or(InventoryError::InvalidItemId)?;
 
         // Validate the account is owned by Metaplex Core program
         require!(
@@ -616,7 +616,10 @@ fn base_hp(campaign_level: u8) -> i16 {
 /// Reads campaign_level from raw GameState account data.
 fn read_campaign_level(game_state: &AccountInfo) -> Result<u8> {
     let data = game_state.try_borrow_data()?;
-    require!(data.len() > GAME_STATE_CAMPAIGN_LEVEL_OFFSET, InventoryError::InvalidSlotIndex);
+    require!(
+        data.len() > GAME_STATE_CAMPAIGN_LEVEL_OFFSET,
+        InventoryError::InvalidSlotIndex
+    );
     Ok(data[GAME_STATE_CAMPAIGN_LEVEL_OFFSET])
 }
 
@@ -797,10 +800,17 @@ pub struct DelegateInventory<'info> {
 #[derive(Accounts)]
 pub struct UndelegateInventory<'info> {
     #[account(mut)]
-    pub inventory: Account<'info, PlayerInventory>,
+    /// CHECK: PDA is validated and deserialized in handler.
+    pub inventory: AccountInfo<'info>,
     /// CHECK: Session PDA used only for deterministic PDA validation.
     pub session: UncheckedAccount<'info>,
     pub session_signer: Signer<'info>,
+}
+
+fn read_inventory(inventory: &AccountInfo<'_>) -> Result<PlayerInventory> {
+    let data = inventory.try_borrow_data()?;
+    let mut slice: &[u8] = &data;
+    PlayerInventory::try_deserialize(&mut slice).map_err(|_| InventoryError::InvalidSession.into())
 }
 
 #[derive(Accounts)]

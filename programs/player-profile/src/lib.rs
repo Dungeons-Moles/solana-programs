@@ -106,6 +106,11 @@ pub mod player_profile {
         Ok(())
     }
 
+    /// Closes the player's profile account and refunds rent to the owner.
+    pub fn close_profile(_ctx: Context<CloseProfile>) -> Result<()> {
+        Ok(())
+    }
+
     /// Updates the active item pool bitmask.
     /// The pool must be a subset of unlocked items and contain at least 40 entries.
     pub fn update_active_item_pool(
@@ -115,7 +120,10 @@ pub mod player_profile {
         let profile = &mut ctx.accounts.player_profile;
 
         require!(
-            !is_player_queued_in_pit_draft(&ctx.accounts.pit_draft_queue, ctx.accounts.owner.key())?,
+            !is_player_queued_in_pit_draft(
+                &ctx.accounts.pit_draft_queue,
+                ctx.accounts.owner.key()
+            )?,
             PlayerProfileError::PitDraftQueueLocked
         );
 
@@ -280,10 +288,8 @@ pub mod player_profile {
         let profile = &mut ctx.accounts.player_profile;
         let clock = Clock::get()?;
         let gameplay_state_program = Pubkey::new_from_array(GAMEPLAY_STATE_PROGRAM_ID);
-        let (expected_gauntlet_pool, _) = Pubkey::find_program_address(
-            &[GAUNTLET_POOL_VAULT_SEED],
-            &gameplay_state_program,
-        );
+        let (expected_gauntlet_pool, _) =
+            Pubkey::find_program_address(&[GAUNTLET_POOL_VAULT_SEED], &gameplay_state_program);
         require_keys_eq!(
             ctx.accounts.gauntlet_pool.key(),
             expected_gauntlet_pool,
@@ -415,6 +421,21 @@ pub struct UpdateProfileName<'info> {
     )]
     pub player_profile: Account<'info, PlayerProfile>,
 
+    pub owner: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct CloseProfile<'info> {
+    #[account(
+        mut,
+        seeds = [PlayerProfile::SEED_PREFIX, owner.key().as_ref()],
+        bump = player_profile.bump,
+        has_one = owner @ PlayerProfileError::Unauthorized,
+        close = owner
+    )]
+    pub player_profile: Account<'info, PlayerProfile>,
+
+    #[account(mut)]
     pub owner: Signer<'info>,
 }
 

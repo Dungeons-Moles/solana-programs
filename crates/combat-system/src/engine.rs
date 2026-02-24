@@ -14,6 +14,11 @@ pub fn determine_turn_order(player_spd: i16, enemy_spd: i16) -> (bool, bool) {
     (player_first, !player_first)
 }
 
+pub fn spd_advantage_bonus(attacker_spd: i16, defender_spd: i16) -> i16 {
+    let diff = attacker_spd.saturating_sub(defender_spd).max(0);
+    diff / 2
+}
+
 pub fn check_sudden_death(turn: u8) -> i16 {
     if turn < SUDDEN_DEATH_TURN {
         return 0;
@@ -106,8 +111,14 @@ pub fn execute_strikes(
             strike_atk = non_gear_atk.saturating_add(gear_bonus / 2);
         }
 
+        let spd_bonus = if strike_index == 0 {
+            spd_advantage_bonus(attacker_stats.spd, defender_stats.spd)
+        } else {
+            0
+        };
+
         let (new_hp, new_arm, hp_damage, arm_damage) = execute_strike(
-            strike_atk,
+            strike_atk + spd_bonus,
             attacker_stats.armor_piercing,
             defender_stats.arm,
             defender_stats.hp,
@@ -128,7 +139,16 @@ pub fn execute_strikes(
 
         // Log HP damage if any (this is the "attack" that got through armor)
         if hp_damage > 0 {
-            log.push(CombatLogEntry::attack(turn, is_player_attacking, hp_damage));
+            if spd_bonus > 0 && strike_index == 0 {
+                log.push(CombatLogEntry::attack_with_extra(
+                    turn,
+                    is_player_attacking,
+                    hp_damage,
+                    spd_bonus as u8,
+                ));
+            } else {
+                log.push(CombatLogEntry::attack(turn, is_player_attacking, hp_damage));
+            }
         }
 
         // Trigger OnHit effects if any damage was dealt (armor or HP)
@@ -265,6 +285,69 @@ pub fn execute_strikes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::{Condition, EffectType, LogAction};
+
+    fn make_combatant(atk: i16, spd: i16, arm: i16) -> CombatantStats {
+        CombatantStats {
+            hp: 30,
+            max_hp: 30,
+            atk,
+            arm,
+            spd,
+            dig: 0,
+            armor_piercing: 0,
+            stored_damage: 0,
+            gear_atk_bonus: 0,
+            half_gear_atk_after_second_strike: false,
+            next_bomb_damage_bonus: 0,
+            next_bomb_self_damage_reduction: 0,
+            active_bomb_self_damage_reduction: 0,
+            non_weapon_damage_bonus: 0,
+            next_non_weapon_damage_bonus: 0,
+            preserve_shrapnel_cap: 0,
+            shards_every_turn: false,
+            ..Default::default()
+        }
+    }
+
+    fn run_test_strikes(
+        attacker_stats: &mut CombatantStats,
+        defender_stats: &mut CombatantStats,
+        strikes: u8,
+        turn: u8,
+        is_player_attacking: bool,
+    ) -> Vec<CombatLogEntry> {
+        let mut attacker_status = StatusEffects::default();
+        let mut defender_status = StatusEffects::default();
+        let mut on_hit_effects: Vec<ItemEffect> = Vec::new();
+        let mut triggered_flags: Vec<bool> = Vec::new();
+        let mut defender_effects: Vec<ItemEffect> = Vec::new();
+        let mut defender_triggered_flags: Vec<bool> = Vec::new();
+        let mut player_gold: u16 = 0;
+        let mut enemy_gold: u16 = 0;
+        let mut gold_change: i16 = 0;
+        let mut log: Vec<CombatLogEntry> = Vec::new();
+
+        execute_strikes(
+            strikes,
+            attacker_stats,
+            &mut attacker_status,
+            defender_stats,
+            &mut defender_status,
+            &mut on_hit_effects,
+            &mut triggered_flags,
+            &mut defender_effects,
+            &mut defender_triggered_flags,
+            turn,
+            is_player_attacking,
+            &mut player_gold,
+            &mut enemy_gold,
+            &mut gold_change,
+            &mut log,
+        );
+
+        log
+    }
 
     #[test]
     fn test_multi_strike_damage_accumulates() {
@@ -324,6 +407,7 @@ mod tests {
             next_non_weapon_damage_bonus: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
+            ..Default::default()
         };
         let mut defender = CombatantStats {
             hp: 8,
@@ -343,6 +427,7 @@ mod tests {
             next_non_weapon_damage_bonus: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
+            ..Default::default()
         };
         let mut attacker_status = StatusEffects::default();
         let mut defender_status = StatusEffects::default();
@@ -396,6 +481,7 @@ mod tests {
             next_non_weapon_damage_bonus: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
+            ..Default::default()
         };
         let mut defender_again = CombatantStats {
             hp: 8,
@@ -415,6 +501,7 @@ mod tests {
             next_non_weapon_damage_bonus: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
+            ..Default::default()
         };
         let mut attacker_status_again = StatusEffects::default();
         let mut defender_status_again = StatusEffects::default();
@@ -484,6 +571,7 @@ mod tests {
             next_non_weapon_damage_bonus: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
+            ..Default::default()
         };
         let mut defender = CombatantStats {
             hp: 20,
@@ -503,6 +591,7 @@ mod tests {
             next_non_weapon_damage_bonus: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
+            ..Default::default()
         };
         let mut attacker_status = StatusEffects::default();
         let mut defender_status = StatusEffects::default();
@@ -536,6 +625,230 @@ mod tests {
         // Strike 1: 5, strike 2: 5, strike 3: 1 + floor(4/2) = 3
         assert_eq!(total_hp_damage, 13);
         assert_eq!(defender.hp, 7);
+    }
+
+    #[test]
+    fn test_spd_advantage_bonus_first_strike_only() {
+        let mut attacker = CombatantStats {
+            hp: 10,
+            max_hp: 10,
+            atk: 3,
+            arm: 0,
+            spd: 6,
+            dig: 0,
+            armor_piercing: 0,
+            stored_damage: 0,
+            gear_atk_bonus: 0,
+            half_gear_atk_after_second_strike: false,
+            next_bomb_damage_bonus: 0,
+            next_bomb_self_damage_reduction: 0,
+            active_bomb_self_damage_reduction: 0,
+            non_weapon_damage_bonus: 0,
+            next_non_weapon_damage_bonus: 0,
+            preserve_shrapnel_cap: 0,
+            shards_every_turn: false,
+            ..Default::default()
+        };
+        let mut defender = CombatantStats {
+            hp: 20,
+            max_hp: 20,
+            atk: 0,
+            arm: 0,
+            spd: 1,
+            dig: 0,
+            armor_piercing: 0,
+            stored_damage: 0,
+            gear_atk_bonus: 0,
+            half_gear_atk_after_second_strike: false,
+            next_bomb_damage_bonus: 0,
+            next_bomb_self_damage_reduction: 0,
+            active_bomb_self_damage_reduction: 0,
+            non_weapon_damage_bonus: 0,
+            next_non_weapon_damage_bonus: 0,
+            preserve_shrapnel_cap: 0,
+            shards_every_turn: false,
+            ..Default::default()
+        };
+        let mut attacker_status = StatusEffects::default();
+        let mut defender_status = StatusEffects::default();
+        let mut effects: Vec<ItemEffect> = Vec::new();
+        let mut flags: Vec<bool> = Vec::new();
+        let mut defender_effects: Vec<ItemEffect> = Vec::new();
+        let mut defender_flags: Vec<bool> = Vec::new();
+        let mut player_gold: u16 = 0;
+        let mut enemy_gold: u16 = 0;
+        let mut gold_change: i16 = 0;
+        let mut log: Vec<CombatLogEntry> = Vec::new();
+
+        execute_strikes(
+            2,
+            &mut attacker,
+            &mut attacker_status,
+            &mut defender,
+            &mut defender_status,
+            &mut effects,
+            &mut flags,
+            &mut defender_effects,
+            &mut defender_flags,
+            1,
+            true,
+            &mut player_gold,
+            &mut enemy_gold,
+            &mut gold_change,
+            &mut log,
+        );
+
+        assert!(log
+            .iter()
+            .any(|entry| entry.action == LogAction::Attack && entry.extra > 0));
+        assert!(log
+            .iter()
+            .any(|entry| entry.action == LogAction::Attack && entry.extra == 0));
+    }
+
+    #[test]
+    fn test_spd_bonus_formula() {
+        assert_eq!(spd_advantage_bonus(5, 1), 2);
+        assert_eq!(spd_advantage_bonus(3, 3), 0);
+        assert_eq!(spd_advantage_bonus(2, 5), 0);
+        assert_eq!(spd_advantage_bonus(7, 4), 1);
+    }
+
+    #[test]
+    fn spd_bonus_applies_only_to_first_strike_each_turn() {
+        let mut attacker = make_combatant(5, 6, 0);
+        let mut defender = make_combatant(4, 0, 0);
+
+        let log = run_test_strikes(&mut attacker, &mut defender, 2, 5, true);
+        let attacks: Vec<_> = log
+            .iter()
+            .filter(|entry| entry.action == LogAction::Attack)
+            .collect();
+
+        assert_eq!(attacks.len(), 2);
+        assert_eq!(attacks[0].extra, 3);
+        assert_eq!(attacks[1].extra, 0);
+    }
+
+    #[test]
+    fn spd_bonus_recalculates_each_turn() {
+        let mut attacker = make_combatant(5, 6, 0);
+        let mut defender = make_combatant(4, 1, 0);
+
+        let first_turn = run_test_strikes(&mut attacker, &mut defender, 1, 1, true);
+        let first_attack = first_turn
+            .iter()
+            .find(|entry| entry.action == LogAction::Attack)
+            .unwrap();
+        assert_eq!(first_attack.extra, 2);
+
+        attacker.spd = 1;
+        defender.spd = 6;
+
+        let second_turn = run_test_strikes(&mut attacker, &mut defender, 1, 2, true);
+        let second_attack = second_turn
+            .iter()
+            .find(|entry| entry.action == LogAction::Attack)
+            .unwrap();
+        assert_eq!(second_attack.extra, 0);
+    }
+
+    #[test]
+    fn spd_bonus_applies_to_both_sides() {
+        let mut player = make_combatant(4, 2, 0);
+        let mut enemy = make_combatant(5, 6, 0);
+
+        let log = run_test_strikes(&mut enemy, &mut player, 1, 1, false);
+        let enemy_attack = log
+            .iter()
+            .find(|entry| entry.action == LogAction::Attack && !entry.is_player)
+            .unwrap();
+        assert_eq!(enemy_attack.extra, 2);
+    }
+
+    #[test]
+    fn spd_difference_below_two_gives_no_bonus() {
+        let mut attacker = make_combatant(4, 3, 0);
+        let mut defender = make_combatant(4, 2, 0);
+
+        let log = run_test_strikes(&mut attacker, &mut defender, 1, 3, true);
+        let attack = log
+            .iter()
+            .find(|entry| entry.action == LogAction::Attack)
+            .unwrap();
+        assert_eq!(attack.extra, 0);
+
+        attacker.spd = 4;
+        defender.spd = 4;
+        let log = run_test_strikes(&mut attacker, &mut defender, 1, 4, true);
+        let attack = log
+            .iter()
+            .find(|entry| entry.action == LogAction::Attack)
+            .unwrap();
+        assert_eq!(attack.extra, 0);
+    }
+
+    #[test]
+    fn spd_bonus_accounts_for_battle_start_spd_gain() {
+        let mut attacker = make_combatant(4, 6, 0);
+        let mut defender = make_combatant(4, 5, 0);
+        let mut attacker_status = StatusEffects::default();
+        let mut defender_status = StatusEffects::default();
+        let mut attacker_effects = vec![ItemEffect {
+            trigger: TriggerType::BattleStart,
+            once_per_turn: false,
+            effect_type: EffectType::GainSpd,
+            value: 1,
+            condition: Condition::None,
+        }];
+        let mut attacker_flags = vec![false; attacker_effects.len()];
+        let mut defender_effects: Vec<ItemEffect> = Vec::new();
+        let mut defender_flags: Vec<bool> = Vec::new();
+        let mut player_gold = 0u16;
+        let mut enemy_gold = 0u16;
+        let mut gold_change = 0i16;
+        let mut log = Vec::new();
+
+        process_triggers_for_phase(
+            &mut attacker_effects,
+            TriggerType::BattleStart,
+            1,
+            &mut attacker,
+            &mut attacker_status,
+            &mut defender,
+            &mut defender_status,
+            &mut attacker_flags,
+            true,
+            true,
+            &mut player_gold,
+            &mut enemy_gold,
+            &mut gold_change,
+            &mut log,
+        );
+
+        execute_strikes(
+            1,
+            &mut attacker,
+            &mut attacker_status,
+            &mut defender,
+            &mut defender_status,
+            &mut attacker_effects,
+            &mut attacker_flags,
+            &mut defender_effects,
+            &mut defender_flags,
+            1,
+            true,
+            &mut player_gold,
+            &mut enemy_gold,
+            &mut gold_change,
+            &mut log,
+        );
+
+        let attack = log
+            .iter()
+            .find(|entry| entry.action == LogAction::Attack)
+            .expect("attack log missing");
+        assert_eq!(attack.extra, 1);
     }
 
     #[test]

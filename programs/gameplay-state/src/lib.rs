@@ -91,8 +91,6 @@ pub const PIT_DRAFT_MAX_START_GOLD: u16 = 30;
 pub const MAX_PVP_VISUAL_LOG_ENTRIES: usize = 512;
 pub const DISCOVER_VISIBLE_WAYPOINTS_DISCRIMINATOR: [u8; 8] =
     [0x3b, 0x26, 0x6a, 0x00, 0x3a, 0xb1, 0x50, 0xfc];
-pub const LOCAL_ER_VALIDATOR: Pubkey = pubkey!("mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev");
-
 /// Player inventory program ID for authorized HP modifications via CPI
 pub const PLAYER_INVENTORY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     0x8b, 0x77, 0xfe, 0x0c, 0xa3, 0x5f, 0x22, 0x83, 0xa1, 0x7c, 0x15, 0x8e, 0x3e, 0x68, 0xbd, 0x0e,
@@ -100,10 +98,7 @@ pub const PLAYER_INVENTORY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
 ]);
 
 fn local_delegate_config() -> DelegateConfig {
-    DelegateConfig {
-        validator: Some(LOCAL_ER_VALIDATOR),
-        ..DelegateConfig::default()
-    }
+    DelegateConfig::default()
 }
 
 #[ephemeral]
@@ -268,6 +263,67 @@ pub mod gameplay_state {
         commit_and_undelegate_accounts(
             &ctx.accounts.session_signer.to_account_info(),
             vec![&game_state_info, &map_enemies_info],
+            &ctx.accounts.magic_context,
+            &ctx.accounts.magic_program.to_account_info(),
+        )?;
+        Ok(())
+    }
+
+    /// Commits and undelegates only the game_state account from ER back to base layer.
+    /// Used when map_enemies is already on base but game_state is still delegated.
+    pub fn undelegate_game_state(ctx: Context<UndelegateGameState>) -> Result<()> {
+        let session_key = ctx.accounts.game_session.key();
+        let (expected_game_state, _) =
+            Pubkey::find_program_address(&[b"game_state", session_key.as_ref()], &crate::ID);
+        require_keys_eq!(
+            ctx.accounts.game_state.key(),
+            expected_game_state,
+            GameplayStateError::Unauthorized
+        );
+        require_keys_eq!(
+            read_game_state(&ctx.accounts.game_state)?.session,
+            session_key,
+            GameplayStateError::Unauthorized
+        );
+        require_keys_eq!(
+            read_game_state(&ctx.accounts.game_state)?.session_signer,
+            ctx.accounts.session_signer.key(),
+            GameplayStateError::Unauthorized
+        );
+
+        let game_state_info = ctx.accounts.game_state.to_account_info();
+        commit_and_undelegate_accounts(
+            &ctx.accounts.session_signer.to_account_info(),
+            vec![&game_state_info],
+            &ctx.accounts.magic_context,
+            &ctx.accounts.magic_program.to_account_info(),
+        )?;
+        Ok(())
+    }
+
+    /// Commits and undelegates only the map_enemies account from ER back to base layer.
+    /// Used when game_state is already on base but map_enemies is still delegated.
+    pub fn undelegate_map_enemies(ctx: Context<UndelegateMapEnemies>) -> Result<()> {
+        let session_key = ctx.accounts.game_session.key();
+        let (expected_map_enemies, _) = Pubkey::find_program_address(
+            &[MapEnemies::SEED_PREFIX, session_key.as_ref()],
+            &crate::ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.map_enemies.key(),
+            expected_map_enemies,
+            GameplayStateError::Unauthorized
+        );
+        require_keys_eq!(
+            read_map_enemies(&ctx.accounts.map_enemies)?.session,
+            session_key,
+            GameplayStateError::Unauthorized
+        );
+
+        let map_enemies_info = ctx.accounts.map_enemies.to_account_info();
+        commit_and_undelegate_accounts(
+            &ctx.accounts.session_signer.to_account_info(),
+            vec![&map_enemies_info],
             &ctx.accounts.magic_context,
             &ctx.accounts.magic_program.to_account_info(),
         )?;
@@ -1967,6 +2023,79 @@ pub mod gameplay_state {
     ) -> Result<()> {
         Err(GameplayStateError::TestOnlyInstructionDisabled.into())
     }
+
+    /// Close a corrupted/empty GameState account (0-byte data).
+    /// After an ER reset, force-undelegation can leave accounts with no data.
+    /// Only works on accounts owned by this program with 0 bytes of data.
+    pub fn close_empty_game_state(ctx: Context<CloseEmptyGameState>) -> Result<()> {
+        let info = ctx.accounts.game_state.to_account_info();
+        let dest = ctx.accounts.destination.to_account_info();
+        **dest.try_borrow_mut_lamports()? += info.lamports();
+        **info.try_borrow_mut_lamports()? = 0;
+        info.assign(&anchor_lang::system_program::ID);
+        info.realloc(0, false)?;
+        Ok(())
+    }
+
+    /// Close a corrupted/empty MapEnemies account (0-byte data).
+    /// After an ER reset, force-undelegation can leave accounts with no data.
+    /// Only works on accounts owned by this program with 0 bytes of data.
+    pub fn close_empty_map_enemies(ctx: Context<CloseEmptyMapEnemies>) -> Result<()> {
+        let info = ctx.accounts.map_enemies.to_account_info();
+        let dest = ctx.accounts.destination.to_account_info();
+        **dest.try_borrow_mut_lamports()? += info.lamports();
+        **info.try_borrow_mut_lamports()? = 0;
+        info.assign(&anchor_lang::system_program::ID);
+        info.realloc(0, false)?;
+        Ok(())
+    }
+
+    /// Close an orphaned MapEnemies account that has valid data but whose
+    /// session PDA no longer exists. Proves the account is orphaned by
+    /// requiring the session PDA to have 0 lamports.
+    pub fn close_orphaned_map_enemies(ctx: Context<CloseOrphanedMapEnemies>) -> Result<()> {
+        let info = ctx.accounts.map_enemies.to_account_info();
+        let dest = ctx.accounts.destination.to_account_info();
+        **dest.try_borrow_mut_lamports()? += info.lamports();
+        **info.try_borrow_mut_lamports()? = 0;
+        info.assign(&anchor_lang::system_program::ID);
+        info.realloc(0, false)?;
+        Ok(())
+    }
+
+    /// TEST-ONLY: Sets game_state.completed = true so the victory path can
+    /// be exercised in e2e tests without requiring actual boss kills.
+    /// Validates session_signer authority so it cannot be called by a random wallet.
+    pub fn test_set_completed(ctx: Context<TestSetCompleted>) -> Result<()> {
+        let game_state = &mut ctx.accounts.game_state;
+        require!(
+            game_state.session_signer == ctx.accounts.session_signer.key(),
+            GameplayStateError::Unauthorized
+        );
+        game_state.completed = true;
+        Ok(())
+    }
+
+    /// TEST-ONLY: Sets game_state.hp to given value and clears is_dead.
+    /// Used in e2e tests to keep the player alive through night enemy encounters
+    /// so the boss fight path can be tested.
+    pub fn test_set_hp(ctx: Context<TestSetCompleted>, hp: i16) -> Result<()> {
+        let game_state = &mut ctx.accounts.game_state;
+        require!(
+            game_state.session_signer == ctx.accounts.session_signer.key(),
+            GameplayStateError::Unauthorized
+        );
+        game_state.hp = hp;
+        game_state.is_dead = false;
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct TestSetCompleted<'info> {
+    #[account(mut)]
+    pub game_state: Account<'info, GameState>,
+    pub session_signer: Signer<'info>,
 }
 
 #[delegate]
@@ -1994,6 +2123,31 @@ pub struct UndelegateGameplayAccounts<'info> {
     pub map_enemies: AccountInfo<'info>,
     /// CHECK: Session PDA used only for deterministic PDA validation.
     pub game_session: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub session_signer: Signer<'info>,
+}
+
+#[commit]
+#[derive(Accounts)]
+pub struct UndelegateGameState<'info> {
+    #[account(mut)]
+    /// CHECK: PDA is validated and deserialized in handler.
+    pub game_state: AccountInfo<'info>,
+    /// CHECK: Session PDA used only for deterministic PDA validation.
+    pub game_session: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub session_signer: Signer<'info>,
+}
+
+#[commit]
+#[derive(Accounts)]
+pub struct UndelegateMapEnemies<'info> {
+    #[account(mut)]
+    /// CHECK: PDA is validated and deserialized in handler.
+    pub map_enemies: AccountInfo<'info>,
+    /// CHECK: Session PDA used only for deterministic PDA validation.
+    pub game_session: UncheckedAccount<'info>,
+    #[account(mut)]
     pub session_signer: Signer<'info>,
 }
 
@@ -3902,6 +4056,73 @@ pub struct CloseMapEnemies<'info> {
 
     /// Session key signer must sign to authorize closure
     pub session_signer: Signer<'info>,
+}
+
+/// Close a corrupted/empty GameState account (0-byte data after ER reset + force-undelegate).
+/// Only works on accounts owned by this program with exactly 0 bytes of data.
+#[derive(Accounts)]
+pub struct CloseEmptyGameState<'info> {
+    #[account(
+        mut,
+        constraint = game_state.data_is_empty() @ GameplayStateError::AccountNotEmpty,
+        constraint = *game_state.owner == crate::ID @ GameplayStateError::Unauthorized,
+    )]
+    /// CHECK: Validated via owner check + empty data constraint.
+    pub game_state: UncheckedAccount<'info>,
+
+    /// Receives the lamports from the closed account.
+    #[account(mut)]
+    /// CHECK: Any destination is fine since the account is corrupted/empty.
+    pub destination: AccountInfo<'info>,
+
+    pub payer: Signer<'info>,
+}
+
+/// Close a corrupted/empty MapEnemies account (0-byte data after ER reset + force-undelegate).
+/// Only works on accounts owned by this program with exactly 0 bytes of data.
+#[derive(Accounts)]
+pub struct CloseEmptyMapEnemies<'info> {
+    #[account(
+        mut,
+        constraint = map_enemies.data_is_empty() @ GameplayStateError::AccountNotEmpty,
+        constraint = *map_enemies.owner == crate::ID @ GameplayStateError::Unauthorized,
+    )]
+    /// CHECK: Validated via owner check + empty data constraint.
+    pub map_enemies: UncheckedAccount<'info>,
+
+    /// Receives the lamports from the closed account.
+    #[account(mut)]
+    /// CHECK: Any destination is fine since the account is corrupted/empty.
+    pub destination: AccountInfo<'info>,
+
+    pub payer: Signer<'info>,
+}
+
+/// Close an orphaned MapEnemies account with valid data, whose session PDA no longer exists.
+/// Validates that the session PDA (from map_enemies.session) has 0 lamports (doesn't exist).
+#[derive(Accounts)]
+pub struct CloseOrphanedMapEnemies<'info> {
+    #[account(
+        mut,
+        seeds = [MapEnemies::SEED_PREFIX, map_enemies.session.as_ref()],
+        bump = map_enemies.bump,
+    )]
+    pub map_enemies: Account<'info, MapEnemies>,
+
+    /// Session PDA must not exist (proves the account is orphaned).
+    /// CHECK: Address must match map_enemies.session, and lamports must be 0.
+    #[account(
+        constraint = session_pda.key() == map_enemies.session @ GameplayStateError::InvalidSession,
+        constraint = session_pda.lamports() == 0 @ GameplayStateError::SessionNotActive,
+    )]
+    pub session_pda: UncheckedAccount<'info>,
+
+    /// Receives the lamports from the closed account.
+    #[account(mut)]
+    /// CHECK: Any destination is fine since the session is dead.
+    pub destination: AccountInfo<'info>,
+
+    pub payer: Signer<'info>,
 }
 
 /// Context for healing the player, authorized by poi-system CPI.

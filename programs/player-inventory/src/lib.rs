@@ -51,13 +51,8 @@ pub const GAMEPLAY_STATE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     0xa5, 0x69, 0x33, 0xc3, 0x32, 0x44, 0x5d, 0xb7, 0x52, 0x8d, 0x7a, 0x6b, 0xc3, 0x01, 0x56, 0x1e,
     0x68, 0x50, 0xaa, 0x96, 0x7a, 0x85, 0xea, 0x62, 0xb5, 0x79, 0xe3, 0x23, 0xe4, 0xa8, 0x88, 0x36,
 ]);
-pub const LOCAL_ER_VALIDATOR: Pubkey = pubkey!("mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev");
-
 fn local_delegate_config() -> DelegateConfig {
-    DelegateConfig {
-        validator: Some(LOCAL_ER_VALIDATOR),
-        ..DelegateConfig::default()
-    }
+    DelegateConfig::default()
 }
 
 #[ephemeral]
@@ -804,6 +799,7 @@ pub struct UndelegateInventory<'info> {
     pub inventory: AccountInfo<'info>,
     /// CHECK: Session PDA used only for deterministic PDA validation.
     pub session: UncheckedAccount<'info>,
+    #[account(mut)]
     pub session_signer: Signer<'info>,
 }
 

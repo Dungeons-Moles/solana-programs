@@ -26,13 +26,8 @@ pub const SESSION_MANAGER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     0x58, 0x20, 0x64, 0x87, 0xdf, 0xd8, 0x68, 0xf1, 0xa4, 0x79, 0x15, 0x8b, 0xb2, 0x8a, 0x56, 0x0c,
     0xa9, 0x4f, 0x56, 0x2e, 0x62, 0x85, 0x26, 0xb7, 0x4f, 0x8b, 0xa1, 0x4d, 0x08, 0x36, 0x20, 0x99,
 ]);
-pub const LOCAL_ER_VALIDATOR: Pubkey = pubkey!("mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev");
-
 fn local_delegate_config() -> DelegateConfig {
-    DelegateConfig {
-        validator: Some(LOCAL_ER_VALIDATOR),
-        ..DelegateConfig::default()
-    }
+    DelegateConfig::default()
 }
 
 #[ephemeral]
@@ -314,6 +309,7 @@ pub struct UndelegateGeneratedMap<'info> {
     pub generated_map: AccountInfo<'info>,
     /// CHECK: Session PDA used only for deterministic PDA validation.
     pub session: UncheckedAccount<'info>,
+    #[account(mut)]
     pub session_signer: Signer<'info>,
 }
 

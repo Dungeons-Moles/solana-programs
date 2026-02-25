@@ -37,13 +37,8 @@ pub const MAP_GENERATOR_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     0xe1, 0xf0, 0x18, 0x72, 0xcf, 0x4e, 0x1d, 0xea, 0xe0, 0x2f, 0x0a, 0xb0, 0xe8, 0xbf, 0x4b, 0x0c,
     0xf5, 0xb2, 0x05, 0xc5, 0x47, 0x61, 0x12, 0x2d, 0x49, 0xda, 0x54, 0xc1, 0xf5, 0xd0, 0xac, 0x6e,
 ]);
-pub const LOCAL_ER_VALIDATOR: Pubkey = pubkey!("mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev");
-
 fn local_delegate_config() -> DelegateConfig {
-    DelegateConfig {
-        validator: Some(LOCAL_ER_VALIDATOR),
-        ..DelegateConfig::default()
-    }
+    DelegateConfig::default()
 }
 
 /// Validates POI index, retrieves POI and definition, and validates interaction.
@@ -500,6 +495,17 @@ pub mod poi_system {
         );
         drop(session_data);
 
+        emit!(PoisClosed {
+            session: ctx.accounts.map_pois.session,
+        });
+        Ok(())
+    }
+
+    /// Close MapPois account when the session PDA no longer exists (orphaned).
+    /// Validates session_signer and player via the GameState account instead.
+    /// Used by frontend orphaned-account cleanup when force_close_session
+    /// already closed the session PDA but some children were still delegated.
+    pub fn close_map_pois_orphaned(ctx: Context<CloseMapPoisOrphaned>) -> Result<()> {
         emit!(PoisClosed {
             session: ctx.accounts.map_pois.session,
         });
@@ -1645,6 +1651,19 @@ pub mod poi_system {
 
         Ok(())
     }
+
+    /// Close a corrupted/empty MapPois account (0-byte data).
+    /// After an ER reset, force-undelegation can leave accounts with no data.
+    /// Only works on accounts owned by this program with 0 bytes of data.
+    pub fn close_empty_map_pois(ctx: Context<CloseEmptyMapPois>) -> Result<()> {
+        let info = ctx.accounts.map_pois.to_account_info();
+        let dest = ctx.accounts.destination.to_account_info();
+        **dest.try_borrow_mut_lamports()? += info.lamports();
+        **info.try_borrow_mut_lamports()? = 0;
+        info.assign(&anchor_lang::system_program::ID);
+        info.realloc(0, false)?;
+        Ok(())
+    }
 }
 
 // =============================================================================
@@ -1670,6 +1689,7 @@ pub struct UndelegateMapPois<'info> {
     pub map_pois: AccountInfo<'info>,
     /// CHECK: Session account is read for session signer authorization.
     pub game_session: UncheckedAccount<'info>,
+    #[account(mut)]
     pub session_signer: Signer<'info>,
 }
 
@@ -1764,6 +1784,54 @@ pub struct CloseMapPoisViaSessionSigner<'info> {
 
     /// Session key signer must sign to authorize closure.
     pub session_signer: Signer<'info>,
+}
+
+/// Context for closing orphaned MapPois (session PDA already closed).
+/// Validates via GameState which stores session_signer and player.
+#[derive(Accounts)]
+pub struct CloseMapPoisOrphaned<'info> {
+    #[account(
+        mut,
+        close = player,
+        seeds = [MAP_POIS_SEED, map_pois.session.as_ref()],
+        bump = map_pois.bump
+    )]
+    pub map_pois: Account<'info, MapPois>,
+
+    /// GameState for auth — must belong to the same session as map_pois.
+    #[account(
+        constraint = game_state.session == map_pois.session @ PoiSystemError::InvalidSession,
+        has_one = session_signer @ PoiSystemError::Unauthorized,
+    )]
+    pub game_state: Account<'info, GameState>,
+
+    /// Player wallet receives the rent refund.
+    /// CHECK: Validated via game_state.player.
+    #[account(mut, address = game_state.player @ PoiSystemError::Unauthorized)]
+    pub player: AccountInfo<'info>,
+
+    /// Session key signer — validated via game_state.session_signer.
+    pub session_signer: Signer<'info>,
+}
+
+/// Close a corrupted/empty MapPois account (0-byte data after ER reset + force-undelegate).
+/// Only works on accounts owned by this program with exactly 0 bytes of data.
+#[derive(Accounts)]
+pub struct CloseEmptyMapPois<'info> {
+    #[account(
+        mut,
+        constraint = map_pois.data_is_empty() @ PoiSystemError::InvalidPoiType,
+        constraint = *map_pois.owner == crate::ID @ PoiSystemError::Unauthorized,
+    )]
+    /// CHECK: Validated via owner check + empty data constraint.
+    pub map_pois: UncheckedAccount<'info>,
+
+    /// Receives the lamports from the closed account.
+    #[account(mut)]
+    /// CHECK: Any destination is fine since the account is corrupted/empty.
+    pub destination: AccountInfo<'info>,
+
+    pub payer: Signer<'info>,
 }
 
 /// Context for querying POI definition (view instruction)

@@ -164,4 +164,7 @@ pub enum GameplayStateError {
 
     #[msg("Campaign level must be between 1 and 40")]
     InvalidCampaignLevel,
+
+    #[msg("Account still has data — cannot close as empty")]
+    AccountNotEmpty,
 }

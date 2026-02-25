@@ -51,8 +51,11 @@ pub const GAMEPLAY_STATE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     0xa5, 0x69, 0x33, 0xc3, 0x32, 0x44, 0x5d, 0xb7, 0x52, 0x8d, 0x7a, 0x6b, 0xc3, 0x01, 0x56, 0x1e,
     0x68, 0x50, 0xaa, 0x96, 0x7a, 0x85, 0xea, 0x62, 0xb5, 0x79, 0xe3, 0x23, 0xe4, 0xa8, 0x88, 0x36,
 ]);
-fn local_delegate_config() -> DelegateConfig {
-    DelegateConfig::default()
+fn local_delegate_config(validator: Option<Pubkey>) -> DelegateConfig {
+    DelegateConfig {
+        validator,
+        ..DelegateConfig::default()
+    }
 }
 
 #[ephemeral]
@@ -83,7 +86,10 @@ pub mod player_inventory {
     }
 
     /// Delegates inventory PDA to MagicBlock from player-inventory (its owner program).
-    pub fn delegate_inventory(ctx: Context<DelegateInventory>) -> Result<()> {
+    pub fn delegate_inventory(
+        ctx: Context<DelegateInventory>,
+        validator: Option<Pubkey>,
+    ) -> Result<()> {
         let session_key = ctx.accounts.session.key();
         let (expected_inventory, _) =
             Pubkey::find_program_address(&[b"inventory", session_key.as_ref()], &crate::ID);
@@ -96,7 +102,7 @@ pub mod player_inventory {
         ctx.accounts.delegate_inventory(
             &ctx.accounts.player,
             inventory_seeds,
-            local_delegate_config(),
+            local_delegate_config(validator),
         )?;
         Ok(())
     }

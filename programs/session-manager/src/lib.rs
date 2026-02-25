@@ -59,8 +59,11 @@ pub const INITIALIZE_MAP_POIS_DISCRIMINATOR: [u8; 8] =
 pub const DISCOVER_VISIBLE_WAYPOINTS_DISCRIMINATOR: [u8; 8] =
     [0x3b, 0x26, 0x6a, 0x00, 0x3a, 0xb1, 0x50, 0xfc];
 pub const SESSION_MANAGER_AUTHORITY_SEED: &[u8] = b"session_manager_authority";
-fn local_delegate_config() -> DelegateConfig {
-    DelegateConfig::default()
+fn local_delegate_config(validator: Option<Pubkey>) -> DelegateConfig {
+    DelegateConfig {
+        validator,
+        ..DelegateConfig::default()
+    }
 }
 
 #[ephemeral]
@@ -591,7 +594,7 @@ pub mod session_manager {
         ctx.accounts.delegate_game_state(
             &ctx.accounts.player,
             game_state_seeds,
-            local_delegate_config(),
+            local_delegate_config(None),
         )?;
         Ok(())
     }
@@ -616,7 +619,7 @@ pub mod session_manager {
         ctx.accounts.delegate_map_enemies(
             &ctx.accounts.player,
             map_enemies_seeds,
-            local_delegate_config(),
+            local_delegate_config(None),
         )?;
         Ok(())
     }
@@ -641,7 +644,7 @@ pub mod session_manager {
         ctx.accounts.delegate_generated_map(
             &ctx.accounts.player,
             generated_map_seeds,
-            local_delegate_config(),
+            local_delegate_config(None),
         )?;
         Ok(())
     }
@@ -663,7 +666,7 @@ pub mod session_manager {
         ctx.accounts.delegate_inventory(
             &ctx.accounts.player,
             inventory_seeds,
-            local_delegate_config(),
+            local_delegate_config(None),
         )?;
         Ok(())
     }
@@ -685,13 +688,17 @@ pub mod session_manager {
         ctx.accounts.delegate_map_pois(
             &ctx.accounts.player,
             map_pois_seeds,
-            local_delegate_config(),
+            local_delegate_config(None),
         )?;
         Ok(())
     }
 
     /// Marks the session delegated and delegates the session account itself.
-    pub fn delegate_session(ctx: Context<DelegateSession>, campaign_level: u8) -> Result<()> {
+    pub fn delegate_session(
+        ctx: Context<DelegateSession>,
+        campaign_level: u8,
+        validator: Option<Pubkey>,
+    ) -> Result<()> {
         let clock = Clock::get()?;
         let game_session_info = ctx.accounts.game_session.to_account_info();
         let game_session_key = game_session_info.key();
@@ -773,7 +780,7 @@ pub mod session_manager {
         ctx.accounts.delegate_game_session(
             &ctx.accounts.session_signer,
             session_seeds,
-            local_delegate_config(),
+            local_delegate_config(validator),
         )?;
 
         emit!(SessionDelegated {

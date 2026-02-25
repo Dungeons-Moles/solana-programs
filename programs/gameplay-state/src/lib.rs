@@ -97,8 +97,11 @@ pub const PLAYER_INVENTORY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     0xbf, 0x73, 0x79, 0xcd, 0xb6, 0x8f, 0x3c, 0xec, 0xd3, 0x37, 0x2f, 0xbf, 0x66, 0x1e, 0x4e, 0x1c,
 ]);
 
-fn local_delegate_config() -> DelegateConfig {
-    DelegateConfig::default()
+fn local_delegate_config(validator: Option<Pubkey>) -> DelegateConfig {
+    DelegateConfig {
+        validator,
+        ..DelegateConfig::default()
+    }
 }
 
 #[ephemeral]
@@ -188,7 +191,10 @@ pub mod gameplay_state {
     }
 
     /// Delegates GameState and MapEnemies PDAs to MagicBlock from gameplay-state.
-    pub fn delegate_gameplay_accounts(ctx: Context<DelegateGameplayAccounts>) -> Result<()> {
+    pub fn delegate_gameplay_accounts(
+        ctx: Context<DelegateGameplayAccounts>,
+        validator: Option<Pubkey>,
+    ) -> Result<()> {
         let session_key = ctx.accounts.game_session.key();
         let (expected_game_state, _) =
             Pubkey::find_program_address(&[b"game_state", session_key.as_ref()], &crate::ID);
@@ -211,14 +217,14 @@ pub mod gameplay_state {
         ctx.accounts.delegate_game_state(
             &ctx.accounts.player,
             game_state_seeds,
-            local_delegate_config(),
+            local_delegate_config(validator),
         )?;
 
         let map_enemies_seeds: &[&[u8]] = &[MapEnemies::SEED_PREFIX, session_key.as_ref()];
         ctx.accounts.delegate_map_enemies(
             &ctx.accounts.player,
             map_enemies_seeds,
-            local_delegate_config(),
+            local_delegate_config(validator),
         )?;
         Ok(())
     }

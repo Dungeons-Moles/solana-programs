@@ -37,8 +37,11 @@ pub const MAP_GENERATOR_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     0xe1, 0xf0, 0x18, 0x72, 0xcf, 0x4e, 0x1d, 0xea, 0xe0, 0x2f, 0x0a, 0xb0, 0xe8, 0xbf, 0x4b, 0x0c,
     0xf5, 0xb2, 0x05, 0xc5, 0x47, 0x61, 0x12, 0x2d, 0x49, 0xda, 0x54, 0xc1, 0xf5, 0xd0, 0xac, 0x6e,
 ]);
-fn local_delegate_config() -> DelegateConfig {
-    DelegateConfig::default()
+fn local_delegate_config(validator: Option<Pubkey>) -> DelegateConfig {
+    DelegateConfig {
+        validator,
+        ..DelegateConfig::default()
+    }
 }
 
 /// Validates POI index, retrieves POI and definition, and validates interaction.
@@ -372,7 +375,10 @@ pub mod poi_system {
     }
 
     /// Delegates map-pois PDA to MagicBlock from poi-system (its owner program).
-    pub fn delegate_map_pois(ctx: Context<DelegateMapPois>) -> Result<()> {
+    pub fn delegate_map_pois(
+        ctx: Context<DelegateMapPois>,
+        validator: Option<Pubkey>,
+    ) -> Result<()> {
         let session_key = ctx.accounts.game_session.key();
         let (expected_map_pois, _) =
             Pubkey::find_program_address(&[MAP_POIS_SEED, session_key.as_ref()], &crate::ID);
@@ -385,7 +391,7 @@ pub mod poi_system {
         ctx.accounts.delegate_map_pois(
             &ctx.accounts.player,
             map_pois_seeds,
-            local_delegate_config(),
+            local_delegate_config(validator),
         )?;
         Ok(())
     }

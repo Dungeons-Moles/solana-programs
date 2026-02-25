@@ -2072,28 +2072,15 @@ pub mod gameplay_state {
     /// TEST-ONLY: Sets game_state.completed = true so the victory path can
     /// be exercised in e2e tests without requiring actual boss kills.
     /// Validates session_signer authority so it cannot be called by a random wallet.
-    pub fn test_set_completed(ctx: Context<TestSetCompleted>) -> Result<()> {
-        let game_state = &mut ctx.accounts.game_state;
-        require!(
-            game_state.session_signer == ctx.accounts.session_signer.key(),
-            GameplayStateError::Unauthorized
-        );
-        game_state.completed = true;
-        Ok(())
+    pub fn test_set_completed(_ctx: Context<TestSetCompleted>) -> Result<()> {
+        Err(GameplayStateError::TestOnlyInstructionDisabled.into())
     }
 
     /// TEST-ONLY: Sets game_state.hp to given value and clears is_dead.
     /// Used in e2e tests to keep the player alive through night enemy encounters
     /// so the boss fight path can be tested.
-    pub fn test_set_hp(ctx: Context<TestSetCompleted>, hp: i16) -> Result<()> {
-        let game_state = &mut ctx.accounts.game_state;
-        require!(
-            game_state.session_signer == ctx.accounts.session_signer.key(),
-            GameplayStateError::Unauthorized
-        );
-        game_state.hp = hp;
-        game_state.is_dead = false;
-        Ok(())
+    pub fn test_set_hp(_ctx: Context<TestSetCompleted>, _hp: i16) -> Result<()> {
+        Err(GameplayStateError::TestOnlyInstructionDisabled.into())
     }
 }
 

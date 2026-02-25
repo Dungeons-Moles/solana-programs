@@ -15,6 +15,7 @@ no-entrypoint = []
 no-idl = []
 no-log-ix-name = []
 idl-build = ["anchor-lang/idl-build"]
+mock-vrf = ["vrf-rng/mock-vrf"]
 
 [dev-dependencies]
 sha2 = "0.10"
@@ -28,3 +29,4 @@ field-enemies = { path = "../../crates/field-enemies" }
 boss-system = { path = "../../crates/boss-system" }
 player-inventory = { path = "../player-inventory", features = ["cpi"] }
 player-profile = { path = "../player-profile", features = ["cpi"] }
+vrf-rng = { path = "../../crates/vrf-rng", features = ["anchor"] }

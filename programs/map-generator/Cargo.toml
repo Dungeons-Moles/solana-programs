@@ -15,7 +15,9 @@ no-entrypoint = []
 no-idl = []
 no-log-ix-name = []
 idl-build = ["anchor-lang/idl-build"]
+mock-vrf = ["vrf-rng/mock-vrf"]
 
 [dependencies]
 anchor-lang = "0.32.0"
 ephemeral-rollups-sdk = { version = "0.7.3", features = ["anchor", "disable-realloc"] }
+vrf-rng = { path = "../../crates/vrf-rng", features = ["anchor"] }

@@ -1,3 +1,6 @@
+// Re-export GameRng from vrf-rng for new code paths
+pub use vrf_rng::GameRng;
+
 /// XorShift-based seeded random number generator.
 /// Matches the TypeScript implementation for deterministic map generation.
 #[derive(Clone, Copy, Debug)]

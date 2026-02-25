@@ -167,4 +167,10 @@ pub enum GameplayStateError {
 
     #[msg("Account still has data — cannot close as empty")]
     AccountNotEmpty,
+
+    #[msg("VRF state has not been fulfilled yet")]
+    VrfNotFulfilled,
+
+    #[msg("VRF state has not been requested yet")]
+    VrfNotRequested,
 }

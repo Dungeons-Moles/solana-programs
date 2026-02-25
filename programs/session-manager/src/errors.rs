@@ -58,4 +58,12 @@ pub enum SessionManagerError {
     /// Run is not terminal yet (must be dead or completed)
     #[msg("Run is not terminal yet")]
     RunNotTerminal,
+
+    /// Invalid MapVrfState account (PDA mismatch, wrong owner, or corrupt data)
+    #[msg("Invalid MapVrfState account")]
+    InvalidMapVrfState,
+
+    /// VRF randomness not yet fulfilled
+    #[msg("VRF not fulfilled")]
+    VrfNotFulfilled,
 }

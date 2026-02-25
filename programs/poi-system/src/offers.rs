@@ -4,54 +4,12 @@
 //!
 //! ## Core Components
 //!
-//! - **Xorshift64**: Deterministic PRNG for reproducible offer generation
+//! - **GameRng**: Drop-in XorShift 13-7-17 PRNG from `vrf-rng` crate (replaces Xorshift64)
 //! - **OfferContext**: Input parameters derived from game state
 //! - **RarityTable**: Act-based probability distributions
 //! - **TagWeights**: Boss weakness-weighted tag selection
 
-// =============================================================================
-// Xorshift64 RNG
-// =============================================================================
-
-/// Deterministic pseudo-random number generator for offer generation.
-///
-/// Uses the Xorshift64 algorithm for fast, reproducible randomness.
-/// Each offer generation derives a unique seed to ensure determinism.
-#[derive(Clone, Copy, Debug)]
-pub struct Xorshift64 {
-    state: u64,
-}
-
-impl Xorshift64 {
-    /// Create a new RNG with the given seed.
-    /// Clamps to 1 if seed is 0 (zero state produces no output).
-    pub fn new(seed: u64) -> Self {
-        Self { state: seed.max(1) }
-    }
-
-    /// Generate the next random u64 value.
-    pub fn next_u64(&mut self) -> u64 {
-        let mut x = self.state;
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        self.state = x;
-        x
-    }
-
-    /// Generate a random u64 in [0, max) range.
-    pub fn next_bounded(&mut self, max: u64) -> u64 {
-        if max == 0 {
-            return 0;
-        }
-        self.next_u64() % max
-    }
-
-    /// Get current state (for persistence/resumption).
-    pub fn state(&self) -> u64 {
-        self.state
-    }
-}
+use vrf_rng::GameRng;
 
 /// Derive a unique seed for offer generation.
 ///
@@ -103,6 +61,26 @@ impl OfferContext {
     /// Derive the RNG seed for this context.
     pub fn derive_seed(&self) -> u64 {
         derive_offer_seed(self.seed, self.poi_index, self.offer_call_count)
+    }
+
+    /// Create a GameRng seeded from VRF (if available) or legacy seed.
+    ///
+    /// When VRF is provided, derives the domain from context and mixes in
+    /// poi_index + offer_call_count as sub-domain uniqueness.
+    pub fn create_rng(&self, vrf: Option<(&[u8; 32], u64)>) -> GameRng {
+        match vrf {
+            Some((randomness, nonce)) => {
+                let sub_domain = self.vrf_sub_domain();
+                GameRng::from_vrf(randomness, nonce, sub_domain)
+            }
+            None => GameRng::from_seed(self.derive_seed()),
+        }
+    }
+
+    /// Compute VRF sub-domain incorporating POI index and call count.
+    fn vrf_sub_domain(&self) -> u64 {
+        let base = vrf_rng::domains::POI_SUPPLY_CACHE; // base POI domain
+        base ^ ((self.poi_index as u64) << 16) ^ ((self.offer_call_count as u64) << 8)
     }
 }
 
@@ -245,7 +223,7 @@ pub fn get_rarity_from_table(table: &[(u8, u8, u8, u8); 4], act: u8, seed: u64) 
 /// If `mythic_used` is true and Mythic is rolled, returns Heroic instead.
 /// Sets `mythic_used` to true if Mythic is returned.
 pub fn sample_rarity_with_cap(
-    rng: &mut Xorshift64,
+    rng: &mut GameRng,
     table: &[(u8, u8, u8, u8); 4],
     act: u8,
     mythic_used: &mut bool,
@@ -416,7 +394,7 @@ impl TagWeights {
     }
 
     /// Select a random tag based on weights.
-    pub fn select_tag(&self, rng: &mut Xorshift64) -> WeaknessTag {
+    pub fn select_tag(&self, rng: &mut GameRng) -> WeaknessTag {
         let roll = rng.next_bounded(self.total as u64) as u32;
         let mut cumulative = 0u32;
 
@@ -522,15 +500,15 @@ pub fn generate_supply_cache_offers(
 ) -> GeneratedOffers {
     let tag_weights = calculate_tag_weights(weakness1, weakness2);
     let mut offers = Vec::with_capacity(3);
-    let mut rng = Xorshift64::new(seed);
+    let mut rng = GameRng::from_seed(seed);
     let mut used_ids: [[u8; 8]; 3] = [[0; 8]; 3];
 
     for i in 0..3 {
         let mut attempts = 0;
         loop {
-            let item_seed = rng.next_u64();
+            let item_seed = rng.next_val();
             let rarity = get_rarity_from_table(&SUPPLY_CACHE_RARITY, act, item_seed);
-            let item_id = select_gear_by_rarity_weighted(rarity, &tag_weights, rng.next_u64());
+            let item_id = select_gear_by_rarity_weighted(rarity, &tag_weights, rng.next_val());
 
             // Check for duplicates
             let is_duplicate = used_ids[..i].contains(&item_id);
@@ -565,15 +543,15 @@ pub fn generate_tool_crate_offers(
 ) -> GeneratedOffers {
     let tag_weights = calculate_tag_weights(weakness1, weakness2);
     let mut offers = Vec::with_capacity(3);
-    let mut rng = Xorshift64::new(seed);
+    let mut rng = GameRng::from_seed(seed);
     let mut used_ids: [[u8; 8]; 3] = [[0; 8]; 3];
 
     for i in 0..3 {
         let mut attempts = 0;
         loop {
-            let item_seed = rng.next_u64();
+            let item_seed = rng.next_val();
             let rarity = get_rarity_from_table(&TOOL_CRATE_RARITY, act, item_seed);
-            let item_id = select_tool_by_rarity_weighted(rarity, &tag_weights, rng.next_u64());
+            let item_id = select_tool_by_rarity_weighted(rarity, &tag_weights, rng.next_val());
 
             // Check for duplicates
             let is_duplicate = used_ids[..i].contains(&item_id);
@@ -608,7 +586,7 @@ pub fn generate_geode_vault_offers(
 ) -> GeneratedOffers {
     let tag_weights = calculate_tag_weights(weakness1, weakness2);
     let mut offers = Vec::with_capacity(3);
-    let mut rng = Xorshift64::new(seed);
+    let mut rng = GameRng::from_seed(seed);
     let mut used_ids: [[u8; 8]; 3] = [[0; 8]; 3];
     let mut mythic_used = false;
 
@@ -617,7 +595,7 @@ pub fn generate_geode_vault_offers(
         loop {
             let rarity =
                 sample_rarity_with_cap(&mut rng, &GEODE_VAULT_RARITY, act, &mut mythic_used);
-            let item_id = select_gear_by_rarity_weighted(rarity, &tag_weights, rng.next_u64());
+            let item_id = select_gear_by_rarity_weighted(rarity, &tag_weights, rng.next_val());
 
             // Check for duplicates
             let is_duplicate = used_ids[..i].contains(&item_id);
@@ -651,18 +629,18 @@ pub fn generate_counter_cache_offers(
     seed: u64,
 ) -> GeneratedOffers {
     let mut offers = Vec::with_capacity(3);
-    let mut rng = Xorshift64::new(seed);
+    let mut rng = GameRng::from_seed(seed);
     let mut used_ids: [[u8; 8]; 3] = [[0; 8]; 3];
 
     for i in 0..3 {
         let mut attempts = 0;
         loop {
-            let item_seed = rng.next_u64();
+            let item_seed = rng.next_val();
             let rarity = get_rarity_from_table(&COUNTER_CACHE_RARITY, act, item_seed);
 
-            let use_tag1 = rng.next_u64() & 1 == 0;
+            let use_tag1 = rng.next_val() & 1 == 0;
             let tag = if use_tag1 { weakness1 } else { weakness2 };
-            let item_id = select_gear_by_tag_and_rarity(tag, rarity, rng.next_u64());
+            let item_id = select_gear_by_tag_and_rarity(tag, rarity, rng.next_val());
 
             // Check for duplicates
             let is_duplicate = used_ids[..i].contains(&item_id);
@@ -706,11 +684,10 @@ pub fn generate_smuggler_hatch_offers(
     // First: fill the Tool slot (index 0)
     for attempt in 0..20u64 {
         let attempt_seed = seed ^ attempt.wrapping_mul(0x9e3779b97f4a7c15);
-        let mut rng = Xorshift64::new(attempt_seed);
-
-        let item_seed = rng.next_u64();
+        let mut rng = GameRng::from_seed(attempt_seed);
+        let item_seed = rng.next_val();
         let rarity = get_rarity_from_table(&SMUGGLER_TOOL_RARITY, act, item_seed);
-        let item_id = select_tool_by_rarity_weighted(rarity, &tag_weights, rng.next_u64());
+        let item_id = select_tool_by_rarity_weighted(rarity, &tag_weights, rng.next_val());
         let price = calculate_price(ItemType::Tool, rarity);
 
         // Check pool membership and deduplication
@@ -737,11 +714,10 @@ pub fn generate_smuggler_hatch_offers(
             break;
         }
         let attempt_seed = seed ^ ((count as u64) << 48) ^ attempt.wrapping_mul(0x517cc1b727220a95);
-        let mut rng = Xorshift64::new(attempt_seed);
-
-        let item_seed = rng.next_u64();
+        let mut rng = GameRng::from_seed(attempt_seed);
+        let item_seed = rng.next_val();
         let rarity = get_rarity_from_table(&SMUGGLER_GEAR_RARITY, act, item_seed);
-        let item_id = select_gear_by_rarity_weighted(rarity, &tag_weights, rng.next_u64());
+        let item_id = select_gear_by_rarity_weighted(rarity, &tag_weights, rng.next_val());
         let price = calculate_price(ItemType::Gear, rarity);
 
         let in_pool =
@@ -787,7 +763,7 @@ const ALL_OILS: [u8; 4] = [OIL_FLAG_ATK, OIL_FLAG_SPD, OIL_FLAG_DIG, OIL_FLAG_AR
 /// # Returns
 /// Array of 3 oil flags (from OIL_FLAG_ATK, SPD, DIG, ARM)
 pub fn generate_tool_oil_offers(seed: u64) -> [u8; 3] {
-    let mut rng = Xorshift64::new(seed);
+    let mut rng = GameRng::from_seed(seed);
     let mut oils = ALL_OILS;
 
     // Fisher-Yates shuffle (partial - only need 3 elements)
@@ -1304,39 +1280,39 @@ mod tests {
     }
 
     // =========================================================================
-    // Xorshift64 RNG Tests
+    // GameRng Tests (formerly Xorshift64)
     // =========================================================================
 
     #[test]
-    fn test_xorshift64_determinism() {
+    fn test_game_rng_determinism() {
         // Same seed should produce same sequence
-        let mut rng1 = Xorshift64::new(12345);
-        let mut rng2 = Xorshift64::new(12345);
+        let mut rng1 = GameRng::from_seed(12345);
+        let mut rng2 = GameRng::from_seed(12345);
 
         for _ in 0..100 {
-            assert_eq!(rng1.next_u64(), rng2.next_u64());
+            assert_eq!(rng1.next_val(), rng2.next_val());
         }
     }
 
     #[test]
-    fn test_xorshift64_different_seeds() {
+    fn test_game_rng_different_seeds() {
         // Different seeds should produce different sequences
-        let mut rng1 = Xorshift64::new(12345);
-        let mut rng2 = Xorshift64::new(54321);
+        let mut rng1 = GameRng::from_seed(12345);
+        let mut rng2 = GameRng::from_seed(54321);
 
-        assert_ne!(rng1.next_u64(), rng2.next_u64());
+        assert_ne!(rng1.next_val(), rng2.next_val());
     }
 
     #[test]
-    fn test_xorshift64_zero_seed_handled() {
+    fn test_game_rng_zero_seed_handled() {
         // Zero seed should be clamped to 1
-        let mut rng = Xorshift64::new(0);
-        assert_ne!(rng.next_u64(), 0); // Should produce non-zero output
+        let mut rng = GameRng::from_seed(0);
+        assert_ne!(rng.next_val(), 0); // Should produce non-zero output
     }
 
     #[test]
-    fn test_xorshift64_bounded_range() {
-        let mut rng = Xorshift64::new(12345);
+    fn test_game_rng_bounded_range() {
+        let mut rng = GameRng::from_seed(12345);
         for _ in 0..1000 {
             let val = rng.next_bounded(100);
             assert!(val < 100, "Value {} should be < 100", val);
@@ -1344,8 +1320,8 @@ mod tests {
     }
 
     #[test]
-    fn test_xorshift64_bounded_zero() {
-        let mut rng = Xorshift64::new(12345);
+    fn test_game_rng_bounded_zero() {
+        let mut rng = GameRng::from_seed(12345);
         assert_eq!(rng.next_bounded(0), 0);
     }
 
@@ -1421,7 +1397,7 @@ mod tests {
     fn test_tag_weights_select_tag_distribution() {
         // With 2 weakness tags at 1.4x, they should be selected more often
         let weights = TagWeights::new().with_weaknesses(WeaknessTag::Stone, WeaknessTag::Frost);
-        let mut rng = Xorshift64::new(12345);
+        let mut rng = GameRng::from_seed(12345);
 
         let mut counts = [0u32; 8];
         for _ in 0..10000 {
@@ -1460,7 +1436,7 @@ mod tests {
     #[test]
     fn test_sample_rarity_with_cap_enforces_limit() {
         // Use Geode Vault Act 4 which has 10% Mythic
-        let mut rng = Xorshift64::new(12345);
+        let mut rng = GameRng::from_seed(12345);
         let mut mythic_count = 0;
 
         // Generate many offers with Mythic cap
@@ -1487,7 +1463,7 @@ mod tests {
     #[test]
     fn test_sample_rarity_with_cap_substitutes_heroic() {
         // When mythic_used is true, should return Heroic instead of Mythic
-        let mut rng = Xorshift64::new(999); // Seed that produces Mythic roll
+        let mut rng = GameRng::from_seed(999); // Seed that produces Mythic roll
 
         // Find a seed that produces Mythic
         loop {
@@ -1504,7 +1480,7 @@ mod tests {
         let mut mythic_used = true; // Already used
 
         // With mythic_used=true, Mythic should downgrade to Heroic
-        let mut test_rng = Xorshift64::new(97); // Roll of 90+ would be Mythic
+        let mut test_rng = GameRng::from_seed(97); // Roll of 90+ would be Mythic
         let rarity =
             sample_rarity_with_cap(&mut test_rng, &GEODE_VAULT_RARITY, 4, &mut mythic_used);
 

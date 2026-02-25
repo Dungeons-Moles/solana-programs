@@ -114,6 +114,28 @@ pub fn select_duel_week_boss(seed: u64, week: Week) -> Option<&'static BossDefin
     }
 }
 
+/// VRF-aware duel boss selection using GameRng.
+///
+/// Uses VRF-backed randomness (via GameRng) instead of the legacy splitmix64 path.
+/// Produces the same combo-space (25 = 5x5) mapping as the legacy function.
+pub fn select_duel_week12_indices_vrf(rng: &mut vrf_rng::GameRng) -> (u8, u8) {
+    let combo = (rng.next_val() % 25) as u8;
+    (combo / 5, combo % 5)
+}
+
+/// VRF-aware duel week boss selection.
+pub fn select_duel_week_boss_vrf(
+    rng: &mut vrf_rng::GameRng,
+    week: Week,
+) -> Option<&'static BossDefinition> {
+    let (w1, w2) = select_duel_week12_indices_vrf(rng);
+    match week {
+        Week::One => Some(duel_week1_pool(w1)),
+        Week::Two => Some(duel_week2_pool(w2)),
+        Week::Three => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,5 +261,37 @@ mod tests {
     #[test]
     fn test_duel_week3_has_no_boss() {
         assert!(select_duel_week_boss(123, Week::Three).is_none());
+    }
+
+    // =========================================================================
+    // VRF-aware Duel Selection Tests
+    // =========================================================================
+
+    #[test]
+    fn test_duel_vrf_deterministic() {
+        let mut rng1 = vrf_rng::GameRng::from_seed(42);
+        let mut rng2 = vrf_rng::GameRng::from_seed(42);
+        assert_eq!(
+            select_duel_week12_indices_vrf(&mut rng1),
+            select_duel_week12_indices_vrf(&mut rng2)
+        );
+    }
+
+    #[test]
+    fn test_duel_vrf_all_combinations_reachable() {
+        let mut seen = [false; 25];
+        for seed in 0..20_000u64 {
+            let mut rng = vrf_rng::GameRng::from_seed(seed.max(1));
+            let (w1, w2) = select_duel_week12_indices_vrf(&mut rng);
+            let idx = (w1 as usize) * 5 + (w2 as usize);
+            seen[idx] = true;
+        }
+        assert!(seen.iter().all(|v| *v));
+    }
+
+    #[test]
+    fn test_duel_vrf_week3_no_boss() {
+        let mut rng = vrf_rng::GameRng::from_seed(42);
+        assert!(select_duel_week_boss_vrf(&mut rng, Week::Three).is_none());
     }
 }

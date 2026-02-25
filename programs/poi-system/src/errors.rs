@@ -112,4 +112,13 @@ pub enum PoiSystemError {
 
     #[msg("Invalid vision radius for current phase/state")]
     InvalidVisionRadius,
+
+    #[msg("VRF not fulfilled")]
+    VrfNotFulfilled,
+
+    #[msg("VRF not requested")]
+    VrfNotRequested,
+
+    #[msg("VRF randomness required for PvP offer generation")]
+    VrfRequired,
 }

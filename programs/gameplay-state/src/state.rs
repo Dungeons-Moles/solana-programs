@@ -1,7 +1,29 @@
 use anchor_lang::prelude::*;
 use player_inventory::state::ItemInstance;
+use vrf_rng::{VrfStatus, VRF_STATE_SPACE};
 
 use crate::constants::{DAY_MOVES, DUEL_OPEN_QUEUE_CAPACITY, GAME_STATE_SEED, NIGHT_MOVES};
+
+/// VRF state account for gameplay-state program.
+/// PDA Seeds: ["gameplay_vrf", session.key()]
+#[account]
+pub struct GameplayVrfState {
+    /// Linked session PDA.
+    pub session: Pubkey,
+    /// Oracle-provided randomness (32 bytes).
+    pub randomness: [u8; 32],
+    /// Anti-replay nonce, incremented on each request.
+    pub nonce: u64,
+    /// VRF lifecycle status.
+    pub status: VrfStatus,
+    /// PDA bump seed.
+    pub bump: u8,
+}
+
+impl GameplayVrfState {
+    pub const SEED_PREFIX: &'static [u8] = b"gameplay_vrf";
+    pub const SPACE: usize = VRF_STATE_SPACE;
+}
 
 /// Session mode for gameplay progression rules.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug, InitSpace)]

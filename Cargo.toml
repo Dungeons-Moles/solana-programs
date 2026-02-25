@@ -8,6 +8,7 @@ members = [
     "programs/player-inventory",
     "crates/field-enemies",
     "crates/boss-system",
+    "crates/vrf-rng",
     "programs/poi-system",
     "programs/nft-marketplace"
 ]

@@ -9,3 +9,4 @@ name = "boss_system"
 
 [dependencies]
 combat-system = { path = "../combat-system" }
+vrf-rng = { path = "../vrf-rng" }

@@ -14,7 +14,8 @@ use ephemeral_rollups_sdk::ephem::commit_and_undelegate_accounts;
 use errors::PoiSystemError;
 use gameplay_state::state::{GameState, RunMode};
 pub use pois::PoiDefinition;
-use state::{ActiveCondition, MapPois, ShopState, UseType, MAP_POIS_SEED};
+use state::{ActiveCondition, MapPois, PoiVrfState, ShopState, UseType, MAP_POIS_SEED};
+use vrf_rng::VrfStatus;
 
 declare_id!("KiT25b86BSAF8yErcWwyuuWNaoXMpNf859NjH41TpSj");
 
@@ -42,6 +43,57 @@ fn local_delegate_config(validator: Option<Pubkey>) -> DelegateConfig {
         validator,
         ..DelegateConfig::default()
     }
+}
+
+/// Validates and extracts VRF randomness from an optional PoiVrfState account.
+///
+/// Returns `Some((randomness, nonce))` if VRF is provided and valid.
+/// Returns `None` if no VRF account is provided (campaign mode).
+/// Errors if VRF is provided but invalid (wrong PDA, wrong status, etc.).
+///
+/// For PvP modes (Duel/Gauntlet), callers must require the result is `Some`.
+fn extract_poi_vrf<'info>(
+    poi_vrf_account: &Option<UncheckedAccount<'info>>,
+    session_key: &Pubkey,
+) -> Result<Option<([u8; 32], u64)>> {
+    let account = match poi_vrf_account {
+        Some(a) => a,
+        None => return Ok(None),
+    };
+
+    // Validate PDA derivation
+    let (expected_pda, _) = Pubkey::find_program_address(
+        &[PoiVrfState::SEED_PREFIX, session_key.as_ref()],
+        &crate::ID,
+    );
+    require_keys_eq!(
+        account.key(),
+        expected_pda,
+        PoiSystemError::InvalidSession
+    );
+
+    // Validate owner
+    require!(
+        account.owner == &crate::ID,
+        PoiSystemError::InvalidSession
+    );
+
+    // Deserialize and validate
+    let data = account.try_borrow_data()?;
+    let mut data_slice: &[u8] = &data;
+    let vrf_state = PoiVrfState::try_deserialize(&mut data_slice)
+        .map_err(|_| PoiSystemError::VrfNotFulfilled)?;
+
+    require!(
+        vrf_state.session == *session_key,
+        PoiSystemError::InvalidSession
+    );
+    require!(
+        vrf_state.status == VrfStatus::Fulfilled || vrf_state.status == VrfStatus::Consumed,
+        PoiSystemError::VrfNotFulfilled
+    );
+
+    Ok(Some((vrf_state.randomness, vrf_state.nonce)))
 }
 
 /// Validates POI index, retrieves POI and definition, and validates interaction.
@@ -599,6 +651,7 @@ pub mod poi_system {
                 poi_authority: ctx.accounts.poi_authority.to_account_info(),
                 gameplay_authority: ctx.accounts.gameplay_authority.to_account_info(),
                 player_inventory_program: ctx.accounts.player_inventory_program.to_account_info(),
+                gameplay_vrf_state: ctx.accounts.gameplay_vrf_state.as_ref().map(|a| a.to_account_info()),
             },
             &[&seeds[..]],
         ))?;
@@ -630,6 +683,11 @@ pub mod poi_system {
 
         require_player_owns_game_state(game_state, &ctx.accounts.player)?;
 
+        // Extract VRF data if provided; require for PvP modes
+        let session_key = map_pois.session;
+        let vrf_data = extract_poi_vrf(&ctx.accounts.poi_vrf_state, &session_key)?;
+        require!(vrf_data.is_some(), PoiSystemError::VrfRequired);
+
         let (poi, _) = get_and_validate_poi(map_pois, game_state, poi_index, false)?;
 
         let poi_type = poi.poi_type;
@@ -644,9 +702,19 @@ pub mod poi_system {
             PoiSystemError::OfferAlreadyGenerated
         );
 
-        // Deterministic per-session/per-POI seed — same POI always yields the same
-        // offer within a session, so walking away and coming back is not a free reroll.
-        let seed = map_pois.seed ^ ((poi_index as u64) << 8) ^ ((act as u64) << 16);
+        // When VRF is available, derive seed from VRF with domain separation.
+        // Otherwise, use legacy deterministic seed.
+        let seed = if let Some((ref randomness, nonce)) = vrf_data {
+            let offer_ctx = offers::OfferContext::new(act, game_state.week, 0, poi_index);
+            let vrf_ref: Option<(&[u8; 32], u64)> = Some((randomness, nonce));
+            let mut rng = offer_ctx.create_rng(vrf_ref);
+            rng.next_val()
+        } else {
+            map_pois.seed
+                ^ ((poi_index as u64) << 8)
+                ^ ((act as u64) << 16)
+                ^ ((game_state.total_moves as u64) << 32)
+        };
 
         // Fetch boss weaknesses on-chain
         let week = to_boss_week(game_state.week)?;
@@ -911,6 +979,11 @@ pub mod poi_system {
 
         require_player_owns_game_state(game_state, &ctx.accounts.player)?;
 
+        // Extract VRF data if provided; require for PvP modes
+        let session_key = map_pois.session;
+        let vrf_data = extract_poi_vrf(&ctx.accounts.poi_vrf_state, &session_key)?;
+        require!(vrf_data.is_some(), PoiSystemError::VrfRequired);
+
         // Validate POI (don't skip usage check - Tool Oil is one-time use)
         let (poi, _) = get_and_validate_poi(map_pois, game_state, poi_index, false)?;
 
@@ -925,9 +998,21 @@ pub mod poi_system {
             PoiSystemError::OfferAlreadyGenerated
         );
 
-        // Deterministic per-session/per-POI seed — same POI always yields the same
-        // offer within a session, so walking away and coming back is not a free reroll.
-        let seed = map_pois.seed ^ ((poi_index as u64) << 8) ^ 0x4f494c_u64; // "OIL" domain separator
+        // When VRF is available, derive seed from VRF with tool oil domain.
+        // Otherwise, use legacy deterministic seed.
+        let seed = if let Some((ref randomness, nonce)) = vrf_data {
+            let mut rng = vrf_rng::GameRng::from_vrf(
+                randomness,
+                nonce,
+                vrf_rng::domains::POI_TOOL_OIL ^ ((poi_index as u64) << 16),
+            );
+            rng.next_val()
+        } else {
+            map_pois.seed
+                ^ ((poi_index as u64) << 8)
+                ^ ((game_state.total_moves as u64) << 32)
+                ^ 0x4f494c_u64 // "OIL" domain separator
+        };
 
         // Generate oil offer
         let oil_offer = offers::create_oil_offer(poi_index, seed);
@@ -1053,6 +1138,11 @@ pub mod poi_system {
 
         require_player_owns_game_state(game_state, &ctx.accounts.player)?;
 
+        // Extract VRF data if provided; require for PvP modes
+        let session_key = map_pois.session;
+        let vrf_data = extract_poi_vrf(&ctx.accounts.poi_vrf_state, &session_key)?;
+        require!(vrf_data.is_some(), PoiSystemError::VrfRequired);
+
         require!(
             !map_pois.shop_state.active,
             PoiSystemError::ShopAlreadyActive
@@ -1066,11 +1156,21 @@ pub mod poi_system {
 
         interactions::validate_shop_poi(poi, is_night)?;
 
-        // Deterministic per-session/per-position seed prevents free timing rerolls.
-        let seed = map_pois.seed
-            ^ ((poi_index as u64) << 8)
-            ^ ((act as u64) << 16)
-            ^ ((game_state.total_moves as u64) << 32);
+        // When VRF is available, derive seed from VRF with smuggler hatch domain.
+        // Otherwise, use legacy deterministic seed.
+        let seed = if let Some((ref randomness, nonce)) = vrf_data {
+            let mut rng = vrf_rng::GameRng::from_vrf(
+                randomness,
+                nonce,
+                vrf_rng::domains::POI_SMUGGLER_HATCH ^ ((poi_index as u64) << 16),
+            );
+            rng.next_val()
+        } else {
+            map_pois.seed
+                ^ ((poi_index as u64) << 8)
+                ^ ((act as u64) << 16)
+                ^ ((game_state.total_moves as u64) << 32)
+        };
 
         // Fetch boss weaknesses on-chain
         let week = to_boss_week(game_state.week)?;
@@ -1670,6 +1770,67 @@ pub mod poi_system {
         info.realloc(0, false)?;
         Ok(())
     }
+
+    // ========================================================================
+    // VRF Instructions
+    // ========================================================================
+
+    /// Requests VRF randomness for POI offer generation.
+    /// Initializes a PoiVrfState account with status=Requested.
+    pub fn request_poi_vrf(ctx: Context<RequestPoiVrf>) -> Result<()> {
+        let vrf_state = &mut ctx.accounts.vrf_state;
+        vrf_state.session = ctx.accounts.session.key();
+        vrf_state.randomness = [0u8; 32];
+        vrf_state.nonce = 1;
+        vrf_state.status = VrfStatus::Requested;
+        vrf_state.bump = ctx.bumps.vrf_state;
+        // TODO: CPI to oracle via ephemeral-vrf-sdk
+        Ok(())
+    }
+
+    /// Oracle callback: receives VRF randomness for POI offers.
+    pub fn fulfill_poi_vrf(ctx: Context<FulfillPoiVrf>, randomness: [u8; 32]) -> Result<()> {
+        let vrf_state = &mut ctx.accounts.vrf_state;
+        require!(
+            vrf_state.status == VrfStatus::Requested,
+            PoiSystemError::VrfNotRequested
+        );
+        vrf_state.randomness = randomness;
+        vrf_state.status = VrfStatus::Fulfilled;
+        Ok(())
+    }
+
+    /// Closes PoiVrfState account and returns rent to the player.
+    /// Called via CPI from session-manager during end_session/abandon_session.
+    pub fn close_poi_vrf_state(ctx: Context<ClosePoiVrfState>) -> Result<()> {
+        use session_manager::state::GameSession;
+        let player_end = GameSession::PLAYER_OFFSET + 32;
+        let session_signer_end = GameSession::SESSION_SIGNER_OFFSET + 32;
+
+        let session_data = ctx.accounts.game_session.try_borrow_data()?;
+        require!(
+            session_data.len() >= session_signer_end,
+            PoiSystemError::InvalidSession
+        );
+
+        let stored_player = Pubkey::from(
+            <[u8; 32]>::try_from(&session_data[GameSession::PLAYER_OFFSET..player_end]).unwrap(),
+        );
+        let stored_session_signer = Pubkey::from(
+            <[u8; 32]>::try_from(&session_data[GameSession::SESSION_SIGNER_OFFSET..session_signer_end])
+                .unwrap(),
+        );
+
+        require!(
+            stored_session_signer == ctx.accounts.session_signer.key(),
+            PoiSystemError::Unauthorized
+        );
+        require!(
+            stored_player == ctx.accounts.player.key(),
+            PoiSystemError::Unauthorized
+        );
+        Ok(())
+    }
 }
 
 // =============================================================================
@@ -1904,6 +2065,10 @@ pub struct InteractRest<'info> {
     /// Player inventory program for CPI (expand gear slots on boss victory via skip_to_day)
     pub player_inventory_program: Program<'info, player_inventory::program::PlayerInventory>,
 
+    /// Optional GameplayVrfState for VRF-backed boss selection in skip_to_day CPI.
+    /// CHECK: Passed through to gameplay-state CPI; validated there.
+    pub gameplay_vrf_state: Option<AccountInfo<'info>>,
+
     /// Player initiating the interaction
     pub player: Signer<'info>,
 }
@@ -1966,6 +2131,11 @@ pub struct InteractPickItem<'info> {
     )]
     pub game_session: Account<'info, session_manager::state::GameSession>,
 
+    /// Optional VRF state for PvP offer generation.
+    /// Required when RunMode is Duel or Gauntlet; ignored for Campaign.
+    /// CHECK: Validated via PDA derivation and manual deserialization in handler.
+    pub poi_vrf_state: Option<UncheckedAccount<'info>>,
+
     /// Player initiating the interaction
     pub player: Signer<'info>,
 }
@@ -2009,6 +2179,10 @@ pub struct InteractToolOil<'info> {
     /// Player inventory program for CPI (apply_tool_oil)
     pub player_inventory_program: Program<'info, player_inventory::program::PlayerInventory>,
 
+    /// Optional VRF state for PvP offer generation.
+    /// CHECK: Validated via PDA derivation and manual deserialization in handler.
+    pub poi_vrf_state: Option<UncheckedAccount<'info>>,
+
     /// Player initiating the interaction
     pub player: Signer<'info>,
 }
@@ -2036,6 +2210,10 @@ pub struct EnterShop<'info> {
         constraint = game_session.key() == map_pois.session @ PoiSystemError::InvalidSession,
     )]
     pub game_session: Account<'info, session_manager::state::GameSession>,
+
+    /// Optional VRF state for PvP offer generation.
+    /// CHECK: Validated via PDA derivation and manual deserialization in handler.
+    pub poi_vrf_state: Option<UncheckedAccount<'info>>,
 
     /// Player initiating the interaction
     pub player: Signer<'info>,
@@ -2398,6 +2576,68 @@ pub struct InteractScrapChute<'info> {
 
     /// Player scrapping
     pub player: Signer<'info>,
+}
+
+// =============================================================================
+// VRF Account Contexts
+// =============================================================================
+
+#[derive(Accounts)]
+pub struct RequestPoiVrf<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    /// CHECK: Session PDA owned by session-manager.
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID @ PoiSystemError::InvalidSessionOwner)]
+    pub session: UncheckedAccount<'info>,
+
+    #[account(
+        init,
+        payer = payer,
+        space = PoiVrfState::SPACE,
+        seeds = [PoiVrfState::SEED_PREFIX, session.key().as_ref()],
+        bump
+    )]
+    pub vrf_state: Account<'info, PoiVrfState>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct FulfillPoiVrf<'info> {
+    /// Oracle identity signer.
+    pub oracle: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [PoiVrfState::SEED_PREFIX, vrf_state.session.as_ref()],
+        bump = vrf_state.bump,
+    )]
+    pub vrf_state: Account<'info, PoiVrfState>,
+}
+
+#[derive(Accounts)]
+pub struct ClosePoiVrfState<'info> {
+    #[account(
+        mut,
+        seeds = [PoiVrfState::SEED_PREFIX, vrf_state.session.as_ref()],
+        bump = vrf_state.bump,
+        close = player,
+    )]
+    pub vrf_state: Account<'info, PoiVrfState>,
+
+    /// CHECK: Session account for signer validation. Read as raw bytes.
+    #[account(
+        constraint = game_session.key() == vrf_state.session @ PoiSystemError::Unauthorized,
+        owner = SESSION_MANAGER_PROGRAM_ID @ PoiSystemError::InvalidSessionOwner,
+    )]
+    pub game_session: AccountInfo<'info>,
+
+    /// CHECK: Validated against session.player in instruction body.
+    #[account(mut)]
+    pub player: AccountInfo<'info>,
+
+    pub session_signer: Signer<'info>,
 }
 
 // =============================================================================

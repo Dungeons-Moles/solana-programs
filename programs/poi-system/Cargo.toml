@@ -15,6 +15,7 @@ no-entrypoint = []
 no-idl = []
 no-log-ix-name = []
 idl-build = ["anchor-lang/idl-build"]
+mock-vrf = ["vrf-rng/mock-vrf"]
 
 [dev-dependencies]
 sha2 = "0.10"
@@ -26,3 +27,4 @@ player-inventory = { path = "../player-inventory", features = ["cpi"] }
 boss-system = { path = "../../crates/boss-system" }
 gameplay-state = { path = "../gameplay-state", features = ["cpi"] }
 session-manager = { path = "../session-manager", features = ["cpi"] }
+vrf-rng = { path = "../../crates/vrf-rng", features = ["anchor"] }

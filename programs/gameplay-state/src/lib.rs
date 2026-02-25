@@ -38,7 +38,8 @@ pub const GAMEPLAY_AUTHORITY_SEED: &[u8] = b"gameplay_authority";
 pub const SESSION_MANAGER_RUNMODE_AUTHORITY_SEED: &[u8] = b"session_manager_authority";
 use movement::{
     calculate_move_cost, chebyshev_distance, get_boss_for_combat, get_boss_id,
-    get_duel_boss_for_combat, get_duel_boss_id, is_adjacent, is_within_bounds,
+    get_duel_boss_for_combat, get_duel_boss_id, get_duel_boss_for_combat_vrf,
+    get_duel_boss_id_vrf, is_adjacent, is_within_bounds,
     should_process_night_enemy_movement, should_process_target_enemy_combat,
 };
 use player_inventory::effects::generate_combat_effects;
@@ -47,11 +48,12 @@ use player_inventory::state::{ItemInstance, ItemType, PlayerInventory, Tier, Too
 use player_profile::state::PlayerProfile;
 use state::{
     DuelCreatorEntry, DuelEntry, DuelLoadoutSnapshot, DuelOpenQueue, DuelQueue, DuelRunOutcome,
-    DuelVault, GameState, GauntletConfig, GauntletDefenderCredit, GauntletEchoSnapshot,
-    GauntletEchoSource, GauntletEpochPool, GauntletLoadoutSnapshot, GauntletPendingPoints,
-    GauntletPlayerScore, GauntletPoolVault, GauntletWeekPool, MapEnemies, Phase, PitDraftQueue,
-    PitDraftVault, RunMode,
+    DuelVault, GameState, GameplayVrfState, GauntletConfig, GauntletDefenderCredit,
+    GauntletEchoSnapshot, GauntletEchoSource, GauntletEpochPool, GauntletLoadoutSnapshot,
+    GauntletPendingPoints, GauntletPlayerScore, GauntletPoolVault, GauntletWeekPool, MapEnemies,
+    Phase, PitDraftQueue, PitDraftVault, RunMode,
 };
+use vrf_rng::VrfStatus;
 use stats::{calculate_stats, PlayerStats};
 
 fn compute_gold_gain_multiplier(effects: &[ItemEffect]) -> i16 {
@@ -566,10 +568,16 @@ pub mod gameplay_state {
             player_score.bump = ctx.bumps.gauntlet_player_score;
         }
 
-        draw_gauntlet_echoes_from_remaining(
+        let vrf = extract_gameplay_vrf(
+            &ctx.accounts.gameplay_vrf_state,
+            &game_state.session,
+        )?;
+        let vrf_ref = vrf.as_ref().map(|(r, n)| (r, *n));
+        draw_gauntlet_echoes_from_remaining_vrf(
             game_state,
             ctx.accounts.player.key(),
             ctx.remaining_accounts,
+            vrf_ref,
         )?;
 
         emit!(GauntletEntered {
@@ -765,6 +773,11 @@ pub mod gameplay_state {
 
         let highest_week_won = game_state.gauntlet_highest_week_won;
         if highest_week_won > 0 && highest_week_won <= 5 {
+            let vrf = extract_gameplay_vrf(
+                &ctx.accounts.gameplay_vrf_state,
+                &game_state.session,
+            )?;
+            let vrf_ref = vrf.as_ref().map(|(r, n)| (r, *n));
             let week_pool = match highest_week_won {
                 1 => &mut ctx.accounts.gauntlet_week1,
                 2 => &mut ctx.accounts.gauntlet_week2,
@@ -772,12 +785,13 @@ pub mod gameplay_state {
                 4 => &mut ctx.accounts.gauntlet_week4,
                 _ => &mut ctx.accounts.gauntlet_week5,
             };
-            maybe_insert_player_echo(
+            maybe_insert_player_echo_vrf(
                 week_pool,
                 highest_week_won,
                 &ctx.accounts.inventory,
                 game_state.gold,
                 player,
+                vrf_ref,
             )?;
         }
 
@@ -1218,15 +1232,26 @@ pub mod gameplay_state {
         );
 
         let clock = Clock::get()?;
-        let waiting_inventory = build_pit_draft_inventory(
+
+        // Require VRF for pit draft — real SOL stakes demand fair randomness
+        let vrf_state = &ctx.accounts.gameplay_vrf_state;
+        require!(
+            vrf_state.status == vrf_rng::VrfStatus::Fulfilled,
+            GameplayStateError::VrfNotFulfilled
+        );
+        let vrf: Option<(&[u8; 32], u64)> = Some((&vrf_state.randomness, vrf_state.nonce));
+
+        let waiting_inventory = build_pit_draft_inventory_vrf(
             waiting_player,
             waiting_profile.active_item_pool,
+            vrf,
             b"pit_waiting",
             clock.slot,
         )?;
-        let entrant_inventory = build_pit_draft_inventory(
+        let entrant_inventory = build_pit_draft_inventory_vrf(
             player_key,
             ctx.accounts.player_profile.active_item_pool,
+            vrf,
             b"pit_entrant",
             clock.slot,
         )?;
@@ -1238,18 +1263,17 @@ pub mod gameplay_state {
         let waiting_effects = generate_combat_effects(&waiting_inventory);
         let entrant_effects = generate_combat_effects(&entrant_inventory);
 
-        let waiting_start_gold = (derive_u64_random(&[
-            b"pit_waiting_gold",
-            waiting_player.as_ref(),
-            player_key.as_ref(),
-            &clock.slot.to_le_bytes(),
-        ]) % (u64::from(PIT_DRAFT_MAX_START_GOLD) + 1)) as u16;
-        let entrant_start_gold = (derive_u64_random(&[
-            b"pit_entrant_gold",
-            player_key.as_ref(),
-            waiting_player.as_ref(),
-            &clock.slot.to_le_bytes(),
-        ]) % (u64::from(PIT_DRAFT_MAX_START_GOLD) + 1)) as u16;
+        // VRF-backed gold derivation with domain separation
+        let mut gold_rng = vrf_rng::GameRng::from_vrf(
+            &vrf_state.randomness, vrf_state.nonce,
+            vrf_rng::domains::PIT_DRAFT_GOLD,
+        );
+        let waiting_start_gold = gold_rng.next_bounded(
+            u64::from(PIT_DRAFT_MAX_START_GOLD) + 1,
+        ) as u16;
+        let entrant_start_gold = gold_rng.next_bounded(
+            u64::from(PIT_DRAFT_MAX_START_GOLD) + 1,
+        ) as u16;
 
         let combat_outcome = resolve_combat_with_both_gold(
             build_full_hp_combatant(&waiting_stats),
@@ -1313,6 +1337,9 @@ pub mod gameplay_state {
         // Clear queue after match resolution.
         queue.waiting_player = None;
         queue.waiting_profile = None;
+
+        // Mark VRF as consumed after use
+        ctx.accounts.gameplay_vrf_state.status = vrf_rng::VrfStatus::Consumed;
 
         emit!(PitDraftResolved {
             player_a: waiting_player,
@@ -1446,6 +1473,11 @@ pub mod gameplay_state {
             });
 
             if should_resolve_weekly_boss(game_state.run_mode, game_state.week) {
+                let vrf = extract_gameplay_vrf(
+                    &ctx.accounts.gameplay_vrf_state,
+                    &game_state.session,
+                )?;
+                let vrf_ref = vrf.as_ref().map(|(r, n)| (r, *n));
                 // Resolve boss fight inline (same as move_player does)
                 let player_won = resolve_boss_fight(
                     game_state,
@@ -1455,6 +1487,7 @@ pub mod gameplay_state {
                     &ctx.accounts.gameplay_authority,
                     player_inventory_program,
                     ctx.bumps.gameplay_authority,
+                    vrf_ref,
                 )?;
 
                 if !player_won {
@@ -1917,6 +1950,11 @@ pub mod gameplay_state {
                 });
 
                 if should_resolve_weekly_boss(game_state.run_mode, game_state.week) {
+                    let vrf = extract_gameplay_vrf(
+                        &ctx.accounts.gameplay_vrf_state,
+                        &game_state.session,
+                    )?;
+                    let vrf_ref = vrf.as_ref().map(|(r, n)| (r, *n));
                     let player_won = resolve_boss_fight(
                         game_state,
                         ctx.accounts.generated_map.seed,
@@ -1925,6 +1963,7 @@ pub mod gameplay_state {
                         &ctx.accounts.gameplay_authority,
                         player_inventory_program,
                         ctx.bumps.gameplay_authority,
+                        vrf_ref,
                     )?;
                     if !player_won {
                         return Ok(());
@@ -1990,6 +2029,11 @@ pub mod gameplay_state {
             GameplayStateError::GauntletRunNotActive
         );
 
+        let vrf = extract_gameplay_vrf(
+            &ctx.accounts.gameplay_vrf_state,
+            &game_state.session,
+        )?;
+        let vrf_ref = vrf.as_ref().map(|(r, n)| (r, *n));
         let player_won = resolve_boss_fight(
             game_state,
             ctx.accounts.generated_map.seed,
@@ -1998,6 +2042,7 @@ pub mod gameplay_state {
             &ctx.accounts.gameplay_authority,
             player_inventory_program,
             ctx.bumps.gameplay_authority,
+            vrf_ref,
         )?;
         if !player_won {
             return Ok(());
@@ -2014,6 +2059,55 @@ pub mod gameplay_state {
 
         map_enemies.count = map_enemies.enemies.len() as u8;
 
+        Ok(())
+    }
+
+    // =========================================================================
+    // VRF Lifecycle
+    // =========================================================================
+
+    /// Request VRF randomness for gameplay (pit draft, gauntlet echo, duel boss).
+    /// Inits the VrfState account (status = Requested, nonce = 1).
+    /// Oracle CPI is stubbed — will be wired to ephemeral-vrf-sdk when available.
+    pub fn request_gameplay_vrf(ctx: Context<RequestGameplayVrf>) -> Result<()> {
+        let vrf = &mut ctx.accounts.vrf_state;
+        vrf.session = ctx.accounts.session.key();
+        vrf.randomness = [0u8; 32];
+        vrf.nonce = 1;
+        vrf.status = VrfStatus::Requested;
+        vrf.bump = ctx.bumps.vrf_state;
+        // TODO: CPI to ephemeral-vrf-sdk `create_request_randomness_ix` when SDK is available.
+        Ok(())
+    }
+
+    /// Oracle callback: writes randomness into VrfState and sets status = Fulfilled.
+    /// In production, the signer must be the VRF oracle program identity.
+    /// Under `mock-vrf` feature, any signer is accepted for testing.
+    pub fn fulfill_gameplay_vrf(ctx: Context<FulfillGameplayVrf>, randomness: [u8; 32]) -> Result<()> {
+        let vrf = &mut ctx.accounts.vrf_state;
+        require!(
+            vrf.status == VrfStatus::Requested,
+            GameplayStateError::VrfNotRequested
+        );
+        vrf.randomness = randomness;
+        vrf.status = VrfStatus::Fulfilled;
+        Ok(())
+    }
+
+    /// Closes GameplayVrfState account and returns rent to the player.
+    /// Called via CPI from session-manager during end_session/abandon_session.
+    pub fn close_gameplay_vrf_state(ctx: Context<CloseGameplayVrfState>) -> Result<()> {
+        let game_state = &ctx.accounts.game_state;
+        require_keys_eq!(
+            game_state.session_signer,
+            ctx.accounts.session_signer.key(),
+            GameplayStateError::Unauthorized
+        );
+        require_keys_eq!(
+            game_state.player,
+            ctx.accounts.player.key(),
+            GameplayStateError::Unauthorized
+        );
         Ok(())
     }
 
@@ -2282,6 +2376,239 @@ fn derive_u64_random(seeds: &[&[u8]]) -> u64 {
     acc ^= acc >> 27;
     acc = acc.wrapping_mul(0x94d0_49bb_1331_11eb);
     acc ^ (acc >> 31)
+}
+
+/// VRF-aware index drawing. Uses GameRng backed by VRF randomness + domain separation.
+fn draw_unique_indices_vrf(
+    candidates: &mut Vec<usize>,
+    picks: usize,
+    rng: &mut vrf_rng::GameRng,
+) -> Vec<usize> {
+    let mut selected = Vec::with_capacity(picks);
+    for _ in 0..picks {
+        let idx = rng.next_bounded(candidates.len() as u64) as usize;
+        selected.push(candidates.swap_remove(idx));
+    }
+    selected
+}
+
+/// VRF-aware pit draft inventory builder.
+/// Falls back to legacy `build_pit_draft_inventory` when `vrf` is None.
+fn build_pit_draft_inventory_vrf(
+    player: Pubkey,
+    active_pool: [u8; 10],
+    vrf: Option<(&[u8; 32], u64)>,
+    seed_tag: &[u8],
+    slot: u64,
+) -> Result<PlayerInventory> {
+    let vrf_data = match vrf {
+        Some(v) => v,
+        None => return build_pit_draft_inventory(player, active_pool, seed_tag, slot),
+    };
+
+    let mut rng = vrf_rng::GameRng::from_vrf(vrf_data.0, vrf_data.1, vrf_rng::domains::PIT_DRAFT_INVENTORY);
+
+    let mut tool_candidates = Vec::new();
+    let mut gear_candidates = Vec::new();
+
+    for (index, item_def) in ITEMS.iter().enumerate() {
+        if !is_pool_item_enabled(&active_pool, item_def.id) {
+            continue;
+        }
+        match item_def.item_type {
+            ItemType::Tool => tool_candidates.push(index),
+            ItemType::Gear => gear_candidates.push(index),
+        }
+    }
+
+    require!(
+        !tool_candidates.is_empty() && gear_candidates.len() >= 7,
+        GameplayStateError::PitDraftInsufficientPoolItems
+    );
+
+    let selected_tool_idx = draw_unique_indices_vrf(&mut tool_candidates, 1, &mut rng)[0];
+    let selected_gear_indices = draw_unique_indices_vrf(&mut gear_candidates, 7, &mut rng);
+
+    let mut tool = ItemInstance::new(*ITEMS[selected_tool_idx].id, Tier::I);
+    let oil_rand = rng.next_val();
+    let oil_mod = match oil_rand % 4 {
+        0 => ToolOilModification::PlusAtk,
+        1 => ToolOilModification::PlusSpd,
+        2 => ToolOilModification::PlusDig,
+        _ => ToolOilModification::PlusArm,
+    };
+    tool.apply_oil(oil_mod);
+
+    let mut gear = [None; 12];
+    for (slot_index, item_idx) in selected_gear_indices.iter().enumerate() {
+        gear[slot_index] = Some(ItemInstance::new(*ITEMS[*item_idx].id, Tier::I));
+    }
+
+    Ok(PlayerInventory {
+        session: Pubkey::default(),
+        player,
+        tool: Some(tool),
+        gear,
+        gear_slot_capacity: MAX_GEAR_SLOTS,
+        bump: 0,
+    })
+}
+
+/// Extracts VRF randomness from an optional GameplayVrfState account.
+/// Returns None if account is absent. Validates session match and fulfilled status.
+fn extract_gameplay_vrf(
+    vrf_account: &Option<Account<GameplayVrfState>>,
+    session_key: &Pubkey,
+) -> Result<Option<([u8; 32], u64)>> {
+    let vrf = match vrf_account {
+        Some(v) => v,
+        None => return Ok(None),
+    };
+    require_keys_eq!(vrf.session, *session_key, GameplayStateError::Unauthorized);
+    require!(
+        vrf.status == VrfStatus::Fulfilled || vrf.status == VrfStatus::Consumed,
+        GameplayStateError::VrfNotFulfilled
+    );
+    Ok(Some((vrf.randomness, vrf.nonce)))
+}
+
+/// VRF-aware gauntlet echo draw.
+/// Falls back to legacy `derive_u64_random` path when `vrf` is None.
+fn draw_gauntlet_echoes_from_remaining_vrf(
+    game_state: &mut GameState,
+    player_key: Pubkey,
+    remaining: &[AccountInfo],
+    vrf: Option<(&[u8; 32], u64)>,
+) -> Result<()> {
+    let vrf_data = match vrf {
+        Some(v) => v,
+        None => return draw_gauntlet_echoes_from_remaining(game_state, player_key, remaining),
+    };
+
+    require!(
+        remaining.len() >= 5,
+        GameplayStateError::GauntletNotInitialized
+    );
+    let program_id = crate::ID;
+    let expected_disc = <GauntletWeekPool as anchor_lang::Discriminator>::DISCRIMINATOR;
+
+    for week_idx in 0u8..5 {
+        let week = week_idx + 1;
+        let info = &remaining[week_idx as usize];
+
+        require!(
+            info.owner == &program_id,
+            GameplayStateError::GauntletNotInitialized
+        );
+
+        let (expected_pda, _) = Pubkey::find_program_address(
+            &[GAUNTLET_WEEK_POOL_SEED, &[week]],
+            &program_id,
+        );
+        require!(
+            info.key() == expected_pda,
+            GameplayStateError::InvalidGauntletWeek
+        );
+
+        let data = info.try_borrow_data()?;
+        require!(
+            data.len() >= 24,
+            GameplayStateError::GauntletNotInitialized
+        );
+        require!(
+            data[..8] == *expected_disc,
+            GameplayStateError::GauntletNotInitialized
+        );
+        require!(
+            data[8] == week,
+            GameplayStateError::InvalidGauntletWeek
+        );
+
+        let vec_len = u32::from_le_bytes(data[20..24].try_into().unwrap()) as usize;
+        require!(
+            vec_len > 0,
+            GameplayStateError::GauntletNotInitialized
+        );
+
+        // VRF-backed: per-week sub-domain for independent streams
+        let sub_domain = vrf_rng::domains::GAUNTLET_ECHO_DRAW ^ (week as u64);
+        let mut rng = vrf_rng::GameRng::from_vrf(vrf_data.0, vrf_data.1, sub_domain);
+        let target_idx = rng.next_bounded(vec_len as u64) as usize;
+
+        let mut cursor: &[u8] = &data[24..];
+        for _ in 0..target_idx {
+            let _skip = GauntletEchoSnapshot::deserialize(&mut cursor)
+                .map_err(|_| error!(GameplayStateError::GauntletNotInitialized))?;
+        }
+        let echo = GauntletEchoSnapshot::deserialize(&mut cursor)
+            .map_err(|_| error!(GameplayStateError::GauntletNotInitialized))?;
+
+        game_state.gauntlet_echoes[week_idx as usize] = Some(echo);
+    }
+    Ok(())
+}
+
+/// VRF-aware reservoir sampling for player echo insertion.
+/// Falls back to legacy `derive_u64_random` path when `vrf` is None.
+fn maybe_insert_player_echo_vrf(
+    week_pool: &mut Account<GauntletWeekPool>,
+    week: u8,
+    inventory: &PlayerInventory,
+    gold: u16,
+    player: Pubkey,
+    vrf: Option<(&[u8; 32], u64)>,
+) -> Result<()> {
+    let capacity = gauntlet_gear_capacity(week);
+    let mut capped_gear = inventory.gear;
+    for slot in capacity..capped_gear.len() {
+        capped_gear[slot] = None;
+    }
+    let snapshot = GauntletEchoSnapshot {
+        week,
+        source: GauntletEchoSource::Player(player),
+        loadout: GauntletLoadoutSnapshot {
+            tool: inventory.tool,
+            gear: capped_gear,
+            gold_at_battle_start: gold,
+        },
+    };
+
+    week_pool.seen_player_echoes = week_pool
+        .seen_player_echoes
+        .checked_add(1)
+        .ok_or(GameplayStateError::ArithmeticOverflow)?;
+    week_pool.player_echoes_added = week_pool.player_echoes_added.saturating_add(1);
+
+    if week_pool.entries.len() < GAUNTLET_MAX_WEEKLY_ECHOES {
+        week_pool.entries.push(snapshot);
+    } else {
+        let rand = match vrf {
+            Some((randomness, nonce)) => {
+                let sub_domain = vrf_rng::domains::GAUNTLET_RESERVOIR ^ (week as u64);
+                let mut rng = vrf_rng::GameRng::from_vrf(randomness, nonce, sub_domain);
+                rng.next_val()
+            }
+            None => derive_u64_random(&[
+                b"gauntlet_reservoir",
+                &week.to_le_bytes(),
+                &week_pool.seen_player_echoes.to_le_bytes(),
+                player.as_ref(),
+            ]),
+        };
+        let replace_idx = (rand % week_pool.seen_player_echoes) as usize;
+        if replace_idx < GAUNTLET_MAX_WEEKLY_ECHOES {
+            week_pool.entries[replace_idx] = snapshot;
+        }
+    }
+
+    if week_pool.bootstrap_active && week_pool.player_echoes_added >= 10 {
+        week_pool
+            .entries
+            .retain(|e| e.source != GauntletEchoSource::Bootstrap);
+        week_pool.bootstrap_active = false;
+    }
+
+    Ok(())
 }
 
 fn cap_pvp_visual_log(log: &[CombatLogEntry]) -> (Vec<CombatLogEntry>, bool, u16) {
@@ -2746,12 +3073,13 @@ fn resolve_boss_fight<'info>(
     gameplay_authority: &AccountInfo<'info>,
     player_inventory_program: &AccountInfo<'info>,
     gameplay_authority_bump: u8,
+    vrf: Option<(&[u8; 32], u64)>,
 ) -> Result<bool> {
     let stage = game_state.campaign_level;
     let (boss_input, boss_id) = if game_state.run_mode == RunMode::Duel {
         (
-            get_duel_boss_for_combat(map_seed, game_state.week)?,
-            get_duel_boss_id(map_seed, game_state.week)?,
+            get_duel_boss_for_combat_vrf(vrf, map_seed, game_state.week)?,
+            get_duel_boss_id_vrf(vrf, map_seed, game_state.week)?,
         )
     } else {
         (
@@ -3661,6 +3989,9 @@ pub struct EnterGauntlet<'info> {
     )]
     pub gauntlet_player_score: Account<'info, GauntletPlayerScore>,
 
+    /// Optional GameplayVrfState for VRF-backed echo draw (required for gauntlet).
+    pub gameplay_vrf_state: Option<Account<'info, GameplayVrfState>>,
+
     pub system_program: Program<'info, System>,
     // Week pools 1-5 passed as remaining_accounts to avoid deserializing 5 large Vec accounts.
     // Manual PDA + owner + discriminator checks performed in draw_gauntlet_echoes_from_remaining().
@@ -3787,6 +4118,9 @@ pub struct SettleGauntletSession<'info> {
         bump = gauntlet_week5.bump
     )]
     pub gauntlet_week5: Account<'info, GauntletWeekPool>,
+
+    /// Optional GameplayVrfState for VRF-backed reservoir sampling.
+    pub gameplay_vrf_state: Option<Account<'info, GameplayVrfState>>,
 }
 
 #[derive(Accounts)]
@@ -3989,6 +4323,15 @@ pub struct EnterPitDraft<'info> {
     )]
     pub gauntlet_pool_vault: Account<'info, GauntletPoolVault>,
 
+    /// VRF state for fair pit draft randomness (gold + inventory).
+    /// Required — pit draft involves real SOL stakes.
+    #[account(
+        mut,
+        seeds = [GameplayVrfState::SEED_PREFIX, gameplay_vrf_state.session.as_ref()],
+        bump = gameplay_vrf_state.bump,
+    )]
+    pub gameplay_vrf_state: Account<'info, GameplayVrfState>,
+
     pub system_program: Program<'info, System>,
 }
 
@@ -4185,6 +4528,9 @@ pub struct SkipToDay<'info> {
 
     /// Player inventory program for CPI (expand gear slots on boss victory)
     pub player_inventory_program: Program<'info, player_inventory::program::PlayerInventory>,
+
+    /// Optional GameplayVrfState for VRF-backed duel boss selection in skip_to_day.
+    pub gameplay_vrf_state: Option<Account<'info, GameplayVrfState>>,
 }
 
 /// Context for adding HP bonus when equipping +HP gear, authorized by player-inventory CPI.
@@ -4310,6 +4656,9 @@ pub struct Move<'info> {
     #[account(address = POI_SYSTEM_PROGRAM_ID)]
     pub poi_system_program: AccountInfo<'info>,
 
+    /// Optional GameplayVrfState for VRF-backed duel boss selection during movement.
+    pub gameplay_vrf_state: Option<Account<'info, GameplayVrfState>>,
+
     pub player: Signer<'info>,
 }
 
@@ -4361,7 +4710,73 @@ pub struct TriggerBossFight<'info> {
     /// Player inventory program for CPI (expand gear slots on boss victory)
     pub player_inventory_program: Program<'info, player_inventory::program::PlayerInventory>,
 
+    /// Optional GameplayVrfState for VRF-backed duel boss selection.
+    pub gameplay_vrf_state: Option<Account<'info, GameplayVrfState>>,
+
     pub player: Signer<'info>,
+}
+
+// =========================================================================
+// VRF Account Contexts
+// =========================================================================
+
+#[derive(Accounts)]
+pub struct RequestGameplayVrf<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    /// CHECK: Session PDA; used only for VRF state seed derivation.
+    pub session: UncheckedAccount<'info>,
+
+    #[account(
+        init,
+        payer = payer,
+        space = 8 + GameplayVrfState::SPACE,
+        seeds = [GameplayVrfState::SEED_PREFIX, session.key().as_ref()],
+        bump,
+    )]
+    pub vrf_state: Account<'info, GameplayVrfState>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct FulfillGameplayVrf<'info> {
+    /// In production: oracle program identity signer.
+    /// Under `mock-vrf`: any signer accepted.
+    #[cfg_attr(not(feature = "mock-vrf"), account(/* address = VRF_PROGRAM_IDENTITY */))]
+    pub vrf_program_identity: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [GameplayVrfState::SEED_PREFIX, vrf_state.session.as_ref()],
+        bump = vrf_state.bump,
+    )]
+    pub vrf_state: Account<'info, GameplayVrfState>,
+}
+
+#[derive(Accounts)]
+pub struct CloseGameplayVrfState<'info> {
+    #[account(
+        mut,
+        seeds = [GameplayVrfState::SEED_PREFIX, vrf_state.session.as_ref()],
+        bump = vrf_state.bump,
+        close = player,
+    )]
+    pub vrf_state: Account<'info, GameplayVrfState>,
+
+    /// GameState for authorization (player + session_signer fields).
+    #[account(
+        seeds = [GAME_STATE_SEED, vrf_state.session.as_ref()],
+        bump = game_state.bump,
+    )]
+    pub game_state: Account<'info, GameState>,
+
+    /// CHECK: Validated against game_state.player in instruction body.
+    #[account(mut)]
+    pub player: AccountInfo<'info>,
+
+    pub session_signer: Signer<'info>,
 }
 
 // Events

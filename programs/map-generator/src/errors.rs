@@ -46,4 +46,12 @@ pub enum MapGeneratorError {
     /// Invalid session account for close authorization
     #[msg("Invalid session account")]
     InvalidSession,
+
+    /// VRF state is not in the expected status
+    #[msg("VRF not fulfilled")]
+    VrfNotFulfilled,
+
+    /// VRF state is not in requested status (cannot fulfill)
+    #[msg("VRF not requested")]
+    VrfNotRequested,
 }

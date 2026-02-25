@@ -104,6 +104,47 @@ pub fn get_duel_boss_id(seed: u64, week: u8) -> Result<[u8; 12]> {
     Ok(boss.id)
 }
 
+/// VRF-aware duel boss selection.
+/// Uses VRF randomness with DUEL_BOSS domain for verifiable boss selection.
+/// Falls back to legacy seed path if VRF is unavailable.
+pub fn get_duel_boss_for_combat_vrf(
+    vrf: Option<(&[u8; 32], u64)>,
+    legacy_seed: u64,
+    week: u8,
+) -> Result<combat_system::state::CombatantInput> {
+    let boss_week = to_boss_week(week)?;
+    let boss = match vrf {
+        Some((randomness, nonce)) => {
+            let mut rng =
+                vrf_rng::GameRng::from_vrf(randomness, nonce, vrf_rng::domains::DUEL_BOSS);
+            boss_system::select_duel_week_boss_vrf(&mut rng, boss_week)
+        }
+        None => boss_system::select_duel_week_boss(legacy_seed, boss_week),
+    }
+    .ok_or(GameplayStateError::InvalidWeek)?;
+    let scaled = boss_system::scale_boss(boss, 20, boss_week);
+    Ok(boss_system::scaling::to_combatant_input(&scaled))
+}
+
+/// VRF-aware duel boss ID lookup.
+pub fn get_duel_boss_id_vrf(
+    vrf: Option<(&[u8; 32], u64)>,
+    legacy_seed: u64,
+    week: u8,
+) -> Result<[u8; 12]> {
+    let boss_week = to_boss_week(week)?;
+    let boss = match vrf {
+        Some((randomness, nonce)) => {
+            let mut rng =
+                vrf_rng::GameRng::from_vrf(randomness, nonce, vrf_rng::domains::DUEL_BOSS);
+            boss_system::select_duel_week_boss_vrf(&mut rng, boss_week)
+        }
+        None => boss_system::select_duel_week_boss(legacy_seed, boss_week),
+    }
+    .ok_or(GameplayStateError::InvalidWeek)?;
+    Ok(boss.id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

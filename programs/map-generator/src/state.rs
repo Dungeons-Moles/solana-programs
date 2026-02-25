@@ -1,5 +1,32 @@
 use crate::constants::{LEVEL_COUNT, MAX_ENEMIES, MAX_POIS, PACKED_TILES_SIZE};
 use anchor_lang::prelude::*;
+use vrf_rng::VrfStatus;
+
+// =============================================================================
+// VRF State
+// =============================================================================
+
+/// Per-session VRF randomness for map generation.
+/// PDA seeds: ["map_vrf", session.key()]
+#[account]
+pub struct MapVrfState {
+    /// Session PDA this VRF is tied to
+    pub session: Pubkey,
+    /// Oracle-provided randomness (filled on fulfill)
+    pub randomness: [u8; 32],
+    /// Anti-replay counter (incremented on each request)
+    pub nonce: u64,
+    /// Lifecycle stage
+    pub status: VrfStatus,
+    /// PDA bump
+    pub bump: u8,
+}
+
+impl MapVrfState {
+    pub const SEED_PREFIX: &'static [u8] = b"map_vrf";
+    /// 8 (disc) + 32 + 32 + 8 + 1 + 1 = 82
+    pub const SPACE: usize = vrf_rng::VRF_STATE_SPACE;
+}
 
 /// Configuration for map generation, storing seed values for each level.
 #[account]

@@ -26,3 +26,4 @@ map-generator = { path = "../map-generator", features = ["cpi"] }
 player-inventory = { path = "../player-inventory", features = ["cpi"] }
 # NOTE: poi-system dependency removed to avoid cyclic dependency
 ephemeral-rollups-sdk = { version = "0.7.3", features = ["anchor", "disable-realloc"] }
+vrf-rng = { path = "../../crates/vrf-rng" }

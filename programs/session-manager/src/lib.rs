@@ -253,6 +253,11 @@ pub mod session_manager {
             6,
         )?;
 
+        // TODO(VRF): When ephemeral-vrf-sdk is available, optionally CPI into
+        // map_generator::request_map_vrf and poi_system::request_poi_vrf if the
+        // frontend passes VRF oracle accounts via remaining_accounts.
+        // Pattern: if ctx.remaining_accounts.len() >= EXPECTED_VRF_ACCOUNT_COUNT { ... }
+
         emit!(SessionStarted {
             player: session_player,
             session_id: counter.count,
@@ -284,13 +289,28 @@ pub mod session_manager {
             .checked_add(1)
             .ok_or(SessionManagerError::ArithmeticOverflow)?;
 
-        let duel_seed = derive_pvp_seed(
-            b"duel_seed",
-            &clock,
-            counter.count,
-            &session_player,
-            &session_signer_key,
+        // Derive session PDA key for VRF lookup (duel uses fixed seed prefix)
+        let (session_pda, _) = Pubkey::find_program_address(
+            &[GameSession::DUEL_SEED_PREFIX, session_player.as_ref()],
+            &crate::ID,
         );
+
+        // Try VRF-derived seed; fall back to legacy derive_pvp_seed
+        let vrf_data = extract_map_vrf(&ctx.accounts.map_vrf_state, &session_pda)?;
+        let duel_seed = if let Some((ref randomness, nonce)) = vrf_data {
+            let mut rng = vrf_rng::GameRng::from_vrf(
+                randomness, nonce, vrf_rng::domains::MAP_GENERATION,
+            );
+            rng.next_val()
+        } else {
+            derive_pvp_seed(
+                b"duel_seed",
+                &clock,
+                counter.count,
+                &session_player,
+                &session_signer_key,
+            )
+        };
 
         {
             let session = &mut ctx.accounts.game_session;
@@ -390,7 +410,15 @@ pub mod session_manager {
 
         let act = (campaign_level - 1) / 10 + 1;
         let week = 1u8;
-        let poi_seed = duel_seed;
+        // When VRF is available, derive POI seed from separate domain
+        let poi_seed = if let Some((ref randomness, nonce)) = vrf_data {
+            let mut rng = vrf_rng::GameRng::from_vrf(
+                randomness, nonce, vrf_rng::domains::POI_SUPPLY_CACHE,
+            );
+            rng.next_val()
+        } else {
+            duel_seed
+        };
 
         initialize_map_pois_cpi(
             &ctx.accounts.poi_system_program,
@@ -411,6 +439,19 @@ pub mod session_manager {
             &ctx.accounts.session_signer.to_account_info(),
             6,
         )?;
+
+        // CPI to consume_map_vrf to mark VRF as consumed (if VRF was used)
+        if vrf_data.is_some() {
+            if let Some(ref vrf_account) = ctx.accounts.map_vrf_state {
+                map_generator::cpi::consume_map_vrf(CpiContext::new(
+                    ctx.accounts.map_generator_program.to_account_info(),
+                    map_generator::cpi::accounts::ConsumeMapVrf {
+                        session_signer: ctx.accounts.session_signer.to_account_info(),
+                        vrf_state: vrf_account.to_account_info(),
+                    },
+                ))?;
+            }
+        }
 
         emit!(SessionStarted {
             player: session_player,
@@ -438,13 +479,28 @@ pub mod session_manager {
             .checked_add(1)
             .ok_or(SessionManagerError::ArithmeticOverflow)?;
 
-        let gauntlet_seed = derive_pvp_seed(
-            b"gauntlet_seed",
-            &clock,
-            counter.count,
-            &session_player,
-            &session_signer_key,
+        // Derive session PDA key for VRF lookup
+        let (session_pda, _) = Pubkey::find_program_address(
+            &[GameSession::GAUNTLET_SEED_PREFIX, session_player.as_ref()],
+            &crate::ID,
         );
+
+        // Try VRF-derived seed; fall back to legacy derive_pvp_seed
+        let vrf_data = extract_map_vrf(&ctx.accounts.map_vrf_state, &session_pda)?;
+        let gauntlet_seed = if let Some((ref randomness, nonce)) = vrf_data {
+            let mut rng = vrf_rng::GameRng::from_vrf(
+                randomness, nonce, vrf_rng::domains::MAP_GENERATION,
+            );
+            rng.next_val()
+        } else {
+            derive_pvp_seed(
+                b"gauntlet_seed",
+                &clock,
+                counter.count,
+                &session_player,
+                &session_signer_key,
+            )
+        };
 
         {
             let session = &mut ctx.accounts.game_session;
@@ -544,7 +600,14 @@ pub mod session_manager {
 
         let act = (campaign_level - 1) / 10 + 1;
         let week = 1u8;
-        let poi_seed = gauntlet_seed;
+        let poi_seed = if let Some((ref randomness, nonce)) = vrf_data {
+            let mut rng = vrf_rng::GameRng::from_vrf(
+                randomness, nonce, vrf_rng::domains::POI_SUPPLY_CACHE,
+            );
+            rng.next_val()
+        } else {
+            gauntlet_seed
+        };
 
         initialize_map_pois_cpi(
             &ctx.accounts.poi_system_program,
@@ -565,6 +628,19 @@ pub mod session_manager {
             &ctx.accounts.session_signer.to_account_info(),
             6,
         )?;
+
+        // CPI to consume_map_vrf to mark VRF as consumed (if VRF was used)
+        if vrf_data.is_some() {
+            if let Some(ref vrf_account) = ctx.accounts.map_vrf_state {
+                map_generator::cpi::consume_map_vrf(CpiContext::new(
+                    ctx.accounts.map_generator_program.to_account_info(),
+                    map_generator::cpi::accounts::ConsumeMapVrf {
+                        session_signer: ctx.accounts.session_signer.to_account_info(),
+                        vrf_state: vrf_account.to_account_info(),
+                    },
+                ))?;
+            }
+        }
 
         emit!(SessionStarted {
             player: session_player,
@@ -690,6 +766,25 @@ pub mod session_manager {
             map_pois_seeds,
             local_delegate_config(None),
         )?;
+        Ok(())
+    }
+
+    /// Delegates PoiVrfState account to the MagicBlock delegation program.
+    /// Only needed for PvP sessions that use VRF for POI offers.
+    pub fn delegate_poi_vrf_state(ctx: Context<DelegatePoiVrfState>, campaign_level: u8) -> Result<()> {
+        let game_session_key = derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level);
+        let (expected_poi_vrf, _) = Pubkey::find_program_address(
+            &[b"poi_vrf", game_session_key.as_ref()],
+            &POI_SYSTEM_PROGRAM_ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.poi_vrf_state.key(),
+            expected_poi_vrf,
+            SessionManagerError::Unauthorized
+        );
+        let poi_vrf_seeds: &[&[u8]] = &[b"poi_vrf", game_session_key.as_ref()];
+        ctx.accounts
+            .delegate_poi_vrf_state(&ctx.accounts.player, poi_vrf_seeds, local_delegate_config(None))?;
         Ok(())
     }
 
@@ -838,16 +933,21 @@ pub mod session_manager {
         let generated_map_info = ctx.accounts.generated_map.to_account_info();
         let inventory_info = ctx.accounts.inventory.to_account_info();
         let map_pois_info = ctx.accounts.map_pois.to_account_info();
+        let poi_vrf_info = ctx.accounts.poi_vrf_state.as_ref().map(|a| a.to_account_info());
+        let mut accounts_to_commit = vec![
+            &game_session_info,
+            &game_state_info,
+            &map_enemies_info,
+            &generated_map_info,
+            &inventory_info,
+            &map_pois_info,
+        ];
+        if let Some(ref info) = poi_vrf_info {
+            accounts_to_commit.push(info);
+        }
         commit_accounts(
             &ctx.accounts.player.to_account_info(),
-            vec![
-                &game_session_info,
-                &game_state_info,
-                &map_enemies_info,
-                &generated_map_info,
-                &inventory_info,
-                &map_pois_info,
-            ],
+            accounts_to_commit,
             &ctx.accounts.magic_context,
             &ctx.accounts.magic_program.to_account_info(),
         )?;
@@ -965,7 +1065,40 @@ pub mod session_manager {
         });
 
         // Close all session-related accounts via CPI
-        // Order matters: close child accounts before parent accounts
+        // Order matters: close VRF states first, then child accounts, then parent accounts
+
+        // 0a. Close MapVrfState if present (PvP sessions only)
+        if let Some(ref map_vrf) = ctx.accounts.map_vrf_state {
+            close_map_vrf_state_cpi(
+                &ctx.accounts.map_generator_program,
+                &map_vrf.to_account_info(),
+                &ctx.accounts.game_session.to_account_info(),
+                &ctx.accounts.player,
+                &ctx.accounts.session_signer.to_account_info(),
+            )?;
+        }
+
+        // 0b. Close PoiVrfState if present (PvP sessions only)
+        if let Some(ref poi_vrf) = ctx.accounts.poi_vrf_state {
+            close_poi_vrf_state_cpi(
+                &ctx.accounts.poi_system_program,
+                &poi_vrf.to_account_info(),
+                &ctx.accounts.game_session.to_account_info(),
+                &ctx.accounts.player,
+                &ctx.accounts.session_signer.to_account_info(),
+            )?;
+        }
+
+        // 0c. Close GameplayVrfState if present
+        if let Some(ref gameplay_vrf) = ctx.accounts.gameplay_vrf_state {
+            close_gameplay_vrf_state_cpi(
+                &ctx.accounts.gameplay_state_program.to_account_info(),
+                &gameplay_vrf.to_account_info(),
+                &ctx.accounts.game_state.to_account_info(),
+                &ctx.accounts.player,
+                &ctx.accounts.session_signer.to_account_info(),
+            )?;
+        }
 
         // 1. Close map_pois (depends on session)
         close_map_pois_via_session_signer_cpi(
@@ -1357,7 +1490,40 @@ pub mod session_manager {
         });
 
         // Close all session-related accounts via CPI
-        // Order matters: close child accounts before parent accounts
+        // Order matters: close VRF states first, then child accounts, then parent accounts
+
+        // 0a. Close MapVrfState if present (PvP sessions only)
+        if let Some(ref map_vrf) = ctx.accounts.map_vrf_state {
+            close_map_vrf_state_cpi(
+                &ctx.accounts.map_generator_program,
+                &map_vrf.to_account_info(),
+                &ctx.accounts.game_session.to_account_info(),
+                &ctx.accounts.player,
+                &ctx.accounts.session_signer.to_account_info(),
+            )?;
+        }
+
+        // 0b. Close PoiVrfState if present (PvP sessions only)
+        if let Some(ref poi_vrf) = ctx.accounts.poi_vrf_state {
+            close_poi_vrf_state_cpi(
+                &ctx.accounts.poi_system_program,
+                &poi_vrf.to_account_info(),
+                &ctx.accounts.game_session.to_account_info(),
+                &ctx.accounts.player,
+                &ctx.accounts.session_signer.to_account_info(),
+            )?;
+        }
+
+        // 0c. Close GameplayVrfState if present
+        if let Some(ref gameplay_vrf) = ctx.accounts.gameplay_vrf_state {
+            close_gameplay_vrf_state_cpi(
+                &ctx.accounts.gameplay_state_program.to_account_info(),
+                &gameplay_vrf.to_account_info(),
+                &ctx.accounts.game_state.to_account_info(),
+                &ctx.accounts.player,
+                &ctx.accounts.session_signer.to_account_info(),
+            )?;
+        }
 
         // 1. Close map_pois (depends on session)
         close_map_pois_via_session_signer_cpi(
@@ -1619,6 +1785,12 @@ pub struct StartDuelSession<'info> {
     /// CHECK: Initialized by player-inventory CPI
     pub inventory: UncheckedAccount<'info>,
 
+    /// Optional MapVrfState for VRF-derived map/POI seeds.
+    /// When provided, seeds are derived from VRF randomness instead of derive_pvp_seed.
+    /// CHECK: Validated via PDA derivation and manual deserialization in handler.
+    #[account(mut)]
+    pub map_vrf_state: Option<UncheckedAccount<'info>>,
+
     pub map_generator_program: Program<'info, MapGenerator>,
     pub gameplay_state_program: Program<'info, GameplayState>,
     #[account(address = POI_SYSTEM_PROGRAM_ID)]
@@ -1688,6 +1860,11 @@ pub struct StartGauntletSession<'info> {
     #[account(mut)]
     /// CHECK: Initialized by player-inventory CPI
     pub inventory: UncheckedAccount<'info>,
+
+    /// Optional MapVrfState for VRF-derived map/POI seeds.
+    /// CHECK: Validated via PDA derivation and manual deserialization in handler.
+    #[account(mut)]
+    pub map_vrf_state: Option<UncheckedAccount<'info>>,
 
     pub map_generator_program: Program<'info, MapGenerator>,
     pub gameplay_state_program: Program<'info, GameplayState>,
@@ -1767,6 +1944,17 @@ pub struct DelegateMapPois<'info> {
     pub player: Signer<'info>,
 }
 
+#[delegate]
+#[derive(Accounts)]
+#[instruction(campaign_level: u8)]
+pub struct DelegatePoiVrfState<'info> {
+    #[account(mut, del)]
+    /// CHECK: Validated in handler as poi-vrf PDA for the delegated session.
+    pub poi_vrf_state: AccountInfo<'info>,
+
+    pub player: Signer<'info>,
+}
+
 #[commit]
 #[derive(Accounts)]
 #[instruction(campaign_level: u8)]
@@ -1794,6 +1982,9 @@ pub struct CommitSession<'info> {
     #[account(mut)]
     /// CHECK: Validated in handler as map-pois PDA for the delegated session.
     pub map_pois: UncheckedAccount<'info>,
+
+    /// CHECK: Optional PoiVrfState from poi-system. Only present for PvP sessions using VRF.
+    pub poi_vrf_state: Option<UncheckedAccount<'info>>,
 
     pub player: Signer<'info>,
 }
@@ -1970,6 +2161,21 @@ pub struct EndSession<'info> {
     #[account(mut)]
     /// CHECK: Validated by player-inventory CPI
     pub inventory: UncheckedAccount<'info>,
+
+    /// Optional MapVrfState (only for PvP sessions using VRF)
+    /// CHECK: Validated by map-generator close CPI
+    #[account(mut)]
+    pub map_vrf_state: Option<UncheckedAccount<'info>>,
+
+    /// Optional PoiVrfState (only for PvP sessions using VRF)
+    /// CHECK: Validated by poi-system close CPI
+    #[account(mut)]
+    pub poi_vrf_state: Option<UncheckedAccount<'info>>,
+
+    /// Optional GameplayVrfState (only for sessions using VRF)
+    /// CHECK: Validated by gameplay-state close CPI
+    #[account(mut)]
+    pub gameplay_vrf_state: Option<UncheckedAccount<'info>>,
 
     pub player_inventory_program: Program<'info, PlayerInventory>,
     pub gameplay_state_program: Program<'info, GameplayState>,
@@ -2251,6 +2457,21 @@ pub struct AbandonSession<'info> {
     /// CHECK: Validated by player-inventory CPI
     pub inventory: UncheckedAccount<'info>,
 
+    /// Optional MapVrfState (only for PvP sessions using VRF)
+    /// CHECK: Validated by map-generator close CPI
+    #[account(mut)]
+    pub map_vrf_state: Option<UncheckedAccount<'info>>,
+
+    /// Optional PoiVrfState (only for PvP sessions using VRF)
+    /// CHECK: Validated by poi-system close CPI
+    #[account(mut)]
+    pub poi_vrf_state: Option<UncheckedAccount<'info>>,
+
+    /// Optional GameplayVrfState (only for sessions using VRF)
+    /// CHECK: Validated by gameplay-state close CPI
+    #[account(mut)]
+    pub gameplay_vrf_state: Option<UncheckedAccount<'info>>,
+
     pub player_inventory_program: Program<'info, PlayerInventory>,
     pub gameplay_state_program: Program<'info, GameplayState>,
 
@@ -2319,6 +2540,59 @@ pub struct OrphanedAccountsClosed {
 /// 1. Update this constant
 /// 2. Update gameplay-state's END_SESSION_DISCRIMINATOR constant
 pub const END_SESSION_DISCRIMINATOR: [u8; 8] = [0x0b, 0xf4, 0x3d, 0x9a, 0xd4, 0xf9, 0x0f, 0x42];
+
+/// Validates and extracts VRF randomness from an optional MapVrfState account.
+///
+/// Returns `Some((randomness, nonce))` if VRF is provided and valid.
+/// Returns `None` if no VRF account is provided.
+///
+/// Validates: PDA derivation against map-generator program, discriminator, status == Fulfilled,
+/// and session key match.
+fn extract_map_vrf(
+    map_vrf_account: &Option<UncheckedAccount>,
+    session_key: &Pubkey,
+) -> Result<Option<([u8; 32], u64)>> {
+    use map_generator::state::MapVrfState;
+
+    let account = match map_vrf_account {
+        Some(a) => a,
+        None => return Ok(None),
+    };
+
+    // Validate PDA derivation against map-generator program
+    let (expected_pda, _) = Pubkey::find_program_address(
+        &[MapVrfState::SEED_PREFIX, session_key.as_ref()],
+        &map_generator::ID,
+    );
+    require_keys_eq!(
+        account.key(),
+        expected_pda,
+        SessionManagerError::InvalidMapVrfState
+    );
+
+    // Validate owner is map-generator
+    require!(
+        account.owner == &map_generator::ID,
+        SessionManagerError::InvalidMapVrfState
+    );
+
+    // Deserialize and validate status
+    let data = account.try_borrow_data()?;
+    let mut data_slice: &[u8] = &data;
+    let vrf_state = MapVrfState::try_deserialize(&mut data_slice)
+        .map_err(|_| SessionManagerError::InvalidMapVrfState)?;
+
+    require!(
+        vrf_state.session == *session_key,
+        SessionManagerError::InvalidMapVrfState
+    );
+    require!(
+        vrf_state.status == vrf_rng::VrfStatus::Fulfilled,
+        SessionManagerError::VrfNotFulfilled
+    );
+
+    Ok(Some((vrf_state.randomness, vrf_state.nonce)))
+}
 
 fn derive_pvp_seed(
     domain: &[u8],
@@ -2654,6 +2928,77 @@ fn close_map_pois_orphaned_cpi<'info>(
     )
 }
 
+// ============================================================================
+// Close VRF State CPI Functions
+// ============================================================================
+
+pub const CLOSE_MAP_VRF_STATE_DISCRIMINATOR: [u8; 8] = [81, 161, 130, 150, 241, 141, 167, 205];
+pub const CLOSE_POI_VRF_STATE_DISCRIMINATOR: [u8; 8] = [27, 145, 120, 63, 58, 59, 103, 44];
+pub const CLOSE_GAMEPLAY_VRF_STATE_DISCRIMINATOR: [u8; 8] = [88, 29, 10, 60, 204, 65, 96, 59];
+
+fn close_map_vrf_state_cpi<'info>(
+    program: &AccountInfo<'info>,
+    vrf_state: &AccountInfo<'info>,
+    session: &AccountInfo<'info>,
+    player: &AccountInfo<'info>,
+    session_signer: &AccountInfo<'info>,
+) -> Result<()> {
+    invoke_manual_cpi(
+        program,
+        MAP_GENERATOR_PROGRAM_ID,
+        &CLOSE_MAP_VRF_STATE_DISCRIMINATOR,
+        &[],
+        &[
+            (vrf_state, true, false),
+            (session, false, false),
+            (player, true, false),
+            (session_signer, false, true),
+        ],
+    )
+}
+
+fn close_poi_vrf_state_cpi<'info>(
+    program: &AccountInfo<'info>,
+    vrf_state: &AccountInfo<'info>,
+    session: &AccountInfo<'info>,
+    player: &AccountInfo<'info>,
+    session_signer: &AccountInfo<'info>,
+) -> Result<()> {
+    invoke_manual_cpi(
+        program,
+        POI_SYSTEM_PROGRAM_ID,
+        &CLOSE_POI_VRF_STATE_DISCRIMINATOR,
+        &[],
+        &[
+            (vrf_state, true, false),
+            (session, false, false),
+            (player, true, false),
+            (session_signer, false, true),
+        ],
+    )
+}
+
+fn close_gameplay_vrf_state_cpi<'info>(
+    program: &AccountInfo<'info>,
+    vrf_state: &AccountInfo<'info>,
+    game_state: &AccountInfo<'info>,
+    player: &AccountInfo<'info>,
+    session_signer: &AccountInfo<'info>,
+) -> Result<()> {
+    invoke_manual_cpi(
+        program,
+        gameplay_state::ID,
+        &CLOSE_GAMEPLAY_VRF_STATE_DISCRIMINATOR,
+        &[],
+        &[
+            (vrf_state, true, false),
+            (game_state, false, false),
+            (player, true, false),
+            (session_signer, false, true),
+        ],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2762,6 +3107,39 @@ mod tests {
         assert_eq!(
             CLOSE_MAP_POIS_ORPHANED_DISCRIMINATOR, expected,
             "CLOSE_MAP_POIS_ORPHANED_DISCRIMINATOR doesn't match"
+        );
+    }
+
+    #[test]
+    fn test_close_map_vrf_state_discriminator() {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(b"global:close_map_vrf_state");
+        let expected: [u8; 8] = hash[..8].try_into().unwrap();
+        assert_eq!(
+            CLOSE_MAP_VRF_STATE_DISCRIMINATOR, expected,
+            "CLOSE_MAP_VRF_STATE_DISCRIMINATOR doesn't match"
+        );
+    }
+
+    #[test]
+    fn test_close_poi_vrf_state_discriminator() {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(b"global:close_poi_vrf_state");
+        let expected: [u8; 8] = hash[..8].try_into().unwrap();
+        assert_eq!(
+            CLOSE_POI_VRF_STATE_DISCRIMINATOR, expected,
+            "CLOSE_POI_VRF_STATE_DISCRIMINATOR doesn't match"
+        );
+    }
+
+    #[test]
+    fn test_close_gameplay_vrf_state_discriminator() {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(b"global:close_gameplay_vrf_state");
+        let expected: [u8; 8] = hash[..8].try_into().unwrap();
+        assert_eq!(
+            CLOSE_GAMEPLAY_VRF_STATE_DISCRIMINATOR, expected,
+            "CLOSE_GAMEPLAY_VRF_STATE_DISCRIMINATOR doesn't match"
         );
     }
 }

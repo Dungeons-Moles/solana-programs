@@ -1,4 +1,30 @@
 use anchor_lang::prelude::*;
+use vrf_rng::VrfStatus;
+
+// =============================================================================
+// VRF State
+// =============================================================================
+
+/// Per-session VRF randomness for POI offer generation.
+/// PDA seeds: ["poi_vrf", session.key()]
+#[account]
+pub struct PoiVrfState {
+    /// Session PDA this VRF is tied to
+    pub session: Pubkey,
+    /// Oracle-provided randomness (filled on fulfill)
+    pub randomness: [u8; 32],
+    /// Anti-replay counter
+    pub nonce: u64,
+    /// Lifecycle stage
+    pub status: VrfStatus,
+    /// PDA bump
+    pub bump: u8,
+}
+
+impl PoiVrfState {
+    pub const SEED_PREFIX: &'static [u8] = b"poi_vrf";
+    pub const SPACE: usize = vrf_rng::VRF_STATE_SPACE;
+}
 
 /// Maximum number of POIs per map
 pub const MAX_POIS: usize = 64;

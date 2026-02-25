@@ -1,0 +1,17 @@
+[package]
+name = "vrf-rng"
+version = "0.1.0"
+description = "VRF-backed RNG with domain separation for Dungeons & Moles programs"
+edition = "2021"
+
+[lib]
+name = "vrf_rng"
+
+[dependencies]
+anchor-lang = { version = "0.32.0", optional = true }
+borsh = { version = "0.10.3", optional = true }
+
+[features]
+default = []
+anchor = ["dep:anchor-lang", "dep:borsh"]
+mock-vrf = []

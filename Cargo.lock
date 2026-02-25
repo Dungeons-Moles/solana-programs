@@ -547,6 +547,7 @@ name = "boss-system"
 version = "0.1.0"
 dependencies = [
  "combat-system",
+ "vrf-rng",
 ]
 
 [[package]]
@@ -1000,6 +1001,7 @@ dependencies = [
  "player-inventory",
  "player-profile",
  "sha2 0.10.9",
+ "vrf-rng",
 ]
 
 [[package]]
@@ -1250,6 +1252,7 @@ version = "0.1.0"
 dependencies = [
  "anchor-lang 0.32.1",
  "ephemeral-rollups-sdk",
+ "vrf-rng",
 ]
 
 [[package]]
@@ -1466,6 +1469,7 @@ dependencies = [
  "player-inventory",
  "session-manager",
  "sha2 0.10.9",
+ "vrf-rng",
 ]
 
 [[package]]
@@ -1767,6 +1771,7 @@ dependencies = [
  "map-generator",
  "player-inventory",
  "sha2 0.10.9",
+ "vrf-rng",
 ]
 
 [[package]]
@@ -3511,6 +3516,14 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vrf-rng"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang 0.32.1",
+ "borsh 0.10.4",
+]
 
 [[package]]
 name = "wasi"

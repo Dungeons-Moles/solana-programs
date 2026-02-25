@@ -11,7 +11,8 @@ pub mod state;
 
 use constants::*;
 use errors::MapGeneratorError;
-use state::{GeneratedMap, MapConfig};
+use state::{GeneratedMap, MapConfig, MapVrfState};
+use vrf_rng::VrfStatus;
 
 declare_id!("GCy5GqvnJN99rgGtV6fMn8NtL9E7RoAyHDGzQv8me65j");
 
@@ -212,6 +213,113 @@ pub mod map_generator {
         Ok(())
     }
 
+    // ========================================================================
+    // VRF Instructions
+    // ========================================================================
+
+    /// Requests VRF randomness for map generation.
+    /// Initializes a MapVrfState account with status=Requested.
+    /// Oracle CPI will be added when ephemeral-vrf-sdk is available.
+    pub fn request_map_vrf(ctx: Context<RequestMapVrf>) -> Result<()> {
+        let vrf_state = &mut ctx.accounts.vrf_state;
+        vrf_state.session = ctx.accounts.session.key();
+        vrf_state.randomness = [0u8; 32];
+        vrf_state.nonce = 1;
+        vrf_state.status = VrfStatus::Requested;
+        vrf_state.bump = ctx.bumps.vrf_state;
+        // TODO: CPI to oracle via ephemeral-vrf-sdk create_request_randomness_ix
+        Ok(())
+    }
+
+    /// Oracle callback: receives VRF randomness and writes it to state.
+    /// TODO: Verify vrf_program_identity signer when ephemeral-vrf-sdk is available.
+    pub fn fulfill_map_vrf(ctx: Context<FulfillMapVrf>, randomness: [u8; 32]) -> Result<()> {
+        let vrf_state = &mut ctx.accounts.vrf_state;
+        require!(
+            vrf_state.status == VrfStatus::Requested,
+            MapGeneratorError::VrfNotRequested
+        );
+        vrf_state.randomness = randomness;
+        vrf_state.status = VrfStatus::Fulfilled;
+        Ok(())
+    }
+
+    /// Re-generates the map using VRF-derived randomness.
+    /// Must be called after fulfill_map_vrf and before delegation.
+    pub fn regenerate_map(ctx: Context<RegenerateMap>, campaign_level: u8) -> Result<()> {
+        require!(
+            campaign_level > 0 && campaign_level <= MAX_LEVEL,
+            MapGeneratorError::InvalidLevel
+        );
+
+        let vrf_state = &mut ctx.accounts.vrf_state;
+        require!(
+            vrf_state.status == VrfStatus::Fulfilled,
+            MapGeneratorError::VrfNotFulfilled
+        );
+
+        let mut rng = vrf_rng::GameRng::from_vrf(
+            &vrf_state.randomness,
+            vrf_state.nonce,
+            vrf_rng::domains::MAP_GENERATION,
+        );
+        let vrf_seed = rng.next_val();
+
+        let generated_map = &mut ctx.accounts.generated_map;
+        let success = maze::generate_map(generated_map, vrf_seed, campaign_level);
+        require!(success, MapGeneratorError::MapGenerationFailed);
+
+        vrf_state.status = VrfStatus::Consumed;
+        Ok(())
+    }
+
+    /// Marks MapVrfState as consumed after VRF randomness has been used.
+    /// Called via CPI from session-manager during PvP session start.
+    pub fn consume_map_vrf(ctx: Context<ConsumeMapVrf>) -> Result<()> {
+        let vrf_state = &mut ctx.accounts.vrf_state;
+        require!(
+            vrf_state.status == VrfStatus::Fulfilled,
+            MapGeneratorError::VrfNotFulfilled
+        );
+        vrf_state.status = VrfStatus::Consumed;
+        Ok(())
+    }
+
+    /// Closes MapVrfState account and returns rent to the player.
+    /// Called via CPI from session-manager during end_session/abandon_session.
+    pub fn close_map_vrf_state(ctx: Context<CloseMapVrfState>) -> Result<()> {
+        const SESSION_PLAYER_OFFSET: usize = 8;
+        const SESSION_SESSION_SIGNER_OFFSET: usize = 77;
+
+        let session_data = ctx.accounts.session.try_borrow_data()?;
+        require!(
+            session_data.len() >= SESSION_SESSION_SIGNER_OFFSET + 32,
+            MapGeneratorError::InvalidSession
+        );
+
+        let stored_session_signer = Pubkey::from(
+            <[u8; 32]>::try_from(
+                &session_data[SESSION_SESSION_SIGNER_OFFSET..SESSION_SESSION_SIGNER_OFFSET + 32],
+            )
+            .unwrap(),
+        );
+        require!(
+            stored_session_signer == ctx.accounts.session_signer.key(),
+            MapGeneratorError::Unauthorized
+        );
+
+        let stored_player = Pubkey::from(
+            <[u8; 32]>::try_from(&session_data[SESSION_PLAYER_OFFSET..SESSION_PLAYER_OFFSET + 32])
+                .unwrap(),
+        );
+        require!(
+            stored_player == ctx.accounts.player.key(),
+            MapGeneratorError::Unauthorized
+        );
+
+        Ok(())
+    }
+
     /// Commits and undelegates generated-map PDA from ER back to base layer.
     pub fn undelegate_generated_map(ctx: Context<UndelegateGeneratedMap>) -> Result<()> {
         let session_key = ctx.accounts.session.key();
@@ -391,6 +499,102 @@ pub struct CloseGeneratedMap<'info> {
 
     /// Session key signer must sign to authorize closure
     pub session_signer: Signer<'info>,
+}
+
+// ============================================================================
+// VRF Account Contexts
+// ============================================================================
+
+#[derive(Accounts)]
+pub struct RequestMapVrf<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    /// CHECK: Session PDA owned by session-manager; used for PDA derivation.
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID @ MapGeneratorError::InvalidSessionOwner)]
+    pub session: UncheckedAccount<'info>,
+
+    #[account(
+        init,
+        payer = payer,
+        space = MapVrfState::SPACE,
+        seeds = [MapVrfState::SEED_PREFIX, session.key().as_ref()],
+        bump
+    )]
+    pub vrf_state: Account<'info, MapVrfState>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct FulfillMapVrf<'info> {
+    /// Oracle identity signer.
+    /// TODO: Constrain to VRF_PROGRAM_IDENTITY when ephemeral-vrf-sdk is available.
+    pub oracle: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [MapVrfState::SEED_PREFIX, vrf_state.session.as_ref()],
+        bump = vrf_state.bump,
+    )]
+    pub vrf_state: Account<'info, MapVrfState>,
+}
+
+#[derive(Accounts)]
+pub struct ConsumeMapVrf<'info> {
+    pub session_signer: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [MapVrfState::SEED_PREFIX, vrf_state.session.as_ref()],
+        bump = vrf_state.bump,
+    )]
+    pub vrf_state: Account<'info, MapVrfState>,
+}
+
+#[derive(Accounts)]
+pub struct CloseMapVrfState<'info> {
+    #[account(
+        mut,
+        seeds = [MapVrfState::SEED_PREFIX, vrf_state.session.as_ref()],
+        bump = vrf_state.bump,
+        close = player,
+    )]
+    pub vrf_state: Account<'info, MapVrfState>,
+
+    /// CHECK: Session account for signer validation. Read as raw bytes.
+    pub session: UncheckedAccount<'info>,
+
+    /// CHECK: Validated against session.player in instruction body.
+    #[account(mut)]
+    pub player: AccountInfo<'info>,
+
+    pub session_signer: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct RegenerateMap<'info> {
+    pub session_signer: Signer<'info>,
+
+    /// CHECK: Session PDA used for seed derivation.
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID @ MapGeneratorError::InvalidSessionOwner)]
+    pub session: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        seeds = [GeneratedMap::SEED_PREFIX, session.key().as_ref()],
+        bump = generated_map.bump,
+        has_one = session,
+    )]
+    pub generated_map: Account<'info, GeneratedMap>,
+
+    #[account(
+        mut,
+        seeds = [MapVrfState::SEED_PREFIX, session.key().as_ref()],
+        bump = vrf_state.bump,
+        has_one = session,
+    )]
+    pub vrf_state: Account<'info, MapVrfState>,
 }
 
 // ============================================================================

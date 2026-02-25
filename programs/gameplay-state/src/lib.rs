@@ -21,12 +21,12 @@ use combat_system::{
     ItemEffect,
 };
 use constants::{
-    BASE_ARM, BASE_ATK, BASE_HP, BASE_SPD, COMPANY_TREASURY_ADDRESS, DAY_MOVES,
+    base_hp, BASE_ARM, BASE_ATK, BASE_SPD, COMPANY_TREASURY_ADDRESS, DAY_MOVES,
     DUEL_ENTRY_LAMPORTS, DUEL_ENTRY_SEED, DUEL_OPEN_QUEUE_SEED, DUEL_QUEUE_SEED, DUEL_VAULT_SEED,
-    GAME_STATE_SEED, GAUNTLET_BOOTSTRAP_ECHOES_PER_WEEK, GAUNTLET_COMPANY_FEE_BPS,
-    GAUNTLET_CONFIG_SEED, GAUNTLET_ENTRY_LAMPORTS, GAUNTLET_EPOCH_DURATION_SECONDS,
-    GAUNTLET_EPOCH_POOL_SEED, GAUNTLET_MAX_WEEKLY_ECHOES, GAUNTLET_PLAYER_SCORE_SEED,
-    GAUNTLET_POOL_FEE_BPS, GAUNTLET_POOL_VAULT_SEED,
+    GAME_STATE_SEED, GAUNTLET_BOOTSTRAP_ECHOES_PER_WEEK, GAUNTLET_CAMPAIGN_LEVEL,
+    GAUNTLET_COMPANY_FEE_BPS, GAUNTLET_CONFIG_SEED, GAUNTLET_ENTRY_LAMPORTS,
+    GAUNTLET_EPOCH_DURATION_SECONDS, GAUNTLET_EPOCH_POOL_SEED, GAUNTLET_MAX_WEEKLY_ECHOES,
+    GAUNTLET_PLAYER_SCORE_SEED, GAUNTLET_POOL_FEE_BPS, GAUNTLET_POOL_VAULT_SEED,
     GAUNTLET_WEEK_POOL_SEED, INITIAL_GEAR_SLOTS, MAX_GEAR_SLOTS, PIT_DRAFT_BPS_DENOMINATOR,
     PIT_DRAFT_COMPANY_FEE_BPS, PIT_DRAFT_ENTRY_LAMPORTS, PIT_DRAFT_GAUNTLET_FEE_BPS,
     PIT_DRAFT_QUEUE_SEED, PIT_DRAFT_VAULT_SEED, PIT_DRAFT_WINNER_BPS,
@@ -54,6 +54,23 @@ use state::{
 };
 use stats::{calculate_stats, PlayerStats};
 
+fn compute_gold_gain_multiplier(effects: &[ItemEffect]) -> i16 {
+    effects
+        .iter()
+        .filter(|effect| effect.effect_type == EffectType::AmplifyGoldGain)
+        .map(|effect| effect.value.max(0))
+        .sum()
+}
+
+fn apply_gold_reward_multiplier(base: u16, multiplier_percent: i16) -> u16 {
+    if multiplier_percent <= 0 || base == 0 {
+        return base;
+    }
+
+    let total = i32::from(base) + (i32::from(base) * i32::from(multiplier_percent) / 100);
+    total.clamp(0, i32::from(u16::MAX)) as u16
+}
+
 declare_id!("C8hK4qsqsSYQeqyXuTPTUUS3T7N74WnZCuzvChTpK1Mo");
 
 /// Session manager program ID for session ownership checks
@@ -74,17 +91,15 @@ pub const PIT_DRAFT_MAX_START_GOLD: u16 = 30;
 pub const MAX_PVP_VISUAL_LOG_ENTRIES: usize = 512;
 pub const DISCOVER_VISIBLE_WAYPOINTS_DISCRIMINATOR: [u8; 8] =
     [0x3b, 0x26, 0x6a, 0x00, 0x3a, 0xb1, 0x50, 0xfc];
-pub const LOCAL_ER_VALIDATOR: Pubkey = pubkey!("mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev");
-
 /// Player inventory program ID for authorized HP modifications via CPI
 pub const PLAYER_INVENTORY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     0x8b, 0x77, 0xfe, 0x0c, 0xa3, 0x5f, 0x22, 0x83, 0xa1, 0x7c, 0x15, 0x8e, 0x3e, 0x68, 0xbd, 0x0e,
     0xbf, 0x73, 0x79, 0xcd, 0xb6, 0x8f, 0x3c, 0xec, 0xd3, 0x37, 0x2f, 0xbf, 0x66, 0x1e, 0x4e, 0x1c,
 ]);
 
-fn local_delegate_config() -> DelegateConfig {
+fn local_delegate_config(validator: Option<Pubkey>) -> DelegateConfig {
     DelegateConfig {
-        validator: Some(LOCAL_ER_VALIDATOR),
+        validator,
         ..DelegateConfig::default()
     }
 }
@@ -110,7 +125,7 @@ pub mod gameplay_state {
         );
 
         require!(
-            campaign_level >= 1 && campaign_level <= 40,
+            (1..=40).contains(&campaign_level),
             GameplayStateError::InvalidCampaignLevel
         );
         require!(
@@ -126,7 +141,7 @@ pub mod gameplay_state {
         game_state.position_y = start_y;
         game_state.map_width = map_width;
         game_state.map_height = map_height;
-        game_state.hp = BASE_HP;
+        game_state.hp = base_hp(campaign_level);
         game_state.gear_slots = INITIAL_GEAR_SLOTS;
         game_state.week = 1;
         game_state.phase = Phase::Day1;
@@ -176,7 +191,10 @@ pub mod gameplay_state {
     }
 
     /// Delegates GameState and MapEnemies PDAs to MagicBlock from gameplay-state.
-    pub fn delegate_gameplay_accounts(ctx: Context<DelegateGameplayAccounts>) -> Result<()> {
+    pub fn delegate_gameplay_accounts(
+        ctx: Context<DelegateGameplayAccounts>,
+        validator: Option<Pubkey>,
+    ) -> Result<()> {
         let session_key = ctx.accounts.game_session.key();
         let (expected_game_state, _) =
             Pubkey::find_program_address(&[b"game_state", session_key.as_ref()], &crate::ID);
@@ -199,14 +217,14 @@ pub mod gameplay_state {
         ctx.accounts.delegate_game_state(
             &ctx.accounts.player,
             game_state_seeds,
-            local_delegate_config(),
+            local_delegate_config(validator),
         )?;
 
         let map_enemies_seeds: &[&[u8]] = &[MapEnemies::SEED_PREFIX, session_key.as_ref()];
         ctx.accounts.delegate_map_enemies(
             &ctx.accounts.player,
             map_enemies_seeds,
-            local_delegate_config(),
+            local_delegate_config(validator),
         )?;
         Ok(())
     }
@@ -231,17 +249,17 @@ pub mod gameplay_state {
             GameplayStateError::Unauthorized
         );
         require_keys_eq!(
-            ctx.accounts.game_state.session,
+            read_game_state(&ctx.accounts.game_state)?.session,
             session_key,
             GameplayStateError::Unauthorized
         );
         require_keys_eq!(
-            ctx.accounts.map_enemies.session,
+            read_map_enemies(&ctx.accounts.map_enemies)?.session,
             session_key,
             GameplayStateError::Unauthorized
         );
         require_keys_eq!(
-            ctx.accounts.game_state.session_signer,
+            read_game_state(&ctx.accounts.game_state)?.session_signer,
             ctx.accounts.session_signer.key(),
             GameplayStateError::Unauthorized
         );
@@ -251,6 +269,67 @@ pub mod gameplay_state {
         commit_and_undelegate_accounts(
             &ctx.accounts.session_signer.to_account_info(),
             vec![&game_state_info, &map_enemies_info],
+            &ctx.accounts.magic_context,
+            &ctx.accounts.magic_program.to_account_info(),
+        )?;
+        Ok(())
+    }
+
+    /// Commits and undelegates only the game_state account from ER back to base layer.
+    /// Used when map_enemies is already on base but game_state is still delegated.
+    pub fn undelegate_game_state(ctx: Context<UndelegateGameState>) -> Result<()> {
+        let session_key = ctx.accounts.game_session.key();
+        let (expected_game_state, _) =
+            Pubkey::find_program_address(&[b"game_state", session_key.as_ref()], &crate::ID);
+        require_keys_eq!(
+            ctx.accounts.game_state.key(),
+            expected_game_state,
+            GameplayStateError::Unauthorized
+        );
+        require_keys_eq!(
+            read_game_state(&ctx.accounts.game_state)?.session,
+            session_key,
+            GameplayStateError::Unauthorized
+        );
+        require_keys_eq!(
+            read_game_state(&ctx.accounts.game_state)?.session_signer,
+            ctx.accounts.session_signer.key(),
+            GameplayStateError::Unauthorized
+        );
+
+        let game_state_info = ctx.accounts.game_state.to_account_info();
+        commit_and_undelegate_accounts(
+            &ctx.accounts.session_signer.to_account_info(),
+            vec![&game_state_info],
+            &ctx.accounts.magic_context,
+            &ctx.accounts.magic_program.to_account_info(),
+        )?;
+        Ok(())
+    }
+
+    /// Commits and undelegates only the map_enemies account from ER back to base layer.
+    /// Used when game_state is already on base but map_enemies is still delegated.
+    pub fn undelegate_map_enemies(ctx: Context<UndelegateMapEnemies>) -> Result<()> {
+        let session_key = ctx.accounts.game_session.key();
+        let (expected_map_enemies, _) = Pubkey::find_program_address(
+            &[MapEnemies::SEED_PREFIX, session_key.as_ref()],
+            &crate::ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.map_enemies.key(),
+            expected_map_enemies,
+            GameplayStateError::Unauthorized
+        );
+        require_keys_eq!(
+            read_map_enemies(&ctx.accounts.map_enemies)?.session,
+            session_key,
+            GameplayStateError::Unauthorized
+        );
+
+        let map_enemies_info = ctx.accounts.map_enemies.to_account_info();
+        commit_and_undelegate_accounts(
+            &ctx.accounts.session_signer.to_account_info(),
+            vec![&map_enemies_info],
             &ctx.accounts.magic_context,
             &ctx.accounts.magic_program.to_account_info(),
         )?;
@@ -850,8 +929,16 @@ pub mod gameplay_state {
             let creator_inventory = snapshot_creator_inventory(creator);
             if duel_entry.outcome == DuelRunOutcome::CompletedWeek3 {
                 let opponent_inventory = snapshot_duel_entry_inventory(duel_entry);
-                let creator_stats = calculate_stats(&creator_inventory);
-                let opponent_stats = calculate_stats(&opponent_inventory);
+                let creator_stats = calculate_stats(
+                    &creator_inventory,
+                    GAUNTLET_CAMPAIGN_LEVEL,
+                    game_state.run_mode,
+                );
+                let opponent_stats = calculate_stats(
+                    &opponent_inventory,
+                    GAUNTLET_CAMPAIGN_LEVEL,
+                    game_state.run_mode,
+                );
                 let creator_effects = generate_combat_effects(&creator_inventory);
                 let opponent_effects = generate_combat_effects(&opponent_inventory);
                 let combat_outcome = resolve_combat_with_both_gold(
@@ -1144,8 +1231,10 @@ pub mod gameplay_state {
             clock.slot,
         )?;
 
-        let waiting_stats = calculate_stats(&waiting_inventory);
-        let entrant_stats = calculate_stats(&entrant_inventory);
+        let waiting_stats =
+            calculate_stats(&waiting_inventory, GAUNTLET_CAMPAIGN_LEVEL, RunMode::Duel);
+        let entrant_stats =
+            calculate_stats(&entrant_inventory, GAUNTLET_CAMPAIGN_LEVEL, RunMode::Duel);
         let waiting_effects = generate_combat_effects(&waiting_inventory);
         let entrant_effects = generate_combat_effects(&entrant_inventory);
 
@@ -1257,7 +1346,9 @@ pub mod gameplay_state {
     /// Closes the GameState account via session key signer authorization.
     /// Used by session-manager CPI during end_session to clean up game state.
     /// Rent is returned to the player wallet.
-    pub fn close_game_state_via_session_signer(ctx: Context<CloseGameStateViaSessionSigner>) -> Result<()> {
+    pub fn close_game_state_via_session_signer(
+        ctx: Context<CloseGameStateViaSessionSigner>,
+    ) -> Result<()> {
         let game_state = &ctx.accounts.game_state;
 
         emit!(GameStateClosed {
@@ -1290,7 +1381,8 @@ pub mod gameplay_state {
     pub fn heal_player(ctx: Context<HealPlayer>, amount: u16) -> Result<()> {
         let game_state = &mut ctx.accounts.game_state;
         let inventory = &ctx.accounts.inventory;
-        let player_stats = calculate_stats(inventory);
+        let player_stats =
+            calculate_stats(inventory, game_state.campaign_level, game_state.run_mode);
 
         let old_hp = game_state.hp;
         let new_hp = (game_state.hp as i32)
@@ -1334,6 +1426,7 @@ pub mod gameplay_state {
         let player_inventory_program = &ctx.accounts.player_inventory_program;
 
         require!(!game_state.is_dead, GameplayStateError::PlayerDead);
+        require!(!game_state.completed, GameplayStateError::RunCompleted);
         require!(
             !game_state.boss_fight_ready,
             GameplayStateError::BossFightAlreadyTriggered
@@ -1462,7 +1555,10 @@ pub mod gameplay_state {
         let game_state = &mut ctx.accounts.game_state;
 
         require!(hp_bonus > 0, GameplayStateError::InvalidHpBonus);
-        require!(new_max_hp >= BASE_HP, GameplayStateError::InvalidHpBonus);
+        require!(
+            new_max_hp >= base_hp(game_state.campaign_level),
+            GameplayStateError::InvalidHpBonus
+        );
 
         let old_hp = game_state.hp;
         // Cap current HP at the new max HP
@@ -1599,7 +1695,8 @@ pub mod gameplay_state {
             DAY_VISION_RADIUS
         };
         let is_wall = !generated_map.is_walkable(target_x, target_y);
-        let player_stats = calculate_stats(inventory);
+        let player_stats =
+            calculate_stats(inventory, game_state.campaign_level, game_state.run_mode);
         let move_cost = calculate_move_cost(is_wall, player_stats.dig);
 
         // Check if move can be afforded in current phase or by spanning phases
@@ -1932,6 +2029,66 @@ pub mod gameplay_state {
     ) -> Result<()> {
         Err(GameplayStateError::TestOnlyInstructionDisabled.into())
     }
+
+    /// Close a corrupted/empty GameState account (0-byte data).
+    /// After an ER reset, force-undelegation can leave accounts with no data.
+    /// Only works on accounts owned by this program with 0 bytes of data.
+    pub fn close_empty_game_state(ctx: Context<CloseEmptyGameState>) -> Result<()> {
+        let info = ctx.accounts.game_state.to_account_info();
+        let dest = ctx.accounts.destination.to_account_info();
+        **dest.try_borrow_mut_lamports()? += info.lamports();
+        **info.try_borrow_mut_lamports()? = 0;
+        info.assign(&anchor_lang::system_program::ID);
+        info.realloc(0, false)?;
+        Ok(())
+    }
+
+    /// Close a corrupted/empty MapEnemies account (0-byte data).
+    /// After an ER reset, force-undelegation can leave accounts with no data.
+    /// Only works on accounts owned by this program with 0 bytes of data.
+    pub fn close_empty_map_enemies(ctx: Context<CloseEmptyMapEnemies>) -> Result<()> {
+        let info = ctx.accounts.map_enemies.to_account_info();
+        let dest = ctx.accounts.destination.to_account_info();
+        **dest.try_borrow_mut_lamports()? += info.lamports();
+        **info.try_borrow_mut_lamports()? = 0;
+        info.assign(&anchor_lang::system_program::ID);
+        info.realloc(0, false)?;
+        Ok(())
+    }
+
+    /// Close an orphaned MapEnemies account that has valid data but whose
+    /// session PDA no longer exists. Proves the account is orphaned by
+    /// requiring the session PDA to have 0 lamports.
+    pub fn close_orphaned_map_enemies(ctx: Context<CloseOrphanedMapEnemies>) -> Result<()> {
+        let info = ctx.accounts.map_enemies.to_account_info();
+        let dest = ctx.accounts.destination.to_account_info();
+        **dest.try_borrow_mut_lamports()? += info.lamports();
+        **info.try_borrow_mut_lamports()? = 0;
+        info.assign(&anchor_lang::system_program::ID);
+        info.realloc(0, false)?;
+        Ok(())
+    }
+
+    /// TEST-ONLY: Sets game_state.completed = true so the victory path can
+    /// be exercised in e2e tests without requiring actual boss kills.
+    /// Validates session_signer authority so it cannot be called by a random wallet.
+    pub fn test_set_completed(_ctx: Context<TestSetCompleted>) -> Result<()> {
+        Err(GameplayStateError::TestOnlyInstructionDisabled.into())
+    }
+
+    /// TEST-ONLY: Sets game_state.hp to given value and clears is_dead.
+    /// Used in e2e tests to keep the player alive through night enemy encounters
+    /// so the boss fight path can be tested.
+    pub fn test_set_hp(_ctx: Context<TestSetCompleted>, _hp: i16) -> Result<()> {
+        Err(GameplayStateError::TestOnlyInstructionDisabled.into())
+    }
+}
+
+#[derive(Accounts)]
+pub struct TestSetCompleted<'info> {
+    #[account(mut)]
+    pub game_state: Account<'info, GameState>,
+    pub session_signer: Signer<'info>,
 }
 
 #[delegate]
@@ -1952,11 +2109,38 @@ pub struct DelegateGameplayAccounts<'info> {
 #[derive(Accounts)]
 pub struct UndelegateGameplayAccounts<'info> {
     #[account(mut)]
-    pub game_state: Account<'info, GameState>,
+    /// CHECK: PDA is validated and deserialized in handler.
+    pub game_state: AccountInfo<'info>,
     #[account(mut)]
-    pub map_enemies: Account<'info, MapEnemies>,
+    /// CHECK: PDA is validated and deserialized in handler.
+    pub map_enemies: AccountInfo<'info>,
     /// CHECK: Session PDA used only for deterministic PDA validation.
     pub game_session: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub session_signer: Signer<'info>,
+}
+
+#[commit]
+#[derive(Accounts)]
+pub struct UndelegateGameState<'info> {
+    #[account(mut)]
+    /// CHECK: PDA is validated and deserialized in handler.
+    pub game_state: AccountInfo<'info>,
+    /// CHECK: Session PDA used only for deterministic PDA validation.
+    pub game_session: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub session_signer: Signer<'info>,
+}
+
+#[commit]
+#[derive(Accounts)]
+pub struct UndelegateMapEnemies<'info> {
+    #[account(mut)]
+    /// CHECK: PDA is validated and deserialized in handler.
+    pub map_enemies: AccountInfo<'info>,
+    /// CHECK: Session PDA used only for deterministic PDA validation.
+    pub game_session: UncheckedAccount<'info>,
+    #[account(mut)]
     pub session_signer: Signer<'info>,
 }
 
@@ -1975,6 +2159,18 @@ fn find_enemy_index(map_enemies: &MapEnemies, x: u8, y: u8) -> Option<usize> {
         .enemies
         .iter()
         .position(|enemy| !enemy.defeated && enemy.x == x && enemy.y == y)
+}
+
+fn read_game_state(game_state: &AccountInfo<'_>) -> Result<GameState> {
+    let data = game_state.try_borrow_data()?;
+    let mut slice: &[u8] = &data;
+    GameState::try_deserialize(&mut slice).map_err(|_| GameplayStateError::InvalidSession.into())
+}
+
+fn read_map_enemies(map_enemies: &AccountInfo<'_>) -> Result<MapEnemies> {
+    let data = map_enemies.try_borrow_data()?;
+    let mut slice: &[u8] = &data;
+    MapEnemies::try_deserialize(&mut slice).map_err(|_| GameplayStateError::InvalidSession.into())
 }
 
 fn remove_enemy(map_enemies: &mut MapEnemies, enemy_index: usize) {
@@ -2128,10 +2324,8 @@ fn draw_gauntlet_echoes_from_remaining(
         );
 
         // Verify PDA
-        let (expected_pda, _) = Pubkey::find_program_address(
-            &[GAUNTLET_WEEK_POOL_SEED, &[week]],
-            &program_id,
-        );
+        let (expected_pda, _) =
+            Pubkey::find_program_address(&[GAUNTLET_WEEK_POOL_SEED, &[week]], &program_id);
         require!(
             info.key() == expected_pda,
             GameplayStateError::InvalidGauntletWeek
@@ -2150,17 +2344,11 @@ fn draw_gauntlet_echoes_from_remaining(
         );
 
         // Read week field (offset 8) and validate
-        require!(
-            data[8] == week,
-            GameplayStateError::InvalidGauntletWeek
-        );
+        require!(data[8] == week, GameplayStateError::InvalidGauntletWeek);
 
         // Read vec_len at offset 20 (8 disc + 1 week + 1 bootstrap + 2 echoes_added + 8 seen)
         let vec_len = u32::from_le_bytes(data[20..24].try_into().unwrap()) as usize;
-        require!(
-            vec_len > 0,
-            GameplayStateError::GauntletNotInitialized
-        );
+        require!(vec_len > 0, GameplayStateError::GauntletNotInitialized);
 
         // Pick random index — slot adds per-entry entropy so re-entering gives different echoes
         let rand = derive_u64_random(&[
@@ -2402,6 +2590,7 @@ fn transfer_lamports_from_vault<'info>(
 /// - Heal: Restore HP (capped at max_hp)
 fn process_victory_effects(game_state: &mut GameState, inventory: &PlayerInventory, max_hp: i16) {
     let effects = generate_combat_effects(inventory);
+    let gold_multiplier = compute_gold_gain_multiplier(&effects);
 
     for effect in effects.iter() {
         if effect.trigger != combat_system::TriggerType::Victory {
@@ -2411,7 +2600,8 @@ fn process_victory_effects(game_state: &mut GameState, inventory: &PlayerInvento
         match effect.effect_type {
             EffectType::GainGold => {
                 let gold_gain = effect.value.max(0) as u16;
-                game_state.gold = game_state.gold.saturating_add(gold_gain);
+                let boosted_gain = apply_gold_reward_multiplier(gold_gain, gold_multiplier);
+                game_state.gold = game_state.gold.saturating_add(boosted_gain);
             }
             EffectType::Heal => {
                 let heal_amount = effect.value.max(0);
@@ -2467,8 +2657,9 @@ fn resolve_enemy_combat(
         None => return Ok(true),
     };
 
-    let player_stats = calculate_stats(inventory);
+    let player_stats = calculate_stats(inventory, game_state.campaign_level, game_state.run_mode);
     let player_effects = generate_combat_effects(inventory);
+    let gold_multiplier = compute_gold_gain_multiplier(&player_effects);
     let player_input = build_player_combatant(game_state.hp, &player_stats, &player_effects);
     let enemy_effects = preprocess_enemy_effects(enemy.archetype_id, game_state.gold);
 
@@ -2492,6 +2683,7 @@ fn resolve_enemy_combat(
     let tier_enum = field_enemies::state::EnemyTier::from_u8(enemy.tier);
     require!(tier_enum.is_some(), GameplayStateError::InvalidEnemyTier);
     let gold_reward = tier_enum.unwrap().gold_reward() as u16;
+    let gold_reward = apply_gold_reward_multiplier(gold_reward, gold_multiplier);
 
     emit!(CombatEnded {
         player: game_state.player,
@@ -2570,7 +2762,7 @@ fn resolve_boss_fight<'info>(
     let boss_definition = boss_system::get_boss(&boss_id).ok_or(GameplayStateError::InvalidWeek)?;
     let boss_effects = boss_system::get_boss_item_effects(boss_definition);
 
-    let player_stats = calculate_stats(inventory);
+    let player_stats = calculate_stats(inventory, game_state.campaign_level, game_state.run_mode);
     let player_effects = generate_combat_effects(inventory);
     let player_input = build_player_combatant(game_state.hp, &player_stats, &player_effects);
 
@@ -2685,7 +2877,7 @@ fn resolve_gauntlet_echo_inline<'info>(
 ) -> Result<bool> {
     let week = game_state.week;
     require!(
-        week >= 1 && week <= 5,
+        (1..=5).contains(&week),
         GameplayStateError::InvalidGauntletWeek
     );
 
@@ -2694,11 +2886,14 @@ fn resolve_gauntlet_echo_inline<'info>(
         None => return Err(GameplayStateError::GauntletNotInitialized.into()),
     };
 
-    let player_stats = calculate_stats(inventory);
+    let player_stats = calculate_stats(inventory, GAUNTLET_CAMPAIGN_LEVEL, game_state.run_mode);
     let player_effects = generate_combat_effects(inventory);
-    let echo_inventory =
-        snapshot_to_inventory(echo, game_state.session, game_state.player);
-    let echo_stats = calculate_stats(&echo_inventory);
+    let echo_inventory = snapshot_to_inventory(echo, game_state.session, game_state.player);
+    let echo_stats = calculate_stats(
+        &echo_inventory,
+        GAUNTLET_CAMPAIGN_LEVEL,
+        game_state.run_mode,
+    );
     let echo_effects = generate_combat_effects(&echo_inventory);
 
     let outcome = resolve_combat_with_both_gold(
@@ -3002,13 +3197,13 @@ fn build_bootstrap_echo(week: u8, index: u64) -> Result<GauntletEchoSnapshot> {
         .ok_or(GameplayStateError::GauntletNotInitialized)?;
     let capacity = gauntlet_gear_capacity(week);
     let mut gear = [None; 12];
-    for slot in 0..capacity {
+    for (slot, gear_slot) in gear.iter_mut().enumerate().take(capacity) {
         let item_idx = item_index_by_type(
             ItemType::Gear,
             ((index as usize) + (slot * week as usize)) % gear_count,
         )
         .ok_or(GameplayStateError::GauntletNotInitialized)?;
-        gear[slot] = Some(ItemInstance::new(*ITEMS[item_idx].id, Tier::I));
+        *gear_slot = Some(ItemInstance::new(*ITEMS[item_idx].id, Tier::I));
     }
 
     let mut tool = ItemInstance::new(*ITEMS[tool_idx].id, Tier::I);
@@ -3182,8 +3377,8 @@ fn maybe_insert_player_echo(
 ) -> Result<()> {
     let capacity = gauntlet_gear_capacity(week);
     let mut capped_gear = inventory.gear;
-    for slot in capacity..capped_gear.len() {
-        capped_gear[slot] = None;
+    for gear_slot in &mut capped_gear[capacity..] {
+        *gear_slot = None;
     }
     let snapshot = GauntletEchoSnapshot {
         week,
@@ -3854,6 +4049,73 @@ pub struct CloseMapEnemies<'info> {
 
     /// Session key signer must sign to authorize closure
     pub session_signer: Signer<'info>,
+}
+
+/// Close a corrupted/empty GameState account (0-byte data after ER reset + force-undelegate).
+/// Only works on accounts owned by this program with exactly 0 bytes of data.
+#[derive(Accounts)]
+pub struct CloseEmptyGameState<'info> {
+    #[account(
+        mut,
+        constraint = game_state.data_is_empty() @ GameplayStateError::AccountNotEmpty,
+        constraint = *game_state.owner == crate::ID @ GameplayStateError::Unauthorized,
+    )]
+    /// CHECK: Validated via owner check + empty data constraint.
+    pub game_state: UncheckedAccount<'info>,
+
+    /// Receives the lamports from the closed account.
+    #[account(mut)]
+    /// CHECK: Any destination is fine since the account is corrupted/empty.
+    pub destination: AccountInfo<'info>,
+
+    pub payer: Signer<'info>,
+}
+
+/// Close a corrupted/empty MapEnemies account (0-byte data after ER reset + force-undelegate).
+/// Only works on accounts owned by this program with exactly 0 bytes of data.
+#[derive(Accounts)]
+pub struct CloseEmptyMapEnemies<'info> {
+    #[account(
+        mut,
+        constraint = map_enemies.data_is_empty() @ GameplayStateError::AccountNotEmpty,
+        constraint = *map_enemies.owner == crate::ID @ GameplayStateError::Unauthorized,
+    )]
+    /// CHECK: Validated via owner check + empty data constraint.
+    pub map_enemies: UncheckedAccount<'info>,
+
+    /// Receives the lamports from the closed account.
+    #[account(mut)]
+    /// CHECK: Any destination is fine since the account is corrupted/empty.
+    pub destination: AccountInfo<'info>,
+
+    pub payer: Signer<'info>,
+}
+
+/// Close an orphaned MapEnemies account with valid data, whose session PDA no longer exists.
+/// Validates that the session PDA (from map_enemies.session) has 0 lamports (doesn't exist).
+#[derive(Accounts)]
+pub struct CloseOrphanedMapEnemies<'info> {
+    #[account(
+        mut,
+        seeds = [MapEnemies::SEED_PREFIX, map_enemies.session.as_ref()],
+        bump = map_enemies.bump,
+    )]
+    pub map_enemies: Account<'info, MapEnemies>,
+
+    /// Session PDA must not exist (proves the account is orphaned).
+    /// CHECK: Address must match map_enemies.session, and lamports must be 0.
+    #[account(
+        constraint = session_pda.key() == map_enemies.session @ GameplayStateError::InvalidSession,
+        constraint = session_pda.lamports() == 0 @ GameplayStateError::SessionNotActive,
+    )]
+    pub session_pda: UncheckedAccount<'info>,
+
+    /// Receives the lamports from the closed account.
+    #[account(mut)]
+    /// CHECK: Any destination is fine since the session is dead.
+    pub destination: AccountInfo<'info>,
+
+    pub payer: Signer<'info>,
 }
 
 /// Context for healing the player, authorized by poi-system CPI.

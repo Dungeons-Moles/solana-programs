@@ -37,11 +37,9 @@ pub const MAP_GENERATOR_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     0xe1, 0xf0, 0x18, 0x72, 0xcf, 0x4e, 0x1d, 0xea, 0xe0, 0x2f, 0x0a, 0xb0, 0xe8, 0xbf, 0x4b, 0x0c,
     0xf5, 0xb2, 0x05, 0xc5, 0x47, 0x61, 0x12, 0x2d, 0x49, 0xda, 0x54, 0xc1, 0xf5, 0xd0, 0xac, 0x6e,
 ]);
-pub const LOCAL_ER_VALIDATOR: Pubkey = pubkey!("mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev");
-
-fn local_delegate_config() -> DelegateConfig {
+fn local_delegate_config(validator: Option<Pubkey>) -> DelegateConfig {
     DelegateConfig {
-        validator: Some(LOCAL_ER_VALIDATOR),
+        validator,
         ..DelegateConfig::default()
     }
 }
@@ -377,7 +375,10 @@ pub mod poi_system {
     }
 
     /// Delegates map-pois PDA to MagicBlock from poi-system (its owner program).
-    pub fn delegate_map_pois(ctx: Context<DelegateMapPois>) -> Result<()> {
+    pub fn delegate_map_pois(
+        ctx: Context<DelegateMapPois>,
+        validator: Option<Pubkey>,
+    ) -> Result<()> {
         let session_key = ctx.accounts.game_session.key();
         let (expected_map_pois, _) =
             Pubkey::find_program_address(&[MAP_POIS_SEED, session_key.as_ref()], &crate::ID);
@@ -390,7 +391,7 @@ pub mod poi_system {
         ctx.accounts.delegate_map_pois(
             &ctx.accounts.player,
             map_pois_seeds,
-            local_delegate_config(),
+            local_delegate_config(validator),
         )?;
         Ok(())
     }
@@ -407,8 +408,9 @@ pub mod poi_system {
             expected_map_pois,
             PoiSystemError::Unauthorized
         );
+        let map_pois = read_map_pois(&ctx.accounts.map_pois)?;
         require_keys_eq!(
-            ctx.accounts.map_pois.session,
+            map_pois.session,
             session_key,
             PoiSystemError::Unauthorized
         );
@@ -420,8 +422,10 @@ pub mod poi_system {
             PoiSystemError::InvalidSession
         );
         let stored_session_signer = Pubkey::from(
-            <[u8; 32]>::try_from(&session_data[GameSession::SESSION_SIGNER_OFFSET..session_signer_end])
-                .unwrap(),
+            <[u8; 32]>::try_from(
+                &session_data[GameSession::SESSION_SIGNER_OFFSET..session_signer_end],
+            )
+            .unwrap(),
         );
         require_keys_eq!(
             stored_session_signer,
@@ -464,7 +468,9 @@ pub mod poi_system {
     /// Close MapPois account via session key signer authorization.
     /// Used by session-manager CPI during end_session to clean up.
     /// Rent is returned to the player wallet.
-    pub fn close_map_pois_via_session_signer(ctx: Context<CloseMapPoisViaSessionSigner>) -> Result<()> {
+    pub fn close_map_pois_via_session_signer(
+        ctx: Context<CloseMapPoisViaSessionSigner>,
+    ) -> Result<()> {
         use session_manager::state::GameSession;
         let player_end = GameSession::PLAYER_OFFSET + 32;
         let session_signer_end = GameSession::SESSION_SIGNER_OFFSET + 32;
@@ -479,8 +485,10 @@ pub mod poi_system {
             <[u8; 32]>::try_from(&session_data[GameSession::PLAYER_OFFSET..player_end]).unwrap(),
         );
         let stored_session_signer = Pubkey::from(
-            <[u8; 32]>::try_from(&session_data[GameSession::SESSION_SIGNER_OFFSET..session_signer_end])
-                .unwrap(),
+            <[u8; 32]>::try_from(
+                &session_data[GameSession::SESSION_SIGNER_OFFSET..session_signer_end],
+            )
+            .unwrap(),
         );
 
         require!(
@@ -493,6 +501,17 @@ pub mod poi_system {
         );
         drop(session_data);
 
+        emit!(PoisClosed {
+            session: ctx.accounts.map_pois.session,
+        });
+        Ok(())
+    }
+
+    /// Close MapPois account when the session PDA no longer exists (orphaned).
+    /// Validates session_signer and player via the GameState account instead.
+    /// Used by frontend orphaned-account cleanup when force_close_session
+    /// already closed the session PDA but some children were still delegated.
+    pub fn close_map_pois_orphaned(ctx: Context<CloseMapPoisOrphaned>) -> Result<()> {
         emit!(PoisClosed {
             session: ctx.accounts.map_pois.session,
         });
@@ -533,7 +552,11 @@ pub mod poi_system {
         let inventory = &ctx.accounts.inventory;
 
         let (poi, _) = get_and_validate_poi(map_pois, game_state, poi_index, false)?;
-        let player_stats = gameplay_state::stats::calculate_stats(inventory);
+        let player_stats = gameplay_state::stats::calculate_stats(
+            inventory,
+            game_state.campaign_level,
+            game_state.run_mode,
+        );
 
         // Get values for rest interaction (i16 to handle HP > 255 or negative values)
         let current_hp = game_state.hp;
@@ -596,10 +619,11 @@ pub mod poi_system {
     /// Generate and store cache offers for a pick-item POI (L2, L3, L12, L13).
     ///
     /// This instruction generates offers using an on-chain derived seed (Clock)
-    /// and stores them in `MapPois.current_offer` so the frontend can read them.
+    /// and stores them in `MapPois.cache_offers` so the frontend can read them.
     /// The user then calls `interact_pick_item` with their chosen index.
     ///
-    /// Must be called before `interact_pick_item` for pick-item POIs.
+    /// Offers persist for the entire session — revisiting a POI returns the
+    /// same offer instead of regenerating (VRF-ready).
     pub fn generate_cache_offer(ctx: Context<InteractPickItem>, poi_index: u8) -> Result<()> {
         let map_pois = &mut ctx.accounts.map_pois;
         let game_state = &ctx.accounts.game_state;
@@ -611,16 +635,18 @@ pub mod poi_system {
         let poi_type = poi.poi_type;
         let act = map_pois.act;
 
+        // Reject if an offer already exists for this exact POI (prevents rerolls).
         require!(
-            map_pois.current_offer.is_none(),
+            !map_pois
+                .cache_offers
+                .iter()
+                .any(|o| o.poi_index == poi_index),
             PoiSystemError::OfferAlreadyGenerated
         );
 
-        // Deterministic per-session/per-position seed prevents free timing rerolls.
-        let seed = map_pois.seed
-            ^ ((poi_index as u64) << 8)
-            ^ ((act as u64) << 16)
-            ^ ((game_state.total_moves as u64) << 32);
+        // Deterministic per-session/per-POI seed — same POI always yields the same
+        // offer within a session, so walking away and coming back is not a free reroll.
+        let seed = map_pois.seed ^ ((poi_index as u64) << 8) ^ ((act as u64) << 16);
 
         // Fetch boss weaknesses on-chain
         let week = to_boss_week(game_state.week)?;
@@ -760,7 +786,7 @@ pub mod poi_system {
             }
         }
 
-        map_pois.current_offer = Some(state::CacheOffer {
+        map_pois.cache_offers.push(state::CacheOffer {
             poi_index,
             items,
             generated_at_seed: seed,
@@ -786,7 +812,7 @@ pub mod poi_system {
     /// - L13 (Counter Cache): Pick 1 of 3 weakness-tagged items
     ///
     /// Requires `generate_cache_offer` to have been called first.
-    /// Reads the stored offers from `current_offer` and applies the user's choice.
+    /// Reads the stored offer from `cache_offers` and applies the user's choice.
     ///
     /// After validating the pick, this instruction calls player-inventory to
     /// equip the item via CPI (equip_gear_authorized or equip_tool_authorized).
@@ -808,14 +834,13 @@ pub mod poi_system {
         let y = poi.y;
         let is_night = game_state.phase.is_night();
 
-        // Read cached offers instead of regenerating
-        let cached = map_pois
-            .current_offer
+        // Find the saved offer for this POI
+        let offer_pos = map_pois
+            .cache_offers
+            .iter()
+            .position(|o| o.poi_index == poi_index)
             .ok_or(PoiSystemError::NoActiveInteraction)?;
-        require!(
-            cached.poi_index == poi_index,
-            PoiSystemError::InvalidPoiIndex
-        );
+        let cached = map_pois.cache_offers[offer_pos];
 
         // Convert cached OfferItems to ItemOffers for pick interaction
         let offers: Vec<state::ItemOffer> = cached
@@ -851,8 +876,8 @@ pub mod poi_system {
             map_pois.pois[poi_index as usize].used = true;
         }
 
-        // Clear current offer after pick
-        map_pois.current_offer = None;
+        // Remove the consumed offer from saved offers
+        map_pois.cache_offers.swap_remove(offer_pos);
 
         emit!(ItemPicked {
             session: map_pois.session,
@@ -875,10 +900,11 @@ pub mod poi_system {
     /// Generate and store oil offers for a Tool Oil Rack (L4).
     ///
     /// This instruction generates 3 of 4 possible oils using an on-chain derived seed
-    /// and stores them in `MapPois.current_oil_offer` so the frontend can read them.
+    /// and stores them in `MapPois.oil_offers` so the frontend can read them.
     /// The user then calls `interact_tool_oil` with their chosen oil.
     ///
-    /// Must be called before `interact_tool_oil` for Tool Oil Rack POIs.
+    /// Offers persist for the entire session — revisiting a POI returns the
+    /// same offer instead of regenerating (VRF-ready).
     pub fn generate_oil_offer(ctx: Context<InteractToolOil>, poi_index: u8) -> Result<()> {
         let map_pois = &mut ctx.accounts.map_pois;
         let game_state = &ctx.accounts.game_state;
@@ -893,22 +919,21 @@ pub mod poi_system {
         // Validate it's a Tool Oil Rack (L4 = poi_type 4)
         require!(poi_type == 4, PoiSystemError::InvalidInteraction);
 
+        // Reject if an offer already exists for this exact POI (prevents rerolls).
         require!(
-            map_pois.current_oil_offer.is_none(),
+            !map_pois.oil_offers.iter().any(|o| o.poi_index == poi_index),
             PoiSystemError::OfferAlreadyGenerated
         );
 
-        // Deterministic per-session/per-position seed prevents free timing rerolls.
-        let seed = map_pois.seed
-            ^ ((poi_index as u64) << 8)
-            ^ ((game_state.total_moves as u64) << 32)
-            ^ 0x4f494c_u64; // "OIL" domain separator
+        // Deterministic per-session/per-POI seed — same POI always yields the same
+        // offer within a session, so walking away and coming back is not a free reroll.
+        let seed = map_pois.seed ^ ((poi_index as u64) << 8) ^ 0x4f494c_u64; // "OIL" domain separator
 
         // Generate oil offer
         let oil_offer = offers::create_oil_offer(poi_index, seed);
 
-        // Store in MapPois
-        map_pois.current_oil_offer = Some(oil_offer);
+        // Persist in MapPois
+        map_pois.oil_offers.push(oil_offer);
 
         emit!(OilOfferGenerated {
             session: map_pois.session,
@@ -950,14 +975,13 @@ pub mod poi_system {
         let y = poi.y;
         let is_night = game_state.phase.is_night();
 
-        // Read cached oil offer and validate selection
-        let oil_offer = map_pois
-            .current_oil_offer
+        // Find the saved oil offer for this POI
+        let offer_pos = map_pois
+            .oil_offers
+            .iter()
+            .position(|o| o.poi_index == poi_index)
             .ok_or(PoiSystemError::NoActiveInteraction)?;
-        require!(
-            oil_offer.poi_index == poi_index,
-            PoiSystemError::InvalidPoiIndex
-        );
+        let oil_offer = map_pois.oil_offers[offer_pos];
         require!(
             offers::validate_oil_selection(&oil_offer, modification),
             PoiSystemError::InvalidOilSelection
@@ -996,8 +1020,8 @@ pub mod poi_system {
         // Mark POI as used (one-time use)
         map_pois.pois[poi_index as usize].used = true;
 
-        // Clear oil offer after selection
-        map_pois.current_oil_offer = None;
+        // Remove the consumed offer from saved offers
+        map_pois.oil_offers.swap_remove(offer_pos);
 
         emit!(ToolOilApplied {
             session: map_pois.session,
@@ -1057,13 +1081,8 @@ pub mod poi_system {
         let w2 = offers::WeaknessTag::try_from(weaknesses[1] as u8)
             .unwrap_or(offers::WeaknessTag::Frost);
 
-        let generated = offers::generate_smuggler_hatch_offers(act, w1, w2, seed);
-
-        // Filter offers by active item pool from session
-        let filtered = offers::filter_offers_by_pool(
-            &generated.offers,
-            &ctx.accounts.game_session.active_item_pool,
-        );
+        let pool = &ctx.accounts.game_session.active_item_pool;
+        let generated = offers::generate_smuggler_hatch_offers(act, w1, w2, seed, pool);
 
         // Initialize shop state
         map_pois.shop_state.active = true;
@@ -1071,7 +1090,7 @@ pub mod poi_system {
         map_pois.shop_state.reroll_count = 0;
         map_pois.shop_state.rng_state = seed;
 
-        copy_shop_offers(&mut map_pois.shop_state, &filtered, false);
+        copy_shop_offers(&mut map_pois.shop_state, &generated.offers, false);
 
         emit!(ShopEntered {
             session: map_pois.session,
@@ -1188,18 +1207,13 @@ pub mod poi_system {
         let w2 = offers::WeaknessTag::try_from(weaknesses[1] as u8)
             .unwrap_or(offers::WeaknessTag::Frost);
 
-        // Generate new offers
+        // Generate new offers (pool-filtered during generation)
         let act = map_pois.act;
+        let pool = &ctx.accounts.game_session.active_item_pool;
 
-        let generated = offers::generate_smuggler_hatch_offers(act, w1, w2, seed);
+        let generated = offers::generate_smuggler_hatch_offers(act, w1, w2, seed, pool);
 
-        // Filter offers by active item pool from session
-        let filtered = offers::filter_offers_by_pool(
-            &generated.offers,
-            &ctx.accounts.game_session.active_item_pool,
-        );
-
-        copy_shop_offers(&mut map_pois.shop_state, &filtered, true);
+        copy_shop_offers(&mut map_pois.shop_state, &generated.offers, true);
 
         emit!(ShopRerolled {
             session: map_pois.session,
@@ -1643,6 +1657,19 @@ pub mod poi_system {
 
         Ok(())
     }
+
+    /// Close a corrupted/empty MapPois account (0-byte data).
+    /// After an ER reset, force-undelegation can leave accounts with no data.
+    /// Only works on accounts owned by this program with 0 bytes of data.
+    pub fn close_empty_map_pois(ctx: Context<CloseEmptyMapPois>) -> Result<()> {
+        let info = ctx.accounts.map_pois.to_account_info();
+        let dest = ctx.accounts.destination.to_account_info();
+        **dest.try_borrow_mut_lamports()? += info.lamports();
+        **info.try_borrow_mut_lamports()? = 0;
+        info.assign(&anchor_lang::system_program::ID);
+        info.realloc(0, false)?;
+        Ok(())
+    }
 }
 
 // =============================================================================
@@ -1664,10 +1691,18 @@ pub struct DelegateMapPois<'info> {
 #[derive(Accounts)]
 pub struct UndelegateMapPois<'info> {
     #[account(mut)]
-    pub map_pois: Account<'info, MapPois>,
+    /// CHECK: PDA is validated and deserialized in handler.
+    pub map_pois: AccountInfo<'info>,
     /// CHECK: Session account is read for session signer authorization.
     pub game_session: UncheckedAccount<'info>,
+    #[account(mut)]
     pub session_signer: Signer<'info>,
+}
+
+fn read_map_pois(map_pois: &AccountInfo<'_>) -> Result<MapPois> {
+    let data = map_pois.try_borrow_data()?;
+    let mut slice: &[u8] = &data;
+    MapPois::try_deserialize(&mut slice).map_err(|_| PoiSystemError::InvalidSession.into())
 }
 
 #[derive(Accounts)]
@@ -1755,6 +1790,54 @@ pub struct CloseMapPoisViaSessionSigner<'info> {
 
     /// Session key signer must sign to authorize closure.
     pub session_signer: Signer<'info>,
+}
+
+/// Context for closing orphaned MapPois (session PDA already closed).
+/// Validates via GameState which stores session_signer and player.
+#[derive(Accounts)]
+pub struct CloseMapPoisOrphaned<'info> {
+    #[account(
+        mut,
+        close = player,
+        seeds = [MAP_POIS_SEED, map_pois.session.as_ref()],
+        bump = map_pois.bump
+    )]
+    pub map_pois: Account<'info, MapPois>,
+
+    /// GameState for auth — must belong to the same session as map_pois.
+    #[account(
+        constraint = game_state.session == map_pois.session @ PoiSystemError::InvalidSession,
+        has_one = session_signer @ PoiSystemError::Unauthorized,
+    )]
+    pub game_state: Account<'info, GameState>,
+
+    /// Player wallet receives the rent refund.
+    /// CHECK: Validated via game_state.player.
+    #[account(mut, address = game_state.player @ PoiSystemError::Unauthorized)]
+    pub player: AccountInfo<'info>,
+
+    /// Session key signer — validated via game_state.session_signer.
+    pub session_signer: Signer<'info>,
+}
+
+/// Close a corrupted/empty MapPois account (0-byte data after ER reset + force-undelegate).
+/// Only works on accounts owned by this program with exactly 0 bytes of data.
+#[derive(Accounts)]
+pub struct CloseEmptyMapPois<'info> {
+    #[account(
+        mut,
+        constraint = map_pois.data_is_empty() @ PoiSystemError::InvalidPoiType,
+        constraint = *map_pois.owner == crate::ID @ PoiSystemError::Unauthorized,
+    )]
+    /// CHECK: Validated via owner check + empty data constraint.
+    pub map_pois: UncheckedAccount<'info>,
+
+    /// Receives the lamports from the closed account.
+    #[account(mut)]
+    /// CHECK: Any destination is fine since the account is corrupted/empty.
+    pub destination: AccountInfo<'info>,
+
+    pub payer: Signer<'info>,
 }
 
 /// Context for querying POI definition (view instruction)

@@ -361,6 +361,37 @@ describe("Track 2 E2E: Create profile + start session", function () {
     expect(profileInfo!.owner.equals(PROGRAM_IDS.playerProfile)).to.be.true;
   });
 
+  it("resets profile by closing and re-creating the profile PDA", async () => {
+    await programs.playerProfile.methods
+      .closeProfile()
+      .accounts({
+        playerProfile: playerProfilePda,
+        owner: user.publicKey,
+      } as any)
+      .signers([user])
+      .rpc();
+
+    const closedInfo = await connection.getAccountInfo(playerProfilePda, "confirmed");
+    expect(
+      !closedInfo || !closedInfo.owner.equals(PROGRAM_IDS.playerProfile)
+    ).to.be.true;
+
+    const resetName = `reset-${user.publicKey.toBase58().slice(0, 6)}`;
+    await programs.playerProfile.methods
+      .initializeProfile(resetName)
+      .accounts({
+        playerProfile: playerProfilePda,
+        owner: user.publicKey,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .signers([user])
+      .rpc();
+
+    const recreatedInfo = await connection.getAccountInfo(playerProfilePda, "confirmed");
+    expect(recreatedInfo).to.not.be.null;
+    expect(recreatedInfo!.owner.equals(PROGRAM_IDS.playerProfile)).to.be.true;
+  });
+
   it("starts a session with all sub-accounts", async () => {
     [sessionPda] = getSessionPda(user.publicKey, campaignLevel);
     [gameStatePda] = getGameStatePda(sessionPda);

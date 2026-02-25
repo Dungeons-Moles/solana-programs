@@ -61,10 +61,10 @@ pub static BROODMOTHER_A: BossDefinition = BossDefinition {
     week: Week::One,
     boss_index: 0,
     base_stats: BossStats {
-        hp: 32,
+        hp: 24,
         atk: 2,
-        arm: 2,
-        spd: 3,
+        arm: 1,
+        spd: 2,
         dig: 1,
     },
     weakness_tags: [ItemTag::Stone, ItemTag::Frost],
@@ -80,9 +80,9 @@ pub static OBSIDIAN_GOLEM_A: BossDefinition = BossDefinition {
     week: Week::One,
     boss_index: 1,
     base_stats: BossStats {
-        hp: 40,
-        atk: 3,
-        arm: 14,
+        hp: 28,
+        atk: 2,
+        arm: 8,
         spd: 0,
         dig: 3,
     },
@@ -99,10 +99,10 @@ pub static GAS_ANOMALY_A: BossDefinition = BossDefinition {
     week: Week::One,
     boss_index: 2,
     base_stats: BossStats {
-        hp: 34,
+        hp: 26,
         atk: 2,
         arm: 0,
-        spd: 2,
+        spd: 1,
         dig: 2,
     },
     weakness_tags: [ItemTag::Blood, ItemTag::Tempo],
@@ -118,11 +118,11 @@ pub static MAD_MINER_A: BossDefinition = BossDefinition {
     week: Week::One,
     boss_index: 3,
     base_stats: BossStats {
-        hp: 36,
-        atk: 3,
-        arm: 6,
+        hp: 26,
+        atk: 2,
+        arm: 3,
         spd: 2,
-        dig: 4,
+        dig: 3,
     },
     weakness_tags: [ItemTag::Scout, ItemTag::Greed],
     traits: MAD_MINER_TRAITS,
@@ -137,9 +137,9 @@ pub static SHARD_COLOSSUS_A: BossDefinition = BossDefinition {
     week: Week::One,
     boss_index: 4,
     base_stats: BossStats {
-        hp: 38,
+        hp: 26,
         atk: 2,
-        arm: 6,
+        arm: 3,
         spd: 1,
         dig: 2,
     },
@@ -160,10 +160,10 @@ pub static DRILL_SERGEANT_A: BossDefinition = BossDefinition {
     week: Week::Two,
     boss_index: 0,
     base_stats: BossStats {
-        hp: 46,
+        hp: 34,
         atk: 2,
-        arm: 10,
-        spd: 3,
+        arm: 6,
+        spd: 2,
         dig: 3,
     },
     weakness_tags: [ItemTag::Frost, ItemTag::Tempo],
@@ -179,9 +179,9 @@ pub static CRYSTAL_MIMIC_A: BossDefinition = BossDefinition {
     week: Week::Two,
     boss_index: 1,
     base_stats: BossStats {
-        hp: 50,
-        atk: 4,
-        arm: 8,
+        hp: 36,
+        atk: 3,
+        arm: 5,
         spd: 2,
         dig: 2,
     },
@@ -198,9 +198,9 @@ pub static RUST_REGENT_A: BossDefinition = BossDefinition {
     week: Week::Two,
     boss_index: 2,
     base_stats: BossStats {
-        hp: 48,
-        atk: 3,
-        arm: 8,
+        hp: 36,
+        atk: 2,
+        arm: 5,
         spd: 2,
         dig: 3,
     },
@@ -217,9 +217,9 @@ pub static POWDER_KEG_BARON_A: BossDefinition = BossDefinition {
     week: Week::Two,
     boss_index: 3,
     base_stats: BossStats {
-        hp: 44,
-        atk: 3,
-        arm: 6,
+        hp: 32,
+        atk: 2,
+        arm: 4,
         spd: 2,
         dig: 2,
     },
@@ -236,9 +236,9 @@ pub static GREEDKEEPER_A: BossDefinition = BossDefinition {
     week: Week::Two,
     boss_index: 4,
     base_stats: BossStats {
-        hp: 52,
+        hp: 38,
         atk: 2,
-        arm: 12,
+        arm: 6,
         spd: 1,
         dig: 2,
     },
@@ -259,9 +259,9 @@ pub static ELDRITCH_MOLE_A: BossDefinition = BossDefinition {
     week: Week::Three,
     boss_index: 0,
     base_stats: BossStats {
-        hp: 72,
-        atk: 5,
-        arm: 12,
+        hp: 50,
+        atk: 4,
+        arm: 8,
         spd: 3,
         dig: 4,
     },
@@ -278,9 +278,9 @@ pub static GILDED_DEVOURER_A: BossDefinition = BossDefinition {
     week: Week::Three,
     boss_index: 1,
     base_stats: BossStats {
-        hp: 68,
-        atk: 4,
-        arm: 10,
+        hp: 46,
+        atk: 3,
+        arm: 6,
         spd: 2,
         dig: 3,
     },
@@ -290,7 +290,7 @@ pub static GILDED_DEVOURER_A: BossDefinition = BossDefinition {
 };
 
 // ============================================================================
-// Week 1 Biome B Bosses (5) - Same archetypes with +1 SPD (cap 4)
+// Week 1 Biome B Bosses (5) - Same archetypes with +1 SPD (final SPD capped at 3)
 // ============================================================================
 
 pub static BROODMOTHER_B: BossDefinition = BossDefinition {
@@ -301,10 +301,10 @@ pub static BROODMOTHER_B: BossDefinition = BossDefinition {
     week: Week::One,
     boss_index: 0,
     base_stats: BossStats {
-        hp: 32,
+        hp: 24,
         atk: 2,
-        arm: 2,
-        spd: 4, // 3+1, capped at 4
+        arm: 1,
+        spd: 3,
         dig: 1,
     },
     weakness_tags: [ItemTag::Stone, ItemTag::Frost],
@@ -320,10 +320,10 @@ pub static OBSIDIAN_GOLEM_B: BossDefinition = BossDefinition {
     week: Week::One,
     boss_index: 1,
     base_stats: BossStats {
-        hp: 40,
-        atk: 3,
-        arm: 14,
-        spd: 1, // 0+1
+        hp: 28,
+        atk: 2,
+        arm: 8,
+        spd: 1,
         dig: 3,
     },
     weakness_tags: [ItemTag::Rust, ItemTag::Blast],
@@ -339,10 +339,10 @@ pub static GAS_ANOMALY_B: BossDefinition = BossDefinition {
     week: Week::One,
     boss_index: 2,
     base_stats: BossStats {
-        hp: 34,
+        hp: 26,
         atk: 2,
         arm: 0,
-        spd: 3, // 2+1
+        spd: 2,
         dig: 2,
     },
     weakness_tags: [ItemTag::Blood, ItemTag::Tempo],
@@ -358,11 +358,11 @@ pub static MAD_MINER_B: BossDefinition = BossDefinition {
     week: Week::One,
     boss_index: 3,
     base_stats: BossStats {
-        hp: 36,
-        atk: 3,
-        arm: 6,
-        spd: 3, // 2+1
-        dig: 4,
+        hp: 26,
+        atk: 2,
+        arm: 3,
+        spd: 3,
+        dig: 3,
     },
     weakness_tags: [ItemTag::Scout, ItemTag::Greed],
     traits: MAD_MINER_TRAITS,
@@ -377,10 +377,10 @@ pub static SHARD_COLOSSUS_B: BossDefinition = BossDefinition {
     week: Week::One,
     boss_index: 4,
     base_stats: BossStats {
-        hp: 38,
+        hp: 26,
         atk: 2,
-        arm: 6,
-        spd: 2, // 1+1
+        arm: 3,
+        spd: 2,
         dig: 2,
     },
     weakness_tags: [ItemTag::Stone, ItemTag::Blood],
@@ -389,7 +389,7 @@ pub static SHARD_COLOSSUS_B: BossDefinition = BossDefinition {
 };
 
 // ============================================================================
-// Week 2 Biome B Bosses (5) - Same archetypes with +1 SPD (cap 4)
+// Week 2 Biome B Bosses (5) - Same archetypes with +1 SPD (final SPD capped at 3)
 // ============================================================================
 
 pub static DRILL_SERGEANT_B: BossDefinition = BossDefinition {
@@ -400,10 +400,10 @@ pub static DRILL_SERGEANT_B: BossDefinition = BossDefinition {
     week: Week::Two,
     boss_index: 0,
     base_stats: BossStats {
-        hp: 46,
+        hp: 34,
         atk: 2,
-        arm: 10,
-        spd: 4, // 3+1, capped at 4
+        arm: 6,
+        spd: 3,
         dig: 3,
     },
     weakness_tags: [ItemTag::Frost, ItemTag::Tempo],
@@ -419,10 +419,10 @@ pub static CRYSTAL_MIMIC_B: BossDefinition = BossDefinition {
     week: Week::Two,
     boss_index: 1,
     base_stats: BossStats {
-        hp: 50,
-        atk: 4,
-        arm: 8,
-        spd: 3, // 2+1
+        hp: 36,
+        atk: 3,
+        arm: 5,
+        spd: 3,
         dig: 2,
     },
     weakness_tags: [ItemTag::Blast, ItemTag::Scout],
@@ -438,10 +438,10 @@ pub static RUST_REGENT_B: BossDefinition = BossDefinition {
     week: Week::Two,
     boss_index: 2,
     base_stats: BossStats {
-        hp: 48,
-        atk: 3,
-        arm: 8,
-        spd: 3, // 2+1
+        hp: 36,
+        atk: 2,
+        arm: 5,
+        spd: 3,
         dig: 3,
     },
     weakness_tags: [ItemTag::Blood, ItemTag::Tempo],
@@ -457,10 +457,10 @@ pub static POWDER_KEG_BARON_B: BossDefinition = BossDefinition {
     week: Week::Two,
     boss_index: 3,
     base_stats: BossStats {
-        hp: 44,
-        atk: 3,
-        arm: 6,
-        spd: 3, // 2+1
+        hp: 32,
+        atk: 2,
+        arm: 4,
+        spd: 3,
         dig: 2,
     },
     weakness_tags: [ItemTag::Stone, ItemTag::Frost],
@@ -476,10 +476,10 @@ pub static GREEDKEEPER_B: BossDefinition = BossDefinition {
     week: Week::Two,
     boss_index: 4,
     base_stats: BossStats {
-        hp: 52,
+        hp: 38,
         atk: 2,
-        arm: 12,
-        spd: 2, // 1+1
+        arm: 6,
+        spd: 2,
         dig: 2,
     },
     weakness_tags: [ItemTag::Greed, ItemTag::Rust],
@@ -499,9 +499,9 @@ pub static FROSTBOUND_LEVIATHAN_B: BossDefinition = BossDefinition {
     week: Week::Three,
     boss_index: 0,
     base_stats: BossStats {
-        hp: 74,
-        atk: 4,
-        arm: 14,
+        hp: 52,
+        atk: 3,
+        arm: 10,
         spd: 2,
         dig: 3,
     },
@@ -518,10 +518,10 @@ pub static RUSTED_CHRONOMANCER_B: BossDefinition = BossDefinition {
     week: Week::Three,
     boss_index: 1,
     base_stats: BossStats {
-        hp: 66,
-        atk: 5,
-        arm: 8,
-        spd: 4,
+        hp: 48,
+        atk: 4,
+        arm: 6,
+        spd: 3,
         dig: 2,
     },
     weakness_tags: [ItemTag::Rust, ItemTag::Blood],

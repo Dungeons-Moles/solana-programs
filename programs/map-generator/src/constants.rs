@@ -43,7 +43,7 @@ pub const PACKED_TILES_SIZE: usize = 313;
 pub const MAX_ENEMIES: usize = 48;
 
 /// Maximum number of POIs that can be spawned on a map
-pub const MAX_POIS: usize = 50;
+pub const MAX_POIS: usize = 64;
 
 /// Total tiles in the map (50 * 50 = 2500)
 pub const TOTAL_TILES: usize = (MAP_WIDTH as usize) * (MAP_HEIGHT as usize);

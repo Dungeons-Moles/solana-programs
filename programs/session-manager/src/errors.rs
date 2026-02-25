@@ -54,4 +54,8 @@ pub enum SessionManagerError {
     /// Session must be undelegated before closing
     #[msg("Session must be undelegated before closing")]
     SessionStillDelegated,
+
+    /// Run is not terminal yet (must be dead or completed)
+    #[msg("Run is not terminal yet")]
+    RunNotTerminal,
 }

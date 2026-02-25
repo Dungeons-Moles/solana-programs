@@ -46,44 +46,52 @@ pub struct ActSpawnConfig {
 const ACT1_BASELINE: &[PoiSpawnEntry] = &[
     PoiSpawnEntry {
         poi_type: 2,
-        count: 10,
-    }, // L2: Supply Cache x10
+        count: 16,
+    }, // L2: Supply Cache x16
     PoiSpawnEntry {
         poi_type: 3,
-        count: 2,
-    }, // L3: Tool Crate x2
+        count: 5,
+    }, // L3: Tool Crate x5
     PoiSpawnEntry {
         poi_type: 4,
-        count: 3,
-    }, // L4: Tool Oil Rack x3
+        count: 5,
+    }, // L4: Tool Oil Rack x5
     PoiSpawnEntry {
         poi_type: 5,
-        count: 4,
-    }, // L5: Rest Alcove x4
+        count: 6,
+    }, // L5: Rest Alcove x6
     PoiSpawnEntry {
         poi_type: 6,
-        count: 3,
-    }, // L6: Survey Beacon x3
+        count: 4,
+    }, // L6: Survey Beacon x4
     PoiSpawnEntry {
         poi_type: 7,
-        count: 2,
-    }, // L7: Seismic Scanner x2
+        count: 3,
+    }, // L7: Seismic Scanner x3
     PoiSpawnEntry {
         poi_type: 8,
-        count: 2,
-    }, // L8: Rail Waypoint x2
+        count: 5,
+    }, // L8: Rail Waypoint x5
     PoiSpawnEntry {
         poi_type: 9,
-        count: 1,
-    }, // L9: Smuggler Hatch x1
+        count: 2,
+    }, // L9: Smuggler Hatch x2
     PoiSpawnEntry {
         poi_type: 10,
-        count: 1,
-    }, // L10: Rusty Anvil x1
+        count: 2,
+    }, // L10: Rusty Anvil x2
+    PoiSpawnEntry {
+        poi_type: 11,
+        count: 2,
+    }, // L11: Rune Kiln x2
+    PoiSpawnEntry {
+        poi_type: 12,
+        count: 2,
+    }, // L12: Geode Vault x2
     PoiSpawnEntry {
         poi_type: 14,
-        count: 1,
-    }, // L14: Scrap Chute x1
+        count: 3,
+    }, // L14: Scrap Chute x3
 ];
 
 const ACT1_GUARANTEES: &[SpawnGuarantee] = &[
@@ -101,20 +109,6 @@ const ACT1_GUARANTEES: &[SpawnGuarantee] = &[
         chance_percent: 100,
         placement: PlacementRule::Random,
     },
-    SpawnGuarantee {
-        poi_type: 13,
-        count: 1,
-        week: Some(2),
-        chance_percent: 50,
-        placement: PlacementRule::Random,
-    },
-    SpawnGuarantee {
-        poi_type: 13,
-        count: 1,
-        week: Some(3),
-        chance_percent: 75,
-        placement: PlacementRule::Random,
-    },
 ];
 
 // =============================================================================
@@ -124,12 +118,12 @@ const ACT1_GUARANTEES: &[SpawnGuarantee] = &[
 const ACT2_BASELINE: &[PoiSpawnEntry] = &[
     PoiSpawnEntry {
         poi_type: 2,
-        count: 12,
-    }, // L2: Supply Cache x12
+        count: 14,
+    }, // L2: Supply Cache x14
     PoiSpawnEntry {
         poi_type: 3,
-        count: 3,
-    }, // L3: Tool Crate x3
+        count: 4,
+    }, // L3: Tool Crate x4
     PoiSpawnEntry {
         poi_type: 4,
         count: 4,
@@ -140,20 +134,20 @@ const ACT2_BASELINE: &[PoiSpawnEntry] = &[
     }, // L5: Rest Alcove x5
     PoiSpawnEntry {
         poi_type: 6,
-        count: 3,
-    }, // L6: Survey Beacon x3
+        count: 4,
+    }, // L6: Survey Beacon x4
     PoiSpawnEntry {
         poi_type: 7,
-        count: 2,
-    }, // L7: Seismic Scanner x2
+        count: 3,
+    }, // L7: Seismic Scanner x3
     PoiSpawnEntry {
         poi_type: 8,
-        count: 3,
-    }, // L8: Rail Waypoint x3
+        count: 4,
+    }, // L8: Rail Waypoint x4
     PoiSpawnEntry {
         poi_type: 9,
-        count: 1,
-    }, // L9: Smuggler Hatch x1
+        count: 2,
+    }, // L9: Smuggler Hatch x2
     PoiSpawnEntry {
         poi_type: 10,
         count: 2,
@@ -162,6 +156,10 @@ const ACT2_BASELINE: &[PoiSpawnEntry] = &[
         poi_type: 11,
         count: 1,
     }, // L11: Rune Kiln x1
+    PoiSpawnEntry {
+        poi_type: 12,
+        count: 1,
+    }, // L12: Geode Vault x1
     PoiSpawnEntry {
         poi_type: 14,
         count: 2,
@@ -188,27 +186,6 @@ const ACT2_GUARANTEES: &[SpawnGuarantee] = &[
         count: 1,
         week: Some(3),
         chance_percent: 50,
-        placement: PlacementRule::Random,
-    },
-    SpawnGuarantee {
-        poi_type: 13,
-        count: 1,
-        week: Some(1),
-        chance_percent: 50,
-        placement: PlacementRule::Random,
-    },
-    SpawnGuarantee {
-        poi_type: 13,
-        count: 1,
-        week: Some(2),
-        chance_percent: 75,
-        placement: PlacementRule::Random,
-    },
-    SpawnGuarantee {
-        poi_type: 13,
-        count: 1,
-        week: Some(3),
-        chance_percent: 100,
         placement: PlacementRule::Random,
     },
 ];
@@ -266,7 +243,7 @@ const ACT3_BASELINE: &[PoiSpawnEntry] = &[
         poi_type: 14,
         count: 2,
     }, // L14: Scrap Chute x2
-];
+]; // Same as Act 2
 
 const ACT3_GUARANTEES: &[SpawnGuarantee] = &[
     SpawnGuarantee {
@@ -313,52 +290,52 @@ const ACT3_GUARANTEES: &[SpawnGuarantee] = &[
 const ACT4_BASELINE: &[PoiSpawnEntry] = &[
     PoiSpawnEntry {
         poi_type: 2,
-        count: 16,
-    }, // L2: Supply Cache x16
+        count: 10,
+    }, // L2: Supply Cache x10
     PoiSpawnEntry {
         poi_type: 3,
-        count: 5,
-    }, // L3: Tool Crate x5
+        count: 2,
+    }, // L3: Tool Crate x2
     PoiSpawnEntry {
         poi_type: 4,
-        count: 5,
-    }, // L4: Tool Oil Rack x5
+        count: 3,
+    }, // L4: Tool Oil Rack x3
     PoiSpawnEntry {
         poi_type: 5,
-        count: 6,
-    }, // L5: Rest Alcove x6
+        count: 4,
+    }, // L5: Rest Alcove x4
     PoiSpawnEntry {
         poi_type: 6,
-        count: 4,
-    }, // L6: Survey Beacon x4
+        count: 3,
+    }, // L6: Survey Beacon x3
     PoiSpawnEntry {
         poi_type: 7,
-        count: 3,
-    }, // L7: Seismic Scanner x3
+        count: 2,
+    }, // L7: Seismic Scanner x2
     PoiSpawnEntry {
         poi_type: 8,
-        count: 5,
-    }, // L8: Rail Waypoint x5
+        count: 2,
+    }, // L8: Rail Waypoint x2
     PoiSpawnEntry {
         poi_type: 9,
-        count: 2,
-    }, // L9: Smuggler Hatch x2
+        count: 1,
+    }, // L9: Smuggler Hatch x1
     PoiSpawnEntry {
         poi_type: 10,
-        count: 2,
-    }, // L10: Rusty Anvil x2
+        count: 1,
+    }, // L10: Rusty Anvil x1
     PoiSpawnEntry {
         poi_type: 11,
-        count: 2,
-    }, // L11: Rune Kiln x2
+        count: 1,
+    }, // L11: Rune Kiln x1
     PoiSpawnEntry {
         poi_type: 12,
-        count: 2,
-    }, // L12: Geode Vault x2
+        count: 1,
+    }, // L12: Geode Vault x1
     PoiSpawnEntry {
         poi_type: 14,
-        count: 3,
-    }, // L14: Scrap Chute x3
+        count: 1,
+    }, // L14: Scrap Chute x1
 ];
 
 const ACT4_GUARANTEES: &[SpawnGuarantee] = &[
@@ -483,12 +460,12 @@ mod tests {
         // Check Supply Cache count
         let supply_cache = config.baseline.iter().find(|e| e.poi_type == 2);
         assert!(supply_cache.is_some());
-        assert_eq!(supply_cache.unwrap().count, 10);
+        assert_eq!(supply_cache.unwrap().count, 16);
 
         // Check Tool Crate count
         let tool_crate = config.baseline.iter().find(|e| e.poi_type == 3);
         assert!(tool_crate.is_some());
-        assert_eq!(tool_crate.unwrap().count, 2);
+        assert_eq!(tool_crate.unwrap().count, 5);
     }
 
     #[test]
@@ -501,27 +478,6 @@ mod tests {
         let mole_den = mole_den.unwrap();
         assert_eq!(mole_den.chance_percent, 100);
         assert_eq!(mole_den.placement, PlacementRule::AdjacentToStart);
-    }
-
-    #[test]
-    fn test_counter_cache_week_based_chances() {
-        let config = get_spawn_config(1).unwrap();
-
-        // Week 2: 50% chance
-        let week2_counter = config
-            .guarantees
-            .iter()
-            .find(|g| g.poi_type == 13 && g.week == Some(2));
-        assert!(week2_counter.is_some());
-        assert_eq!(week2_counter.unwrap().chance_percent, 50);
-
-        // Week 3: 75% chance
-        let week3_counter = config
-            .guarantees
-            .iter()
-            .find(|g| g.poi_type == 13 && g.week == Some(3));
-        assert!(week3_counter.is_some());
-        assert_eq!(week3_counter.unwrap().chance_percent, 75);
     }
 
     #[test]
@@ -542,23 +498,23 @@ mod tests {
     }
 
     #[test]
-    fn test_baseline_poi_count_increases_with_act() {
+    fn test_baseline_poi_count_decreases_with_act() {
         let act1_count = get_baseline_poi_count(1);
         let act2_count = get_baseline_poi_count(2);
         let act3_count = get_baseline_poi_count(3);
         let act4_count = get_baseline_poi_count(4);
 
         assert!(
-            act2_count > act1_count,
-            "Act 2 should have more POIs than Act 1"
+            act1_count > act2_count,
+            "Act 1 should have more POIs than Act 2"
         );
         assert!(
-            act3_count > act2_count,
-            "Act 3 should have more POIs than Act 2"
+            act2_count >= act3_count,
+            "Act 2 should have >= POIs than Act 3"
         );
         assert!(
-            act4_count > act3_count,
-            "Act 4 should have more POIs than Act 3"
+            act3_count > act4_count,
+            "Act 3 should have more POIs than Act 4"
         );
     }
 
@@ -566,14 +522,14 @@ mod tests {
     fn test_get_week_guarantees() {
         let guarantees = get_week_guarantees(1, 2);
 
-        // Should include Mole Den (week: None) and Counter Cache (week: 2)
+        // Should include Mole Den (week: None) and Rail Waypoint (week: None)
         assert!(
             guarantees.iter().any(|g| g.poi_type == 1),
             "Should include Mole Den"
         );
         assert!(
-            guarantees.iter().any(|g| g.poi_type == 13),
-            "Should include Counter Cache"
+            guarantees.iter().any(|g| g.poi_type == 8),
+            "Should include Rail Waypoint"
         );
     }
 

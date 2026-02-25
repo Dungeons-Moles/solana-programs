@@ -26,11 +26,9 @@ pub const SESSION_MANAGER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     0x58, 0x20, 0x64, 0x87, 0xdf, 0xd8, 0x68, 0xf1, 0xa4, 0x79, 0x15, 0x8b, 0xb2, 0x8a, 0x56, 0x0c,
     0xa9, 0x4f, 0x56, 0x2e, 0x62, 0x85, 0x26, 0xb7, 0x4f, 0x8b, 0xa1, 0x4d, 0x08, 0x36, 0x20, 0x99,
 ]);
-pub const LOCAL_ER_VALIDATOR: Pubkey = pubkey!("mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev");
-
-fn local_delegate_config() -> DelegateConfig {
+fn local_delegate_config(validator: Option<Pubkey>) -> DelegateConfig {
     DelegateConfig {
-        validator: Some(LOCAL_ER_VALIDATOR),
+        validator,
         ..DelegateConfig::default()
     }
 }
@@ -191,7 +189,10 @@ pub mod map_generator {
     }
 
     /// Delegates generated-map PDA to MagicBlock from its owning program.
-    pub fn delegate_generated_map(ctx: Context<DelegateGeneratedMap>) -> Result<()> {
+    pub fn delegate_generated_map(
+        ctx: Context<DelegateGeneratedMap>,
+        validator: Option<Pubkey>,
+    ) -> Result<()> {
         let session_key = ctx.accounts.session.key();
         let (expected_generated_map, _) = Pubkey::find_program_address(
             &[GeneratedMap::SEED_PREFIX, session_key.as_ref()],
@@ -206,7 +207,7 @@ pub mod map_generator {
         ctx.accounts.delegate_generated_map(
             &ctx.accounts.player,
             map_seeds,
-            local_delegate_config(),
+            local_delegate_config(validator),
         )?;
         Ok(())
     }
@@ -223,8 +224,9 @@ pub mod map_generator {
             expected_generated_map,
             MapGeneratorError::Unauthorized
         );
+        let generated_map = read_generated_map(&ctx.accounts.generated_map)?;
         require_keys_eq!(
-            ctx.accounts.generated_map.session,
+            generated_map.session,
             session_key,
             MapGeneratorError::Unauthorized
         );
@@ -309,10 +311,18 @@ pub struct DelegateGeneratedMap<'info> {
 #[derive(Accounts)]
 pub struct UndelegateGeneratedMap<'info> {
     #[account(mut)]
-    pub generated_map: Account<'info, GeneratedMap>,
+    /// CHECK: PDA is validated and deserialized in handler.
+    pub generated_map: AccountInfo<'info>,
     /// CHECK: Session PDA used only for deterministic PDA validation.
     pub session: UncheckedAccount<'info>,
+    #[account(mut)]
     pub session_signer: Signer<'info>,
+}
+
+fn read_generated_map(generated_map: &AccountInfo<'_>) -> Result<GeneratedMap> {
+    let data = generated_map.try_borrow_data()?;
+    let mut slice: &[u8] = &data;
+    GeneratedMap::try_deserialize(&mut slice).map_err(|_| MapGeneratorError::InvalidSession.into())
 }
 
 #[derive(Accounts)]

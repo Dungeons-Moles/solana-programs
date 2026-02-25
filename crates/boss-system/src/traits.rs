@@ -71,16 +71,16 @@ impl BossTrait {
 
 /// The Broodmother: 3 strikes, Chill every other turn
 pub static BROODMOTHER_TRAITS: &[BossTrait] = &[
-    // Swarm Queen: +2 strikes at battle start (total 3)
-    BossTrait::new(TriggerType::BattleStart, EffectType::GainStrikes, 2),
+    // Swarm Queen: +1 strike at battle start (total 2)
+    BossTrait::new(TriggerType::BattleStart, EffectType::GainStrikes, 1),
     // Webbed Strikes: Apply 1 Chill every other turn
     BossTrait::new(TriggerType::EveryOtherTurn, EffectType::ApplyChill, 1),
 ];
 
 /// Obsidian Golem: +4 ARM/turn, non-weapon removes 2 ARM
 pub static OBSIDIAN_GOLEM_TRAITS: &[BossTrait] = &[
-    // Hardened Core: +4 ARM at Turn Start
-    BossTrait::new(TriggerType::TurnStart, EffectType::GainArmor, 4),
+    // Hardened Core: +2 ARM at Turn Start
+    BossTrait::new(TriggerType::TurnStart, EffectType::GainArmor, 2),
     // Cracked Shell: Non-weapon damage removes 2 ARM (tracked externally)
     BossTrait::new(TriggerType::OnHit, EffectType::RemoveArmor, 2).with_special(
         SpecialMechanic::Conditional {
@@ -91,8 +91,8 @@ pub static OBSIDIAN_GOLEM_TRAITS: &[BossTrait] = &[
 
 /// Gas Anomaly: 2 non-weapon dmg/turn, +1 SPD when Wounded
 pub static GAS_ANOMALY_TRAITS: &[BossTrait] = &[
-    // Toxic Seep: 2 non-weapon damage per turn
-    BossTrait::new(TriggerType::TurnStart, EffectType::DealNonWeaponDamage, 2),
+    // Toxic Seep: 1 non-weapon damage per turn
+    BossTrait::new(TriggerType::TurnStart, EffectType::DealNonWeaponDamage, 1),
     // Fume Panic: +1 SPD when Wounded
     BossTrait::new(TriggerType::Wounded, EffectType::GainSpd, 1),
 ];
@@ -115,10 +115,10 @@ pub static MAD_MINER_TRAITS: &[BossTrait] = &[
 
 /// Shard Colossus: +8 Shrapnel start, +4 Shrapnel/2 turns
 pub static SHARD_COLOSSUS_TRAITS: &[BossTrait] = &[
-    // Prismatic Spines: +8 Shrapnel at Battle Start
-    BossTrait::new(TriggerType::BattleStart, EffectType::ApplyShrapnel, 8),
-    // Refracting Hide: +4 Shrapnel every 2 turns
-    BossTrait::new(TriggerType::EveryOtherTurn, EffectType::ApplyShrapnel, 4),
+    // Prismatic Spines: +4 Shrapnel at Battle Start
+    BossTrait::new(TriggerType::BattleStart, EffectType::ApplyShrapnel, 4),
+    // Refracting Hide: +2 Shrapnel every 2 turns
+    BossTrait::new(TriggerType::EveryOtherTurn, EffectType::ApplyShrapnel, 2),
 ];
 
 // ============================================================================
@@ -131,8 +131,8 @@ pub static DRILL_SERGEANT_TRAITS: &[BossTrait] = &[
     BossTrait::new(TriggerType::TurnStart, EffectType::GainAtk, 1),
     // Rev Up: +1 SPD at Turn Start
     BossTrait::new(TriggerType::TurnStart, EffectType::GainSpd, 1),
-    // Formation: +2 ARM every 2 turns
-    BossTrait::new(TriggerType::EveryOtherTurn, EffectType::GainArmor, 2),
+    // Formation: +1 ARM every 2 turns
+    BossTrait::new(TriggerType::EveryOtherTurn, EffectType::GainArmor, 1),
 ];
 
 /// Crystal Mimic: 2 reflection stacks, +2 non-weapon taken when depleted
@@ -153,7 +153,7 @@ pub static RUST_REGENT_TRAITS: &[BossTrait] = &[
     // Corroding Edict: Apply 1 Rust on hit
     BossTrait::new(TriggerType::OnHit, EffectType::ApplyRust, 1),
     // Execution Tax: 2 damage if player Exposed at Turn Start
-    BossTrait::new(TriggerType::TurnStart, EffectType::DealDamage, 2).with_special(
+    BossTrait::new(TriggerType::TurnStart, EffectType::DealDamage, 1).with_special(
         SpecialMechanic::Conditional {
             condition: Condition::PlayerExposed,
         },
@@ -166,7 +166,7 @@ pub static POWDER_KEG_BARON_TRAITS: &[BossTrait] = &[
     BossTrait::new(
         TriggerType::Countdown { turns: 3 },
         EffectType::DealDamage,
-        10,
+        8,
     )
     .with_special(SpecialMechanic::Countdown { turns: 3 }),
     // Short Fuse: -1 countdown when Wounded
@@ -180,13 +180,13 @@ pub static POWDER_KEG_BARON_TRAITS: &[BossTrait] = &[
 
 /// Greedkeeper: Steal 10 Gold, ARM = stolen/5 (cap 6)
 pub static GREEDKEEPER_TRAITS: &[BossTrait] = &[
-    // Toll Collector: Steal 10 Gold at Battle Start
-    BossTrait::new(TriggerType::BattleStart, EffectType::StealGold, 10),
-    // Gilded Barrier: ARM = stolen gold / 5 (cap 6)
-    BossTrait::new(TriggerType::BattleStart, EffectType::GoldToArmor, 5).with_special(
+    // Toll Collector: Steal 8 Gold at Battle Start
+    BossTrait::new(TriggerType::BattleStart, EffectType::StealGold, 8),
+    // Gilded Barrier: ARM = stolen gold / 4 (cap 4)
+    BossTrait::new(TriggerType::BattleStart, EffectType::GoldToArmor, 4).with_special(
         SpecialMechanic::GoldInteraction {
-            steal_amount: 10,
-            armor_ratio: 5,
+            steal_amount: 8,
+            armor_ratio: 4,
         },
     ),
 ];
@@ -198,8 +198,8 @@ pub static GREEDKEEPER_TRAITS: &[BossTrait] = &[
 /// The Eldritch Mole: Three phases (75%: +10 ARM, 50%: 2 strikes, 25%: 2 Bleed/turn)
 /// Deep Dig: Player DIG > boss DIG reduces Phase 1 armor by 10
 pub static ELDRITCH_MOLE_TRAITS: &[BossTrait] = &[
-    // Phase 1 (75%): +10 Armor
-    BossTrait::new(TriggerType::TurnStart, EffectType::GainArmor, 10)
+    // Phase 1 (75%): +6 Armor
+    BossTrait::new(TriggerType::TurnStart, EffectType::GainArmor, 6)
         .with_special(SpecialMechanic::Phase { threshold: 75 }),
     // Phase 2 (50%): +1 strike (attacks twice)
     BossTrait::new(TriggerType::TurnStart, EffectType::GainStrikes, 1)
@@ -212,14 +212,14 @@ pub static ELDRITCH_MOLE_TRAITS: &[BossTrait] = &[
 /// The Gilded Devourer: Gold→ARM (+1/5 cap 10), Wounded: 3 Bleed
 pub static GILDED_DEVOURER_TRAITS: &[BossTrait] = &[
     // Tax Feast: Gold to ARM conversion at Battle Start
-    BossTrait::new(TriggerType::BattleStart, EffectType::GoldToArmor, 5).with_special(
+    BossTrait::new(TriggerType::BattleStart, EffectType::GoldToArmor, 6).with_special(
         SpecialMechanic::GoldInteraction {
             steal_amount: 0,
-            armor_ratio: 5,
+            armor_ratio: 6,
         },
     ),
-    // Hunger: Apply 3 Bleed when Wounded
-    BossTrait::new(TriggerType::Wounded, EffectType::ApplyBleed, 3),
+    // Hunger: Apply 2 Bleed when Wounded
+    BossTrait::new(TriggerType::Wounded, EffectType::ApplyBleed, 2),
 ];
 
 // ============================================================================
@@ -228,10 +228,10 @@ pub static GILDED_DEVOURER_TRAITS: &[BossTrait] = &[
 
 /// The Frostbound Leviathan: 3 Chill start, +4 ARM/2 turns, Exposed: clear Chill +2 SPD
 pub static FROSTBOUND_LEVIATHAN_TRAITS: &[BossTrait] = &[
-    // Whiteout: 3 Chill at Battle Start
-    BossTrait::new(TriggerType::BattleStart, EffectType::ApplyChill, 3),
-    // Glacial Bulk: +4 ARM every 2 turns
-    BossTrait::new(TriggerType::EveryOtherTurn, EffectType::GainArmor, 4),
+    // Whiteout: 2 Chill at Battle Start
+    BossTrait::new(TriggerType::BattleStart, EffectType::ApplyChill, 2),
+    // Glacial Bulk: +3 ARM every 2 turns
+    BossTrait::new(TriggerType::EveryOtherTurn, EffectType::GainArmor, 3),
     // Crack Ice: When Exposed, clear Chill and +2 SPD
     BossTrait::new(TriggerType::Exposed, EffectType::GainSpd, 2),
 ];
@@ -242,8 +242,8 @@ pub static RUSTED_CHRONOMANCER_TRAITS: &[BossTrait] = &[
     BossTrait::new(TriggerType::FirstTurn, EffectType::GainStrikes, 1),
     // Oxidized Future: 1 Rust per turn
     BossTrait::new(TriggerType::TurnStart, EffectType::ApplyRust, 1),
-    // Blood Price: 4 Bleed when Wounded
-    BossTrait::new(TriggerType::Wounded, EffectType::ApplyBleed, 4),
+    // Blood Price: 3 Bleed when Wounded
+    BossTrait::new(TriggerType::Wounded, EffectType::ApplyBleed, 3),
 ];
 
 // ============================================================================

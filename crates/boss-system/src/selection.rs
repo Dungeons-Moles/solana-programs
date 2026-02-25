@@ -196,7 +196,7 @@ mod tests {
         let boss = select_boss(11, Week::One);
         assert_eq!(boss.name, "The Broodmother");
         assert_eq!(boss.biome, Biome::B);
-        assert_eq!(boss.base_stats.spd, 4); // +1 SPD in Biome B
+        assert_eq!(boss.base_stats.spd, 3); // +1 SPD in Biome B
     }
 
     #[test]

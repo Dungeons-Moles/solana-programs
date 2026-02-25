@@ -111,8 +111,8 @@ pub struct GeneratedMap {
     pub enemies: [EnemySpawn; MAX_ENEMIES], // 192 bytes (48 * 4)
     /// Number of POIs placed
     pub poi_count: u8, // 1 byte
-    /// POI spawn positions (max 50)
-    pub pois: [PoiSpawn; MAX_POIS], // 200 bytes (50 * 4)
+    /// POI spawn positions (max 64)
+    pub pois: [PoiSpawn; MAX_POIS], // 256 bytes (64 * 4)
     /// PDA bump seed
     pub bump: u8, // 1 byte
 }
@@ -121,7 +121,7 @@ impl GeneratedMap {
     /// PDA seed prefix for generated map
     pub const SEED_PREFIX: &'static [u8] = b"generated_map";
 
-    /// Account space: 8 (discriminator) + 756 (data) = 764 bytes
+    /// Account space: 8 (discriminator) + 812 (data) = 820 bytes
     pub const SPACE: usize = 8
         + 32
         + 1

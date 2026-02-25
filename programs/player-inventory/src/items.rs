@@ -144,12 +144,19 @@ pub const G_ST_03: ItemDefinition = ItemDefinition {
     tag: ItemTag::Stone,
     rarity: Rarity::Common, // GDD says Common, not Rare
     effects: &[
-        // Battle Start: gain 2/4/6 Shrapnel
+        // Battle Start: gain 3/5/7 Shrapnel
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::ApplyShrapnel,
             false,
-            [2, 4, 6],
+            [3, 5, 7],
+        ),
+        // Battle Start: +1 Armor
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainArmor,
+            false,
+            [1, 1, 1],
         ),
     ],
 };
@@ -161,12 +168,19 @@ pub const G_ST_04: ItemDefinition = ItemDefinition {
     tag: ItemTag::Stone,
     rarity: Rarity::Rare,
     effects: &[
-        // Every other turn: gain 1/2/3 Armor
+        // Battle Start: gain 2/3/4 Armor
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainArmor,
+            false,
+            [2, 3, 4],
+        ),
+        // Every other turn: gain 2/3/4 Armor
         EffectDefinition::new(
             TriggerType::EveryOtherTurn,
             EffectType::GainArmor,
             false,
-            [1, 2, 3],
+            [2, 3, 4],
         ),
     ],
 };
@@ -178,6 +192,13 @@ pub const G_ST_05: ItemDefinition = ItemDefinition {
     tag: ItemTag::Stone,
     rarity: Rarity::Rare,
     effects: &[
+        // +3/4/5 ARM
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainArmor,
+            false,
+            [3, 4, 5],
+        ),
         // Exposed (once per battle): +4/6/8 ARM (stronger safety net)
         EffectDefinition::new(
             TriggerType::FirstTimeExposed,
@@ -195,6 +216,13 @@ pub const G_ST_06: ItemDefinition = ItemDefinition {
     tag: ItemTag::Stone,
     rarity: Rarity::Rare, // GDD says Rare
     effects: &[
+        // +3/4/5 ARM
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainArmor,
+            false,
+            [3, 4, 5],
+        ),
         // First time you gain Shrapnel this battle: gain 2/3/4 Armor
         EffectDefinition::new(
             TriggerType::FirstTimeGainShrapnel,
@@ -229,13 +257,20 @@ pub const G_ST_08: ItemDefinition = ItemDefinition {
     tag: ItemTag::Stone,
     rarity: Rarity::Heroic, // GDD says Heroic
     effects: &[
-        // End of turn: if you have >=3 Armor, gain +1/2/3 Armor
+        // Battle Start: gain 3/5/7 Armor
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainArmor,
+            false,
+            [3, 5, 7],
+        ),
+        // End of turn: if you have >=2 Armor, gain +2/3/4 Armor
         EffectDefinition::with_condition(
             TriggerType::TurnEnd,
             EffectType::GainArmor,
             false,
-            [1, 2, 3],
-            Condition::OwnerArmorAtLeast(3),
+            [2, 3, 4],
+            Condition::OwnerArmorAtLeast(2),
         ),
     ],
 };
@@ -306,12 +341,20 @@ pub const G_SC_01: ItemDefinition = ItemDefinition {
     item_type: ItemType::Gear,
     tag: ItemTag::Scout,
     rarity: Rarity::Common,
-    effects: &[EffectDefinition::new(
-        TriggerType::BattleStart,
-        EffectType::GainDig,
-        false,
-        [2, 3, 4],
-    )],
+    effects: &[
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainDig,
+            false,
+            [2, 3, 4],
+        ),
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainSpd,
+            false,
+            [1, 1, 2],
+        ),
+    ],
 };
 
 pub const G_SC_02: ItemDefinition = ItemDefinition {
@@ -345,12 +388,27 @@ pub const G_SC_03: ItemDefinition = ItemDefinition {
     tag: ItemTag::Scout,
     rarity: Rarity::Rare,
     effects: &[
+        // +1/2/3 DIG
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainDig,
+            false,
+            [1, 2, 3],
+        ),
         // Battle Start: if DIG > enemy DIG, gain +1/2/3 SPD (this battle)
         EffectDefinition::with_condition(
             TriggerType::BattleStart,
             EffectType::GainSpd,
             false,
             [1, 2, 3],
+            Condition::DigGreaterThanEnemyDig,
+        ),
+        // Battle Start: if DIG > enemy DIG, gain +1/1/2 ATK (this battle)
+        EffectDefinition::with_condition(
+            TriggerType::BattleStart,
+            EffectType::GainAtk,
+            false,
+            [1, 1, 2],
             Condition::DigGreaterThanEnemyDig,
         ),
     ],
@@ -363,12 +421,12 @@ pub const G_SC_04: ItemDefinition = ItemDefinition {
     tag: ItemTag::Scout,
     rarity: Rarity::Rare,
     effects: &[
-        // +1/2/3 SPD
+        // +2/3/4 SPD
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::GainSpd,
             false,
-            [1, 2, 3],
+            [2, 3, 4],
         ),
         // If you act first on Turn 1, gain +1/2/3 DIG (this battle)
         EffectDefinition::new(
@@ -376,6 +434,13 @@ pub const G_SC_04: ItemDefinition = ItemDefinition {
             EffectType::GainDig,
             false,
             [1, 2, 3],
+        ),
+        // If you act first on Turn 1, gain +2/3/4 Armor (this battle)
+        EffectDefinition::new(
+            TriggerType::FirstTurnIfFaster,
+            EffectType::GainArmor,
+            false,
+            [2, 3, 4],
         ),
     ],
 };
@@ -387,6 +452,13 @@ pub const G_SC_05: ItemDefinition = ItemDefinition {
     tag: ItemTag::Scout,
     rarity: Rarity::Rare,
     effects: &[
+        // +1/1/2 SPD
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainSpd,
+            false,
+            [1, 1, 2],
+        ),
         // +1/2/3 DIG
         EffectDefinition::new(
             TriggerType::BattleStart,
@@ -399,7 +471,7 @@ pub const G_SC_05: ItemDefinition = ItemDefinition {
             TriggerType::BattleStart,
             EffectType::GainArmor,
             false,
-            [2, 3, 4],
+            [3, 4, 5],
             Condition::DigGreaterThanEnemyDig,
         ),
     ],
@@ -419,6 +491,8 @@ pub const G_SC_06: ItemDefinition = ItemDefinition {
             true, // once per turn to prevent stacking every check
             [1, 1, 2],
         ),
+        // Wounded: gain +2/3/4 ATK (this battle)
+        EffectDefinition::new(TriggerType::Wounded, EffectType::GainAtk, true, [2, 3, 4]),
     ],
 };
 
@@ -429,13 +503,27 @@ pub const G_SC_07: ItemDefinition = ItemDefinition {
     tag: ItemTag::Scout,
     rarity: Rarity::Heroic,
     effects: &[
-        // If DIG > enemy Armor: your strikes ignore 1/2/3 Armor (this battle)
-        // Note: The condition checks DIG > enemy ARM at battle start
+        // +1/1/2 ATK
         EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainAtk,
+            false,
+            [1, 1, 2],
+        ),
+        // +1/2/2 DIG
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainDig,
+            false,
+            [1, 2, 2],
+        ),
+        // If DIG > enemy Armor: your strikes ignore 2/3/4 Armor (this battle)
+        EffectDefinition::with_condition(
             TriggerType::BattleStart,
             EffectType::SetArmorPiercing,
             false,
-            [1, 2, 3],
+            [2, 3, 4],
+            Condition::OwnerDigGreaterThanEnemyArmor,
         ),
     ],
 };
@@ -453,7 +541,14 @@ pub const G_SC_08: ItemDefinition = ItemDefinition {
             TriggerType::BattleStart,
             EffectType::DoubleOnHitEffects,
             false,
-            [1, 1, 1], // Value doesn't matter, enables doubling
+            [1, 1, 1], // Toggle flag, stays flat
+        ),
+        // Tier bonus: better medallion = faster reaction
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainSpd,
+            false,
+            [0, 1, 2],
         ),
     ],
 };
@@ -491,33 +586,33 @@ pub const T_GR_02: ItemDefinition = ItemDefinition {
     tag: ItemTag::Greed,
     rarity: Rarity::Heroic,
     effects: &[
-        // +1 ATK (flat across tiers per GDD)
+        // +2/2/3 ATK
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::GainAtk,
             false,
-            [1, 1, 1],
+            [2, 2, 3],
         ),
-        // +1 ARM (flat across tiers per GDD)
+        // +2/3/3 ARM
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::GainArmor,
             false,
-            [1, 1, 1],
+            [2, 3, 3],
         ),
-        // +1 DIG (flat across tiers per GDD)
+        // +1/2/2 DIG
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::GainDig,
             false,
-            [1, 1, 1],
+            [1, 2, 2],
         ),
         // First hit each turn triggers all your Shard effects
         EffectDefinition::new(
             TriggerType::OnHit,
             EffectType::TriggerAllShards,
-            true, // once per turn (first hit only)
-            [1, 1, 1],
+            true,      // once per turn (first hit only)
+            [1, 1, 1], // Toggle flag, stays flat
         ),
     ],
 };
@@ -529,12 +624,19 @@ pub const G_GR_01: ItemDefinition = ItemDefinition {
     tag: ItemTag::Greed,
     rarity: Rarity::Common,
     effects: &[
-        // Start of each Day: gain 3/6/9 Gold
+        // Start of each Day: gain 5/8/11 Gold
         EffectDefinition::new(
             TriggerType::DayStart,
             EffectType::GainGold,
             false,
-            [3, 6, 9],
+            [5, 8, 11],
+        ),
+        // Battle Start: +1 Armor
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainArmor,
+            false,
+            [1, 1, 1],
         ),
     ],
 };
@@ -546,10 +648,10 @@ pub const G_GR_02: ItemDefinition = ItemDefinition {
     tag: ItemTag::Greed,
     rarity: Rarity::Common,
     effects: &[
-        // Victory: gain 2/4/6 Gold
-        EffectDefinition::new(TriggerType::Victory, EffectType::GainGold, false, [2, 4, 6]),
-        // Victory: heal 2/3/4 HP
-        EffectDefinition::new(TriggerType::Victory, EffectType::Heal, false, [2, 3, 4]),
+        // Victory: gain 3/5/7 Gold
+        EffectDefinition::new(TriggerType::Victory, EffectType::GainGold, false, [3, 5, 7]),
+        // Victory: heal 3/4/5 HP
+        EffectDefinition::new(TriggerType::Victory, EffectType::Heal, false, [3, 4, 5]),
     ],
 };
 
@@ -560,12 +662,27 @@ pub const G_GR_03: ItemDefinition = ItemDefinition {
     tag: ItemTag::Greed,
     rarity: Rarity::Heroic,
     effects: &[
-        // Battle Start: gain Armor equal to floor(Gold/8) (cap 4/5/6)
+        // Battle Start: gain +2/3/4 Armor
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainArmor,
+            false,
+            [2, 3, 4],
+        ),
+        // Battle Start: gain Armor equal to floor(Gold/6) (cap 6/7/8)
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::GoldToArmorScaled,
             false,
-            [4, 5, 6], // Cap values per tier
+            [6, 7, 8],
+        ),
+        // Battle Start: if Gold >= 20, gain +1 SPD this battle
+        EffectDefinition::with_condition(
+            TriggerType::BattleStart,
+            EffectType::GainSpd,
+            false,
+            [1, 1, 1],
+            Condition::OwnerGoldAtLeast(20),
         ),
     ],
 };
@@ -577,12 +694,26 @@ pub const G_GR_04: ItemDefinition = ItemDefinition {
     tag: ItemTag::Greed,
     rarity: Rarity::Mythic,
     effects: &[
+        // +1/1/2 ATK
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainAtk,
+            false,
+            [1, 1, 2],
+        ),
         // Turn Start: convert 1 Gold → 3/4/5 Armor
         EffectDefinition::new(
             TriggerType::TurnStart,
             EffectType::ConsumeGoldForArmor,
             false,
-            [3, 4, 5], // Armor gained per 1 gold consumed
+            [4, 5, 6], // Armor gained per 1 gold consumed
+        ),
+        // Turn Start: your Gold gains are increased by 50%
+        EffectDefinition::new(
+            TriggerType::TurnStart,
+            EffectType::AmplifyGoldGain,
+            false,
+            [50, 50, 50],
         ),
     ],
 };
@@ -599,7 +730,7 @@ pub const G_GR_05: ItemDefinition = ItemDefinition {
             TriggerType::EveryOtherTurnFirstHit,
             EffectType::Heal,
             true, // once per turn (first hit only)
-            [1, 2, 3],
+            [2, 3, 4],
         ),
     ],
 };
@@ -633,7 +764,7 @@ pub const G_GR_07: ItemDefinition = ItemDefinition {
             TriggerType::EveryOtherTurnFirstHit,
             EffectType::GainArmor,
             true, // once per turn (first hit only)
-            [1, 2, 3],
+            [2, 3, 4],
         ),
     ],
 };
@@ -650,7 +781,14 @@ pub const G_GR_08: ItemDefinition = ItemDefinition {
             TriggerType::EveryOtherTurnFirstHit,
             EffectType::GainGold,
             true, // once per turn (first hit only)
-            [1, 2, 3],
+            [2, 3, 4],
+        ),
+        // Every other turn (on first hit): gain +1 Armor
+        EffectDefinition::new(
+            TriggerType::EveryOtherTurnFirstHit,
+            EffectType::GainArmor,
+            true,
+            [1, 1, 1],
         ),
     ],
 };
@@ -750,7 +888,14 @@ pub const G_BL_02: ItemDefinition = ItemDefinition {
             TriggerType::BattleStart,
             EffectType::GainArmor,
             false,
-            [2, 3, 4],
+            [4, 5, 6],
+        ),
+        // When you deal non-weapon damage: gain 1/2/3 Armor (once/turn)
+        EffectDefinition::new(
+            TriggerType::OnDealNonWeaponDamage,
+            EffectType::GainArmor,
+            true,
+            [1, 2, 3],
         ),
     ],
 };
@@ -767,7 +912,14 @@ pub const G_BL_03: ItemDefinition = ItemDefinition {
             TriggerType::BattleStart,
             EffectType::AmplifyNonWeaponDamage,
             false,
-            [1, 2, 3],
+            [2, 3, 4],
+        ),
+        // +2/3/4 Armor
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainArmor,
+            false,
+            [2, 3, 4],
         ),
     ],
 };
@@ -779,14 +931,19 @@ pub const G_BL_04: ItemDefinition = ItemDefinition {
     tag: ItemTag::Blast,
     rarity: Rarity::Rare,
     effects: &[
-        // TODO: GDD says "Second time you deal non-weapon damage each turn: deal +2/3/4 more"
-        // This needs tracking of non-weapon damage count per turn
-        // Placeholder: deal extra non-weapon damage on hit
+        // First non-weapon damage each turn: +1/2/3
         EffectDefinition::new(
-            TriggerType::OnHit,
-            EffectType::DealNonWeaponDamage,
+            TriggerType::TurnStart,
+            EffectType::DoubleDetonationFirst,
             true,
-            [2, 3, 4],
+            [1, 2, 3],
+        ),
+        // Second non-weapon damage each turn: +3/4/5
+        EffectDefinition::new(
+            TriggerType::TurnStart,
+            EffectType::DoubleDetonationSecond,
+            true,
+            [3, 4, 5],
         ),
     ],
 };
@@ -803,7 +960,21 @@ pub const G_BL_05: ItemDefinition = ItemDefinition {
             TriggerType::BattleStart,
             EffectType::ReduceAllCountdowns,
             false,
-            [1, 1, 1], // Reduce by 1 at all tiers
+            [1, 1, 1], // Stays flat (scaling to 2 would make countdown-2 bombs instant)
+        ),
+        // Tier bonus: sturdier satchel gives blast protection
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainArmor,
+            false,
+            [4, 5, 6],
+        ),
+        // Tier bonus: gives +1/1/2 ATK
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainAtk,
+            false,
+            [1, 1, 2],
         ),
     ],
 };
@@ -846,12 +1017,19 @@ pub const G_BL_07: ItemDefinition = ItemDefinition {
     tag: ItemTag::Blast,
     rarity: Rarity::Heroic,
     effects: &[
-        // Turn Start: gain +1/2/3 stored damage (this battle)
+        // +2/3/4 Armor
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainArmor,
+            false,
+            [2, 3, 4],
+        ),
+        // Turn Start: gain +2/3/4 stored damage (this battle)
         EffectDefinition::new(
             TriggerType::TurnStart,
             EffectType::StoreDamage,
             false,
-            [1, 2, 3],
+            [2, 3, 4],
         ),
         // StoreDamage is released automatically when first exposed by combat-system logic.
     ],
@@ -869,7 +1047,14 @@ pub const G_BL_08: ItemDefinition = ItemDefinition {
             TriggerType::BattleStart,
             EffectType::DoubleBombTrigger,
             false,
-            [1, 1, 1], // Value doesn't matter, just enables doubling
+            [1, 1, 1], // Toggle flag, stays flat
+        ),
+        // Tier bonus: refined fuse engineering = less backlash from double detonation
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::ReduceNextBombSelfDamage,
+            false,
+            [0, 1, 2],
         ),
     ],
 };
@@ -948,6 +1133,13 @@ pub const G_FR_01: ItemDefinition = ItemDefinition {
     tag: ItemTag::Frost,
     rarity: Rarity::Common,
     effects: &[
+        // +1/2/3 ARM
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainArmor,
+            false,
+            [1, 2, 3],
+        ),
         // Battle Start: give enemy 1/2/3 Chill
         EffectDefinition::new(
             TriggerType::BattleStart,
@@ -998,10 +1190,24 @@ pub const G_FR_03: ItemDefinition = ItemDefinition {
     tag: ItemTag::Frost,
     rarity: Rarity::Rare,
     effects: &[
+        // +1/1/2 SPD
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainSpd,
+            false,
+            [1, 1, 2],
+        ),
         // If you act first on Turn 1: apply 2/3/4 Chill
         EffectDefinition::new(
             TriggerType::FirstTurnIfFaster,
             EffectType::ApplyChill,
+            false,
+            [2, 3, 4],
+        ),
+        // If you act first on Turn 1: gain +2/3/4 Armor
+        EffectDefinition::new(
+            TriggerType::FirstTurnIfFaster,
+            EffectType::GainArmor,
             false,
             [2, 3, 4],
         ),
@@ -1015,12 +1221,12 @@ pub const G_FR_04: ItemDefinition = ItemDefinition {
     tag: ItemTag::Frost,
     rarity: Rarity::Rare,
     effects: &[
-        // +1/2/3 SPD
+        // +2/3/4 SPD
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::GainSpd,
             false,
-            [1, 2, 3],
+            [2, 3, 4],
         ),
         // Exploration utility approximation: +1/1/1 DIG in combat systems.
         EffectDefinition::new(
@@ -1028,6 +1234,13 @@ pub const G_FR_04: ItemDefinition = ItemDefinition {
             EffectType::GainDig,
             false,
             [1, 1, 1],
+        ),
+        // +2/3/4 Armor
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainArmor,
+            false,
+            [2, 3, 4],
         ),
     ],
 };
@@ -1089,26 +1302,33 @@ pub const G_FR_07: ItemDefinition = ItemDefinition {
     tag: ItemTag::Frost,
     rarity: Rarity::Heroic,
     effects: &[
-        // Every other turn: apply 1 Chill
+        // Every other turn: apply 1 Chill (status application, stays flat)
         EffectDefinition::new(
             TriggerType::EveryOtherTurn,
             EffectType::ApplyChill,
             false,
             [1, 1, 1],
         ),
-        // Every other turn: deal 1 non-weapon damage
+        // Every other turn: deal 1/2/3 non-weapon damage
         EffectDefinition::new(
             TriggerType::EveryOtherTurn,
             EffectType::DealNonWeaponDamage,
             false,
-            [1, 1, 1],
+            [2, 3, 4],
         ),
-        // If enemy already has Chill, gain +1 SPD this turn
+        // Every other turn: gain 1/2/3 Armor
+        EffectDefinition::new(
+            TriggerType::EveryOtherTurn,
+            EffectType::GainArmor,
+            false,
+            [1, 2, 3],
+        ),
+        // If enemy already has Chill, gain +1/1/2 SPD this turn
         EffectDefinition::with_condition(
             TriggerType::EveryOtherTurn,
             EffectType::GainSpd,
             false,
-            [1, 1, 1],
+            [2, 2, 3],
             Condition::EnemyHasStatus(StatusType::Chill),
         ),
     ],
@@ -1121,12 +1341,19 @@ pub const G_FR_08: ItemDefinition = ItemDefinition {
     tag: ItemTag::Frost,
     rarity: Rarity::Heroic, // GDD says Heroic, not Mythic
     effects: &[
+        // +3/4/5 Armor
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainArmor,
+            false,
+            [3, 4, 5],
+        ),
         // Wounded: apply 2/3/4 Chill
         EffectDefinition::new(
             TriggerType::Wounded,
             EffectType::ApplyChill,
             true,
-            [2, 3, 4],
+            [3, 4, 5],
         ),
         // Wounded: reduce enemy SPD by 1 (this battle)
         EffectDefinition::new(
@@ -1216,6 +1443,13 @@ pub const G_RU_01: ItemDefinition = ItemDefinition {
     tag: ItemTag::Rust,
     rarity: Rarity::Common,
     effects: &[
+        // +1/2/3 ARM
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainArmor,
+            false,
+            [1, 2, 3],
+        ),
         // Battle Start: apply 1/2/3 Rust
         EffectDefinition::new(
             TriggerType::BattleStart,
@@ -1241,6 +1475,8 @@ pub const G_RU_02: ItemDefinition = ItemDefinition {
     tag: ItemTag::Rust,
     rarity: Rarity::Rare, // GDD says Rare
     effects: &[
+        // +1/1/2 ATK
+        EffectDefinition::new(TriggerType::OnHit, EffectType::GainAtk, false, [1, 1, 2]),
         // On Hit (once/turn): apply 1 Rust (flat, not scaling)
         EffectDefinition::new(TriggerType::OnHit, EffectType::ApplyRust, true, [1, 1, 1]),
         // If enemy has Rust >= 3, deal bonus non-weapon damage
@@ -1248,8 +1484,8 @@ pub const G_RU_02: ItemDefinition = ItemDefinition {
             TriggerType::OnHit,
             EffectType::DealNonWeaponDamage,
             true,
-            [1, 2, 2],
-            Condition::EnemyHasStatusAtLeast(StatusType::Rust, 3),
+            [2, 3, 3],
+            Condition::EnemyHasStatusAtLeast(StatusType::Rust, 2),
         ),
     ],
 };
@@ -1280,12 +1516,19 @@ pub const G_RU_04: ItemDefinition = ItemDefinition {
     tag: ItemTag::Rust,
     rarity: Rarity::Rare,
     effects: &[
-        // BattleStart: -2/3/4 enemy ARM per GDD
+        // Battle Start: -3/4/5 enemy ARM per GDD
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::RemoveArmor,
             false,
-            [2, 3, 4],
+            [3, 4, 5],
+        ),
+        // Battle Start: apply 1/2/3 Rust
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::ApplyRust,
+            false,
+            [1, 2, 3],
         ),
     ],
 };
@@ -1316,12 +1559,26 @@ pub const G_RU_06: ItemDefinition = ItemDefinition {
     tag: ItemTag::Rust,
     rarity: Rarity::Heroic,
     effects: &[
-        // Turn Start: if enemy has Rust OR no Armor, deal 1/2/3 non-weapon damage
+        // +1/1/2 ATK
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainAtk,
+            false,
+            [1, 1, 2],
+        ),
+        // +3/4/5 ARM
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainArmor,
+            false,
+            [3, 4, 5],
+        ),
+        // Turn Start: if enemy has Rust OR no Armor, deal 2/3/4 non-weapon damage
         EffectDefinition::with_condition(
             TriggerType::TurnStart,
             EffectType::DealNonWeaponDamage,
             false,
-            [1, 2, 3],
+            [2, 3, 4],
             Condition::EnemyHasStatusOrNoArmor(StatusType::Rust),
         ),
     ],
@@ -1334,14 +1591,14 @@ pub const G_RU_07: ItemDefinition = ItemDefinition {
     tag: ItemTag::Rust,
     rarity: Rarity::Mythic,
     effects: &[
-        // OnHit (1/turn): apply +2 additional Rust
-        EffectDefinition::new(TriggerType::OnHit, EffectType::ApplyRust, true, [2, 2, 2]),
-        // OnHit (1/turn): if enemy has 0 Armor, deal 2 non-weapon damage
+        // OnHit (1/turn): apply +2/3/4 additional Rust
+        EffectDefinition::new(TriggerType::OnHit, EffectType::ApplyRust, true, [2, 3, 4]),
+        // OnHit (1/turn): if enemy has 0 Armor, deal 2/3/4 non-weapon damage
         EffectDefinition::with_condition(
             TriggerType::OnHit,
             EffectType::DealNonWeaponDamage,
             true,
-            [2, 2, 2],
+            [2, 3, 4],
             Condition::EnemyHasNoArmor,
         ),
     ],
@@ -1354,20 +1611,19 @@ pub const G_RU_08: ItemDefinition = ItemDefinition {
     tag: ItemTag::Rust,
     rarity: Rarity::Common,
     effects: &[
-        // Whenever you apply Rust (once/turn): gain 1 Gold
+        // Whenever you apply Rust (once/turn): gain 2/3/4 Gold
         EffectDefinition::new(
             TriggerType::OnApplyRust,
             EffectType::GainGold,
-            true,      // once per turn
-            [1, 1, 1], // Flat 1 gold per GDD
+            true, // once per turn
+            [2, 3, 4],
         ),
-        // Battle Start: if enemy has no Armor, apply 1 Rust anyway.
-        EffectDefinition::with_condition(
+        // Battle Start: apply 1 Rust
+        EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::ApplyRust,
             false,
             [1, 1, 1],
-            Condition::EnemyHasNoArmor,
         ),
     ],
 };
@@ -1447,6 +1703,13 @@ pub const G_BO_02: ItemDefinition = ItemDefinition {
     tag: ItemTag::Blood,
     rarity: Rarity::Rare, // GDD says Rare
     effects: &[
+        // +1/1/2 ATK
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainAtk,
+            false,
+            [1, 1, 2],
+        ),
         // Your attacks deal +1/2/3 damage to Bleeding enemies
         // Implemented as OnHit bonus damage with EnemyHasBleed condition
         EffectDefinition::with_condition(
@@ -1466,12 +1729,19 @@ pub const G_BO_03: ItemDefinition = ItemDefinition {
     tag: ItemTag::Blood,
     rarity: Rarity::Rare,
     effects: &[
-        // When enemy takes Bleed damage: heal 1/2/3 HP (once/turn)
+        // When enemy takes Bleed damage: gain +2/3/4 Armor (once/turn)
+        EffectDefinition::new(
+            TriggerType::OnEnemyBleedDamage,
+            EffectType::GainArmor,
+            true,
+            [2, 3, 4],
+        ),
+        // When enemy takes Bleed damage: heal 2/3/4 HP (once/turn)
         EffectDefinition::new(
             TriggerType::OnEnemyBleedDamage,
             EffectType::Heal,
             true, // once per turn
-            [1, 2, 3],
+            [2, 3, 4],
         ),
     ],
 };
@@ -1483,8 +1753,15 @@ pub const G_BO_04: ItemDefinition = ItemDefinition {
     tag: ItemTag::Blood,
     rarity: Rarity::Rare,
     effects: &[
-        // Victory: heal 3/5/7 HP
-        EffectDefinition::new(TriggerType::Victory, EffectType::Heal, false, [3, 5, 7]),
+        // +2/3/4 Armor
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainArmor,
+            false,
+            [2, 3, 4],
+        ),
+        // Victory: heal 5/7/9 HP
+        EffectDefinition::new(TriggerType::Victory, EffectType::Heal, false, [5, 7, 9]),
     ],
 };
 
@@ -1495,12 +1772,26 @@ pub const G_BO_05: ItemDefinition = ItemDefinition {
     tag: ItemTag::Blood,
     rarity: Rarity::Heroic, // GDD says Heroic
     effects: &[
-        // Wounded: apply 2/3/4 Bleed
+        // +1/1/2 ATK
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainAtk,
+            false,
+            [1, 1, 2],
+        ),
+        // +3/4/5 ARM
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainArmor,
+            false,
+            [3, 4, 5],
+        ),
+        // Wounded: apply 3/4/5 Bleed
         EffectDefinition::new(
             TriggerType::Wounded,
             EffectType::ApplyBleed,
             true,
-            [2, 3, 4],
+            [3, 4, 5],
         ),
     ],
 };
@@ -1512,12 +1803,26 @@ pub const G_BO_06: ItemDefinition = ItemDefinition {
     tag: ItemTag::Blood,
     rarity: Rarity::Heroic, // GDD says Heroic
     effects: &[
-        // If enemy is Wounded, your first strike each turn deals +2/3/4 damage
+        // +1/1/2 ATK
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainAtk,
+            false,
+            [1, 1, 2],
+        ),
+        // +2/3/4 ARM
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainArmor,
+            false,
+            [2, 3, 4],
+        ),
+        // If enemy is Wounded, your first strike each turn deals +3/4/5 damage
         EffectDefinition::with_condition(
             TriggerType::OnHit,
             EffectType::DealDamage,
             true, // once per turn (first strike only)
-            [2, 3, 4],
+            [3, 4, 5],
             Condition::EnemyWounded,
         ),
     ],
@@ -1547,12 +1852,12 @@ pub const G_BO_08: ItemDefinition = ItemDefinition {
     tag: ItemTag::Blood,
     rarity: Rarity::Mythic, // GDD says Mythic
     effects: &[
-        // Your first hit each turn vs a Bleeding enemy heals more (capped approximation)
+        // Your first hit each turn vs a Bleeding enemy heals more (cap 5/7/9)
         EffectDefinition::with_condition(
             TriggerType::OnHit,
             EffectType::Heal,
             true, // once per turn (first hit only)
-            [5, 5, 5],
+            [5, 7, 9],
             Condition::EnemyHasStatus(StatusType::Bleed),
         ),
         // Self-enable bleed on hit
@@ -1651,6 +1956,13 @@ pub const G_TE_02: ItemDefinition = ItemDefinition {
     tag: ItemTag::Tempo,
     rarity: Rarity::Rare, // GDD says Rare
     effects: &[
+        // +1/1/2 SPD
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainSpd,
+            false,
+            [1, 1, 2],
+        ),
         // If you act first on Turn 1, your first strike deals +3/5/7 damage
         EffectDefinition::new(
             TriggerType::FirstTurnIfFaster,
@@ -1668,12 +1980,19 @@ pub const G_TE_03: ItemDefinition = ItemDefinition {
     tag: ItemTag::Tempo,
     rarity: Rarity::Rare,
     effects: &[
-        // If enemy acts first on Turn 1, gain 5/7/9 Armor before damage
+        // +1/1/2 SPD
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainSpd,
+            false,
+            [1, 1, 2],
+        ),
+        // If enemy acts first on Turn 1, gain 7/9/11 Armor before damage
         EffectDefinition::new(
             TriggerType::FirstTurnIfSlower,
             EffectType::GainArmor,
             false,
-            [5, 7, 9],
+            [7, 9, 11],
         ),
     ],
 };
@@ -1685,19 +2004,19 @@ pub const G_TE_04: ItemDefinition = ItemDefinition {
     tag: ItemTag::Tempo,
     rarity: Rarity::Rare,
     effects: &[
-        // Turn 5: gain +2/3/4 ATK (this battle)
+        // Turn 5: gain +3/4/5 ATK (this battle)
         EffectDefinition::new(
             TriggerType::TurnN { turn: 5 },
             EffectType::GainAtk,
             false,
-            [2, 3, 4],
+            [3, 4, 5],
         ),
-        // Turn 5: gain +1 SPD (this battle)
+        // Turn 5: gain +2/2/3 SPD (this battle)
         EffectDefinition::new(
             TriggerType::TurnN { turn: 5 },
             EffectType::GainSpd,
             false,
-            [1, 1, 1],
+            [2, 2, 3],
         ),
     ],
 };
@@ -1758,12 +2077,26 @@ pub const G_TE_07: ItemDefinition = ItemDefinition {
     tag: ItemTag::Tempo,
     rarity: Rarity::Heroic,
     effects: &[
-        // EveryOtherTurn: +1/2/3 SPD per GDD
+        // +1/1/2 ATK
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainAtk,
+            false,
+            [1, 1, 2],
+        ),
+        // +3/4/5 ARM
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainArmor,
+            false,
+            [3, 4, 5],
+        ),
+        // EveryOtherTurn: +2/3/4 SPD per GDD
         EffectDefinition::new(
             TriggerType::EveryOtherTurn,
             EffectType::GainSpd,
             false,
-            [1, 2, 3],
+            [2, 3, 4],
         ),
     ],
 };
@@ -1775,19 +2108,26 @@ pub const G_TE_08: ItemDefinition = ItemDefinition {
     tag: ItemTag::Tempo,
     rarity: Rarity::Heroic, // GDD says Heroic, not Mythic
     effects: &[
-        // Turn 5: heal 4/6/8 HP
+        // +3/4/5 Armor
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::GainArmor,
+            false,
+            [3, 4, 5],
+        ),
+        // Turn 5: heal 6/8/10 HP
         EffectDefinition::new(
             TriggerType::TurnN { turn: 5 },
             EffectType::Heal,
             false,
-            [4, 6, 8],
+            [6, 8, 10],
         ),
-        // Turn 5: gain +1 SPD (this battle)
+        // Turn 5: gain +2/2/3 SPD (this battle)
         EffectDefinition::new(
             TriggerType::TurnN { turn: 5 },
             EffectType::GainSpd,
             false,
-            [1, 1, 1],
+            [2, 2, 3],
         ),
     ],
 };
@@ -2118,5 +2458,79 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_v05b_item_base_and_trigger_values_tier_i() {
+        let loose_nuggets = get_item(b"G-GR-01\0").unwrap();
+        assert_eq!(loose_nuggets.effects[0].values, [5, 8, 11]);
+        assert_eq!(loose_nuggets.effects[1].effect_type, EffectType::GainArmor);
+        assert_eq!(loose_nuggets.effects[1].values, [1, 1, 1]);
+
+        let gemfinder_staff = get_item(b"T-GR-02\0").unwrap();
+        assert_eq!(gemfinder_staff.effects[0].values, [2, 2, 3]);
+        assert_eq!(gemfinder_staff.effects[1].values, [2, 3, 3]);
+        assert_eq!(gemfinder_staff.effects[2].values, [1, 2, 2]);
+
+        let rebar = get_item(b"G-ST-05\0").unwrap();
+        assert_eq!(rebar.effects[0].effect_type, EffectType::GainArmor);
+        assert_eq!(rebar.effects[0].values, [3, 4, 5]);
+
+        let shrapnel_talisman = get_item(b"G-ST-06\0").unwrap();
+        assert_eq!(shrapnel_talisman.effects[0].effect_type, EffectType::GainArmor);
+        assert_eq!(shrapnel_talisman.effects[0].values, [3, 4, 5]);
+
+        let tunnel_instinct = get_item(b"G-SC-03\0").unwrap();
+        assert_eq!(tunnel_instinct.effects[0].effect_type, EffectType::GainDig);
+        assert_eq!(tunnel_instinct.effects[0].values, [1, 2, 3]);
+        assert_eq!(tunnel_instinct.effects[2].effect_type, EffectType::GainAtk);
+        assert_eq!(tunnel_instinct.effects[2].values, [1, 1, 2]);
+
+        let blast_suit = get_item(b"G-BL-02\0").unwrap();
+        assert_eq!(blast_suit.effects[1].values, [4, 5, 6]);
+        assert_eq!(blast_suit.effects[2].trigger, TriggerType::OnDealNonWeaponDamage);
+        assert_eq!(blast_suit.effects[2].values, [1, 2, 3]);
+
+        let frost_lantern = get_item(b"G-FR-01\0").unwrap();
+        assert_eq!(frost_lantern.effects[0].effect_type, EffectType::GainArmor);
+        assert_eq!(frost_lantern.effects[0].values, [1, 2, 3]);
+
+        let oxidizer_vial = get_item(b"G-RU-01\0").unwrap();
+        assert_eq!(oxidizer_vial.effects[0].effect_type, EffectType::GainArmor);
+        assert_eq!(oxidizer_vial.effects[0].values, [1, 2, 3]);
+
+        let salvage_clamp = get_item(b"G-RU-08\0").unwrap();
+        assert_eq!(salvage_clamp.effects[0].values, [2, 3, 4]);
+        assert_eq!(salvage_clamp.effects[1].condition, Condition::None);
+
+        let bloodletting_fang = get_item(b"G-BO-02\0").unwrap();
+        assert_eq!(bloodletting_fang.effects[0].effect_type, EffectType::GainAtk);
+        assert_eq!(bloodletting_fang.effects[0].values, [1, 1, 2]);
+
+        let ambush_charm = get_item(b"G-TE-02\0").unwrap();
+        assert_eq!(ambush_charm.effects[0].effect_type, EffectType::GainSpd);
+        assert_eq!(ambush_charm.effects[0].values, [1, 1, 2]);
+    }
+
+    #[test]
+    fn test_v05b_item_scaling_tiers_ii_iii() {
+        let check = |id: &[u8; 8], effect_idx: usize, expected: [i16; 3]| {
+            let item = get_item(id).unwrap();
+            assert_eq!(item.effects[effect_idx].values, expected);
+        };
+
+        check(b"G-GR-01\0", 0, [5, 8, 11]);
+        check(b"G-ST-05\0", 0, [3, 4, 5]);
+        check(b"G-ST-06\0", 0, [3, 4, 5]);
+        check(b"G-SC-03\0", 0, [1, 2, 3]);
+        check(b"G-BL-02\0", 1, [4, 5, 6]);
+        check(b"G-BL-02\0", 2, [1, 2, 3]);
+        check(b"G-FR-01\0", 0, [1, 2, 3]);
+        check(b"G-RU-01\0", 0, [1, 2, 3]);
+        check(b"G-RU-08\0", 0, [2, 3, 4]);
+        check(b"G-BO-02\0", 0, [1, 1, 2]);
+        check(b"G-TE-02\0", 0, [1, 1, 2]);
+        check(b"T-GR-02\0", 0, [2, 2, 3]);
+        check(b"T-GR-02\0", 1, [2, 3, 3]);
     }
 }

@@ -33,6 +33,12 @@ pub struct GameSession {
     pub session_signer: Pubkey,
     /// Hash of the current game state (for validation)
     pub state_hash: [u8; 32],
+    /// Whether run result has already been settled into player-profile.
+    pub settled: bool,
+    /// Settled run outcome (true = victory, false = defeat).
+    pub settled_victory: bool,
+    /// Unix timestamp when settlement happened.
+    pub settled_at: i64,
 }
 
 impl GameSession {
@@ -46,8 +52,9 @@ impl GameSession {
     /// Account space calculation
     /// 8 (discriminator) + 32 (player) + 8 (session_id) + 1 (campaign_level) +
     /// 8 (started_at) + 8 (last_activity) + 1 (is_delegated) + 1 (bump) +
-    /// 10 (active_item_pool) + 32 (session_signer) + 32 (state_hash)
-    pub const INIT_SPACE: usize = 32 + 8 + 1 + 8 + 8 + 1 + 1 + 10 + 32 + 32;
+    /// 10 (active_item_pool) + 32 (session_signer) + 32 (state_hash) +
+    /// 1 (settled) + 1 (settled_victory) + 8 (settled_at)
+    pub const INIT_SPACE: usize = 32 + 8 + 1 + 8 + 8 + 1 + 1 + 10 + 32 + 32 + 1 + 1 + 8;
 
     /// Byte offset of `player` field in serialized account data (after 8-byte discriminator).
     pub const PLAYER_OFFSET: usize = 8;

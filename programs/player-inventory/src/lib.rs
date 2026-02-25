@@ -19,8 +19,8 @@ pub mod errors;
 pub mod fusion;
 pub mod items;
 pub mod itemsets;
-pub mod offers;
 pub mod nft_items;
+pub mod offers;
 pub mod state;
 
 use combat_system::{EffectType, TriggerType};
@@ -51,11 +51,9 @@ pub const GAMEPLAY_STATE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     0xa5, 0x69, 0x33, 0xc3, 0x32, 0x44, 0x5d, 0xb7, 0x52, 0x8d, 0x7a, 0x6b, 0xc3, 0x01, 0x56, 0x1e,
     0x68, 0x50, 0xaa, 0x96, 0x7a, 0x85, 0xea, 0x62, 0xb5, 0x79, 0xe3, 0x23, 0xe4, 0xa8, 0x88, 0x36,
 ]);
-pub const LOCAL_ER_VALIDATOR: Pubkey = pubkey!("mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev");
-
-fn local_delegate_config() -> DelegateConfig {
+fn local_delegate_config(validator: Option<Pubkey>) -> DelegateConfig {
     DelegateConfig {
-        validator: Some(LOCAL_ER_VALIDATOR),
+        validator,
         ..DelegateConfig::default()
     }
 }
@@ -88,7 +86,10 @@ pub mod player_inventory {
     }
 
     /// Delegates inventory PDA to MagicBlock from player-inventory (its owner program).
-    pub fn delegate_inventory(ctx: Context<DelegateInventory>) -> Result<()> {
+    pub fn delegate_inventory(
+        ctx: Context<DelegateInventory>,
+        validator: Option<Pubkey>,
+    ) -> Result<()> {
         let session_key = ctx.accounts.session.key();
         let (expected_inventory, _) =
             Pubkey::find_program_address(&[b"inventory", session_key.as_ref()], &crate::ID);
@@ -101,7 +102,7 @@ pub mod player_inventory {
         ctx.accounts.delegate_inventory(
             &ctx.accounts.player,
             inventory_seeds,
-            local_delegate_config(),
+            local_delegate_config(validator),
         )?;
         Ok(())
     }
@@ -116,13 +117,14 @@ pub mod player_inventory {
             expected_inventory,
             InventoryError::Unauthorized
         );
+        let inventory = read_inventory(&ctx.accounts.inventory)?;
         require_keys_eq!(
-            ctx.accounts.inventory.session,
+            inventory.session,
             session_key,
             InventoryError::Unauthorized
         );
         require_keys_eq!(
-            ctx.accounts.inventory.player,
+            inventory.player,
             ctx.accounts.session_signer.key(),
             InventoryError::Unauthorized
         );
@@ -213,8 +215,8 @@ pub mod player_inventory {
 
         // If there was an HP bonus, call gameplay-state to remove it
         if hp_bonus > 0 {
-            // Calculate new max HP after removing this item
-            let new_max_hp = calculate_max_hp_from_inventory(inventory);
+            let campaign_level = read_campaign_level(&ctx.accounts.game_state)?;
+            let new_max_hp = calculate_max_hp_from_inventory(inventory, base_hp(campaign_level));
             remove_hp_bonus_cpi(
                 &ctx.accounts.game_state,
                 &ctx.accounts.inventory_authority,
@@ -517,7 +519,8 @@ pub mod player_inventory {
             )?;
         } else if hp_delta < 0 {
             // Net HP loss - need to calculate new max HP and cap current HP
-            let new_max_hp = calculate_max_hp_from_inventory(inventory);
+            let campaign_level = read_campaign_level(&ctx.accounts.game_state)?;
+            let new_max_hp = calculate_max_hp_from_inventory(inventory, base_hp(campaign_level));
             remove_hp_bonus_cpi(
                 &ctx.accounts.game_state,
                 &ctx.accounts.inventory_authority,
@@ -547,8 +550,7 @@ pub mod player_inventory {
         use crate::nft_items::get_nft_item;
 
         // Validate the NFT item exists in catalog
-        let _item_def =
-            get_nft_item(&nft_item_id).ok_or(InventoryError::InvalidItemId)?;
+        let _item_def = get_nft_item(&nft_item_id).ok_or(InventoryError::InvalidItemId)?;
 
         // Validate the account is owned by Metaplex Core program
         require!(
@@ -597,8 +599,32 @@ pub mod player_inventory {
 
 /// Calculate max HP from inventory.
 /// Base HP (10) + sum of all BattleStart MaxHp effects from equipped items (e.g., Work Vest).
-fn calculate_max_hp_from_inventory(inventory: &PlayerInventory) -> i16 {
-    const BASE_HP: i16 = 10;
+/// Byte offset of `campaign_level` (u8) in the GameState account data.
+/// 8 (discriminator) + 32*3 (player, session_signer, session) + 4*u8 (pos/map)
+/// + i16 (hp) + u8 (gear_slots) + u8 (week) + u8 (phase) + u8 (moves_remaining)
+/// + u32 (total_moves) + bool (boss_fight_ready) + u16 (gold) + u8 (bump) = 122
+const GAME_STATE_CAMPAIGN_LEVEL_OFFSET: usize = 122;
+
+/// Mirror of gameplay-state's base_hp(campaign_level) function.
+fn base_hp(campaign_level: u8) -> i16 {
+    match campaign_level {
+        1..=9 => 25,
+        10..=19 => 20,
+        _ => 15,
+    }
+}
+
+/// Reads campaign_level from raw GameState account data.
+fn read_campaign_level(game_state: &AccountInfo) -> Result<u8> {
+    let data = game_state.try_borrow_data()?;
+    require!(
+        data.len() > GAME_STATE_CAMPAIGN_LEVEL_OFFSET,
+        InventoryError::InvalidSlotIndex
+    );
+    Ok(data[GAME_STATE_CAMPAIGN_LEVEL_OFFSET])
+}
+
+fn calculate_max_hp_from_inventory(inventory: &PlayerInventory, base: i16) -> i16 {
     let effects = generate_combat_effects(inventory);
 
     let hp_bonus: i16 = effects
@@ -607,7 +633,7 @@ fn calculate_max_hp_from_inventory(inventory: &PlayerInventory) -> i16 {
         .map(|e| e.value)
         .sum();
 
-    BASE_HP.saturating_add(hp_bonus)
+    base.saturating_add(hp_bonus)
 }
 
 fn fuse_items_internal(
@@ -775,10 +801,18 @@ pub struct DelegateInventory<'info> {
 #[derive(Accounts)]
 pub struct UndelegateInventory<'info> {
     #[account(mut)]
-    pub inventory: Account<'info, PlayerInventory>,
+    /// CHECK: PDA is validated and deserialized in handler.
+    pub inventory: AccountInfo<'info>,
     /// CHECK: Session PDA used only for deterministic PDA validation.
     pub session: UncheckedAccount<'info>,
+    #[account(mut)]
     pub session_signer: Signer<'info>,
+}
+
+fn read_inventory(inventory: &AccountInfo<'_>) -> Result<PlayerInventory> {
+    let data = inventory.try_borrow_data()?;
+    let mut slice: &[u8] = &data;
+    PlayerInventory::try_deserialize(&mut slice).map_err(|_| InventoryError::InvalidSession.into())
 }
 
 #[derive(Accounts)]

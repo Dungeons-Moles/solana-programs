@@ -202,6 +202,61 @@ describe("player-profile", () => {
     });
   });
 
+  describe("Close Profile", () => {
+    it("closes profile and allows re-creation", async () => {
+      const user = Keypair.generate();
+
+      const airdropSig = await provider.connection.requestAirdrop(
+        user.publicKey,
+        2 * LAMPORTS_PER_SOL,
+      );
+      await provider.connection.confirmTransaction(airdropSig);
+
+      const [profilePDA] = getProfilePDA(user.publicKey);
+
+      await program.methods
+        .initializeProfile("CloseMe")
+        .accounts({
+          playerProfile: profilePDA,
+          owner: user.publicKey,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .signers([user])
+        .rpc();
+
+      await program.methods
+        .closeProfile()
+        .accounts({
+          playerProfile: profilePDA,
+          owner: user.publicKey,
+        } as any)
+        .signers([user])
+        .rpc();
+
+      const profileInfoAfterClose = await provider.connection.getAccountInfo(
+        profilePDA,
+        "confirmed",
+      );
+      expect(
+        !profileInfoAfterClose ||
+          !profileInfoAfterClose.owner.equals(program.programId),
+      ).to.equal(true);
+
+      await program.methods
+        .initializeProfile("Recreated")
+        .accounts({
+          playerProfile: profilePDA,
+          owner: user.publicKey,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .signers([user])
+        .rpc();
+
+      const recreatedProfile = await program.account.playerProfile.fetch(profilePDA);
+      expect(recreatedProfile.name).to.equal("Recreated");
+    });
+  });
+
   describe("Reject Name Too Long", () => {
     it("rejects name longer than 32 characters", async () => {
       const user = Keypair.generate();

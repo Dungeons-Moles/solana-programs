@@ -51,4 +51,8 @@ pub enum InventoryError {
     /// Direct player mutation path is disabled; use authorized CPI flow
     #[msg("Direct inventory mutation is disabled; use authorized CPI flow")]
     DirectMutationDisabled,
+
+    /// Invalid session or inventory account data
+    #[msg("Invalid session account")]
+    InvalidSession,
 }

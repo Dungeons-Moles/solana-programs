@@ -147,43 +147,43 @@ pub enum ItemType {
 
 /// Supply Cache (L2) rarity table by act
 pub const SUPPLY_CACHE_RARITY: [(u8, u8, u8, u8); 4] = [
-    (100, 0, 0, 0), // Act 1: 100% Common
-    (85, 15, 0, 0), // Act 2: 85% Common, 15% Rare
-    (75, 25, 0, 0), // Act 3: 75% Common, 25% Rare
-    (65, 35, 0, 0), // Act 4: 65% Common, 35% Rare
+    (60, 40, 0, 0), // Act 1: 60% Common, 40% Rare
+    (70, 30, 0, 0), // Act 2: 70% Common, 30% Rare
+    (80, 20, 0, 0), // Act 3: 80% Common, 20% Rare
+    (90, 10, 0, 0), // Act 4: 90% Common, 10% Rare
 ];
 
 /// Tool Crate (L3) rarity table by act
 pub const TOOL_CRATE_RARITY: [(u8, u8, u8, u8); 4] = [
-    (85, 15, 0, 0),  // Act 1: 85% Common, 15% Rare
-    (70, 25, 5, 0),  // Act 2: 70% Common, 25% Rare, 5% Heroic
-    (60, 30, 10, 0), // Act 3: 60% Common, 30% Rare, 10% Heroic
-    (50, 35, 15, 0), // Act 4: 50% Common, 35% Rare, 15% Heroic
+    (50, 30, 20, 0), // Act 1: 50% Common, 30% Rare, 20% Heroic
+    (60, 25, 15, 0), // Act 2: 60% Common, 25% Rare, 15% Heroic
+    (70, 20, 10, 0), // Act 3: 70% Common, 20% Rare, 10% Heroic
+    (80, 15, 5, 0),  // Act 4: 80% Common, 15% Rare, 5% Heroic
 ];
 
 /// Geode Vault (L12) rarity table by act.
-/// Acts 1-3 are Heroic-only; Act 4 allows up to 10% Mythic.
+/// All acts: 90% Heroic, 10% Mythic (max 1 Mythic enforced at generation).
 pub const GEODE_VAULT_RARITY: [(u8, u8, u8, u8); 4] = [
-    (0, 0, 100, 0), // Act 1: 100% Heroic
-    (0, 0, 100, 0), // Act 2: 100% Heroic
-    (0, 0, 100, 0), // Act 3: 100% Heroic
+    (0, 0, 90, 10), // Act 1: 90% Heroic, 10% Mythic
+    (0, 0, 90, 10), // Act 2: 90% Heroic, 10% Mythic
+    (0, 0, 90, 10), // Act 3: 90% Heroic, 10% Mythic
     (0, 0, 90, 10), // Act 4: 90% Heroic, 10% Mythic
 ];
 
 /// Smuggler Hatch (L9) Gear rarity table by act
 pub const SMUGGLER_GEAR_RARITY: [(u8, u8, u8, u8); 4] = [
-    (70, 27, 3, 0),  // Act 1
-    (55, 38, 7, 0),  // Act 2
-    (45, 42, 13, 0), // Act 3
-    (35, 45, 18, 2), // Act 4
+    (35, 45, 10, 10), // Act 1
+    (45, 40, 10, 5),  // Act 2
+    (55, 30, 12, 3),  // Act 3
+    (65, 25, 8, 2),   // Act 4
 ];
 
 /// Smuggler Hatch (L9) Tool rarity table by act
 pub const SMUGGLER_TOOL_RARITY: [(u8, u8, u8, u8); 4] = [
-    (80, 20, 0, 0),  // Act 1
-    (65, 30, 5, 0),  // Act 2
-    (55, 35, 10, 0), // Act 3
-    (45, 40, 15, 0), // Act 4
+    (45, 40, 15, 0), // Act 1
+    (55, 35, 10, 0), // Act 2
+    (65, 30, 5, 0),  // Act 3
+    (80, 15, 5, 0),  // Act 4
 ];
 
 /// Counter Cache (L13) rarity table (uses standard act table)
@@ -501,9 +501,8 @@ pub fn generate_poi_offers(
             act, weakness1, weakness2, seed,
         )),
         3 => Some(generate_tool_crate_offers(act, weakness1, weakness2, seed)),
-        9 => Some(generate_smuggler_hatch_offers(
-            act, weakness1, weakness2, seed,
-        )),
+        // Type 9 (Smuggler Hatch) uses generate_smuggler_hatch_offers directly
+        // via enter_shop/shop_reroll, which pass the item pool.
         12 => Some(generate_geode_vault_offers(act, weakness1, weakness2, seed)),
         13 => Some(generate_counter_cache_offers(
             act, weakness1, weakness2, seed,
@@ -690,61 +689,80 @@ pub fn generate_counter_cache_offers(
 /// Generate 6 offers for Smuggler Hatch shop (L9): 1 Tool + 5 Gear.
 /// Uses SMUGGLER_TOOL_RARITY and SMUGGLER_GEAR_RARITY tables.
 /// Items have prices based on rarity.
-/// Ensures all 5 gear items are unique by re-rolling duplicates.
+/// Ensures all items are unique, deduplicated, and in the active item pool.
+/// Retries with different seeds until all 6 slots are filled.
 pub fn generate_smuggler_hatch_offers(
     act: u8,
     weakness1: WeaknessTag,
     weakness2: WeaknessTag,
     seed: u64,
+    pool: &[u8; ITEM_POOL_SIZE],
 ) -> GeneratedOffers {
     let tag_weights = calculate_tag_weights(weakness1, weakness2);
     let mut offers = Vec::with_capacity(6);
-    let mut rng = Xorshift64::new(seed);
+    let mut used_ids: [[u8; 8]; 6] = [[0; 8]; 6];
+    let mut count = 0usize;
 
-    // First offer: 1 Tool
-    {
+    // First: fill the Tool slot (index 0)
+    for attempt in 0..20u64 {
+        let attempt_seed = seed ^ attempt.wrapping_mul(0x9e3779b97f4a7c15);
+        let mut rng = Xorshift64::new(attempt_seed);
+
         let item_seed = rng.next_u64();
         let rarity = get_rarity_from_table(&SMUGGLER_TOOL_RARITY, act, item_seed);
         let item_id = select_tool_by_rarity_weighted(rarity, &tag_weights, rng.next_u64());
         let price = calculate_price(ItemType::Tool, rarity);
 
-        offers.push(ItemOffer {
-            item_id,
-            tier: 0, // Tier::I
-            price,
-            purchased: false,
-        });
+        // Check pool membership and deduplication
+        let in_pool =
+            item_id_to_pool_index(&item_id).map_or(false, |idx| is_item_in_pool(pool, idx));
+        let is_duplicate = used_ids[..count].contains(&item_id);
+
+        if in_pool && !is_duplicate {
+            used_ids[count] = item_id;
+            count += 1;
+            offers.push(ItemOffer {
+                item_id,
+                tier: 0,
+                price,
+                purchased: false,
+            });
+            break;
+        }
     }
 
-    // Next 5 offers: Gear (with deduplication)
-    let mut used_ids: [[u8; 8]; 5] = [[0; 8]; 5];
-    for i in 0..5 {
-        let mut attempts = 0;
-        loop {
-            let item_seed = rng.next_u64();
-            let rarity = get_rarity_from_table(&SMUGGLER_GEAR_RARITY, act, item_seed);
-            let item_id = select_gear_by_rarity_weighted(rarity, &tag_weights, rng.next_u64());
-            let price = calculate_price(ItemType::Gear, rarity);
+    // Next: fill 5 Gear slots
+    for attempt in 0..50u64 {
+        if count >= 6 {
+            break;
+        }
+        let attempt_seed = seed ^ ((count as u64) << 48) ^ attempt.wrapping_mul(0x517cc1b727220a95);
+        let mut rng = Xorshift64::new(attempt_seed);
 
-            // Check for duplicates among gear items
-            let is_duplicate = used_ids[..i].contains(&item_id);
-            if !is_duplicate || attempts >= 10 {
-                used_ids[i] = item_id;
-                offers.push(ItemOffer {
-                    item_id,
-                    tier: 0, // Tier::I
-                    price,
-                    purchased: false,
-                });
-                break;
-            }
-            attempts += 1;
+        let item_seed = rng.next_u64();
+        let rarity = get_rarity_from_table(&SMUGGLER_GEAR_RARITY, act, item_seed);
+        let item_id = select_gear_by_rarity_weighted(rarity, &tag_weights, rng.next_u64());
+        let price = calculate_price(ItemType::Gear, rarity);
+
+        let in_pool =
+            item_id_to_pool_index(&item_id).map_or(false, |idx| is_item_in_pool(pool, idx));
+        let is_duplicate = used_ids[..count].contains(&item_id);
+
+        if in_pool && !is_duplicate {
+            used_ids[count] = item_id;
+            count += 1;
+            offers.push(ItemOffer {
+                item_id,
+                tier: 0,
+                price,
+                purchased: false,
+            });
         }
     }
 
     GeneratedOffers {
         offers,
-        pick_count: 6, // Can purchase multiple
+        pick_count: 6,
     }
 }
 
@@ -987,76 +1005,73 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_supply_cache_act1_always_common() {
-        for seed in 0..100 {
-            let rarity = get_rarity_from_table(&SUPPLY_CACHE_RARITY, 1, seed);
-            assert_eq!(
-                rarity,
-                ItemRarity::Common,
-                "Act 1 seed {} should be Common",
-                seed
-            );
-        }
-    }
-
-    #[test]
-    fn test_supply_cache_act2_distribution() {
+    fn test_supply_cache_act1_distribution() {
         let mut common_count = 0;
         let mut rare_count = 0;
 
         for seed in 0..100 {
-            let rarity = get_rarity_from_table(&SUPPLY_CACHE_RARITY, 2, seed);
+            let rarity = get_rarity_from_table(&SUPPLY_CACHE_RARITY, 1, seed);
             match rarity {
                 ItemRarity::Common => common_count += 1,
                 ItemRarity::Rare => rare_count += 1,
-                _ => panic!("Act 2 should only have Common or Rare"),
+                _ => panic!("Act 1 Supply Cache should only have Common or Rare"),
             }
         }
 
-        assert_eq!(common_count, 85);
-        assert_eq!(rare_count, 15);
+        assert_eq!(common_count, 60);
+        assert_eq!(rare_count, 40);
     }
 
     #[test]
-    fn test_tool_crate_includes_heroic_in_act2() {
+    fn test_supply_cache_act4_distribution() {
+        let mut common_count = 0;
+        let mut rare_count = 0;
+
+        for seed in 0..100 {
+            let rarity = get_rarity_from_table(&SUPPLY_CACHE_RARITY, 4, seed);
+            match rarity {
+                ItemRarity::Common => common_count += 1,
+                ItemRarity::Rare => rare_count += 1,
+                _ => panic!("Act 4 Supply Cache should only have Common or Rare"),
+            }
+        }
+
+        assert_eq!(common_count, 90);
+        assert_eq!(rare_count, 10);
+    }
+
+    #[test]
+    fn test_tool_crate_includes_heroic_in_act1() {
         let mut heroic_count = 0;
 
         for seed in 0..100 {
-            let rarity = get_rarity_from_table(&TOOL_CRATE_RARITY, 2, seed);
+            let rarity = get_rarity_from_table(&TOOL_CRATE_RARITY, 1, seed);
             if rarity == ItemRarity::Heroic {
                 heroic_count += 1;
             }
         }
 
-        assert_eq!(heroic_count, 5, "Act 2 Tool Crate should have 5% Heroic");
+        assert_eq!(heroic_count, 20, "Act 1 Tool Crate should have 20% Heroic");
     }
 
     #[test]
-    fn test_geode_vault_heroic_dominant() {
-        let mut heroic_count = 0;
+    fn test_geode_vault_mythic_all_acts() {
+        for act in 1..=4 {
+            let mut mythic_count = 0;
 
-        for seed in 0..100 {
-            let rarity = get_rarity_from_table(&GEODE_VAULT_RARITY, 1, seed);
-            if rarity == ItemRarity::Heroic {
-                heroic_count += 1;
+            for seed in 0..100 {
+                let rarity = get_rarity_from_table(&GEODE_VAULT_RARITY, act, seed);
+                if rarity == ItemRarity::Mythic {
+                    mythic_count += 1;
+                }
             }
+
+            assert_eq!(
+                mythic_count, 10,
+                "Act {} Geode Vault should have 10% Mythic",
+                act
+            );
         }
-
-        assert_eq!(heroic_count, 100, "Act 1 Geode Vault should be 100% Heroic");
-    }
-
-    #[test]
-    fn test_geode_vault_mythic_in_act4() {
-        let mut mythic_count = 0;
-
-        for seed in 0..100 {
-            let rarity = get_rarity_from_table(&GEODE_VAULT_RARITY, 4, seed);
-            if rarity == ItemRarity::Mythic {
-                mythic_count += 1;
-            }
-        }
-
-        assert_eq!(mythic_count, 10, "Act 4 Geode Vault should have 10% Mythic");
     }
 
     #[test]
@@ -1115,9 +1130,9 @@ mod tests {
         let tool_table = get_rarity_table(PoiOfferType::SmugglerHatch, true);
         let gear_table = get_rarity_table(PoiOfferType::SmugglerHatch, false);
 
-        // Act 1: Tool 80% Common, Gear 70% Common
-        assert_eq!(tool_table[0].0, 80);
-        assert_eq!(gear_table[0].0, 70);
+        // Act 1: Tool 45% Common, Gear 35% Common
+        assert_eq!(tool_table[0].0, 45);
+        assert_eq!(gear_table[0].0, 35);
     }
 
     // =========================================================================
@@ -1183,8 +1198,15 @@ mod tests {
 
     #[test]
     fn test_generate_smuggler_hatch_offers_structure() {
-        let offers =
-            generate_smuggler_hatch_offers(2, WeaknessTag::Greed, WeaknessTag::Blast, 12345);
+        // Full pool: all bits set so every item is valid
+        let full_pool = [0xFFu8; ITEM_POOL_SIZE];
+        let offers = generate_smuggler_hatch_offers(
+            2,
+            WeaknessTag::Greed,
+            WeaknessTag::Blast,
+            12345,
+            &full_pool,
+        );
 
         assert_eq!(
             offers.offers.len(),
@@ -1214,11 +1236,29 @@ mod tests {
     }
 
     #[test]
+    fn test_generate_smuggler_hatch_offers_respects_pool() {
+        // Empty pool: no bits set, so no items are valid
+        let empty_pool = [0u8; ITEM_POOL_SIZE];
+        let offers = generate_smuggler_hatch_offers(
+            2,
+            WeaknessTag::Greed,
+            WeaknessTag::Blast,
+            12345,
+            &empty_pool,
+        );
+
+        assert_eq!(
+            offers.offers.len(),
+            0,
+            "Empty pool should produce no offers"
+        );
+    }
+
+    #[test]
     fn test_generate_poi_offers_valid_pois() {
-        // Valid item POIs
+        // Valid item POIs (cache-type only; Smuggler Hatch uses its own path)
         assert!(generate_poi_offers(2, 1, WeaknessTag::Stone, WeaknessTag::Frost, 123).is_some());
         assert!(generate_poi_offers(3, 1, WeaknessTag::Stone, WeaknessTag::Frost, 123).is_some());
-        assert!(generate_poi_offers(9, 1, WeaknessTag::Stone, WeaknessTag::Frost, 123).is_some());
         assert!(generate_poi_offers(12, 1, WeaknessTag::Stone, WeaknessTag::Frost, 123).is_some());
         assert!(generate_poi_offers(13, 1, WeaknessTag::Stone, WeaknessTag::Frost, 123).is_some());
     }
@@ -1230,8 +1270,9 @@ mod tests {
         assert!(generate_poi_offers(4, 1, WeaknessTag::Stone, WeaknessTag::Frost, 123).is_none()); // Tool Oil
         assert!(generate_poi_offers(5, 1, WeaknessTag::Stone, WeaknessTag::Frost, 123).is_none()); // Rest Alcove
         assert!(generate_poi_offers(6, 1, WeaknessTag::Stone, WeaknessTag::Frost, 123).is_none()); // Survey Beacon
-        assert!(generate_poi_offers(8, 1, WeaknessTag::Stone, WeaknessTag::Frost, 123).is_none());
-        // Rail Waypoint
+        assert!(generate_poi_offers(8, 1, WeaknessTag::Stone, WeaknessTag::Frost, 123).is_none()); // Rail Waypoint
+        assert!(generate_poi_offers(9, 1, WeaknessTag::Stone, WeaknessTag::Frost, 123).is_none());
+        // Smuggler Hatch (uses own path)
     }
 
     #[test]

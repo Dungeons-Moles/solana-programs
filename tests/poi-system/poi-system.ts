@@ -50,8 +50,8 @@ describe("poi-system", () => {
   ): Promise<Keypair> => {
     const generatedMap = Keypair.generate();
 
-    // GeneratedMap space: 8 (discriminator) + 756 (data) = 764 bytes
-    const GENERATED_MAP_SPACE = 764;
+    // GeneratedMap space: 8 (discriminator) + 812 (data) = 820 bytes
+    const GENERATED_MAP_SPACE = 820;
     const rent =
       await provider.connection.getMinimumBalanceForRentExemption(
         GENERATED_MAP_SPACE,
@@ -86,7 +86,7 @@ describe("poi-system", () => {
     // - 1 byte: enemy_count
     // - 192 bytes: enemies (48 * 4)
     // - 1 byte: poi_count
-    // - 200 bytes: pois (50 * 4)
+    // - 256 bytes: pois (64 * 4)
     // - 1 byte: bump
 
     const data = Buffer.alloc(GENERATED_MAP_SPACE);
@@ -136,7 +136,7 @@ describe("poi-system", () => {
     data.writeUInt8(poiCount, offset++);
 
     // pois (each 4 bytes: poi_type, is_used, x, y)
-    for (let i = 0; i < poiCount && i < 50; i++) {
+    for (let i = 0; i < poiCount && i < 64; i++) {
       // poi_type (1=Mole Den, 2=Supply Cache, etc.)
       data.writeUInt8(i === 0 ? 1 : 2, offset++);
       // is_used

@@ -771,10 +771,9 @@ pub mod session_manager {
 
     /// Delegates PoiVrfState account to the MagicBlock delegation program.
     /// Only needed for PvP sessions that use VRF for POI offers.
-    pub fn delegate_poi_vrf_state(ctx: Context<DelegatePoiVrfState>, campaign_level: u8) -> Result<()> {
-        let game_session_key = derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level);
+    pub fn delegate_poi_vrf_state(ctx: Context<DelegatePoiVrfState>, session_key: Pubkey, validator: Option<Pubkey>) -> Result<()> {
         let (expected_poi_vrf, _) = Pubkey::find_program_address(
-            &[b"poi_vrf", game_session_key.as_ref()],
+            &[b"poi_vrf", session_key.as_ref()],
             &POI_SYSTEM_PROGRAM_ID,
         );
         require_keys_eq!(
@@ -782,9 +781,9 @@ pub mod session_manager {
             expected_poi_vrf,
             SessionManagerError::Unauthorized
         );
-        let poi_vrf_seeds: &[&[u8]] = &[b"poi_vrf", game_session_key.as_ref()];
+        let poi_vrf_seeds: &[&[u8]] = &[b"poi_vrf", session_key.as_ref()];
         ctx.accounts
-            .delegate_poi_vrf_state(&ctx.accounts.player, poi_vrf_seeds, local_delegate_config(None))?;
+            .delegate_poi_vrf_state(&ctx.accounts.player, poi_vrf_seeds, local_delegate_config(validator))?;
         Ok(())
     }
 
@@ -1946,7 +1945,6 @@ pub struct DelegateMapPois<'info> {
 
 #[delegate]
 #[derive(Accounts)]
-#[instruction(campaign_level: u8)]
 pub struct DelegatePoiVrfState<'info> {
     #[account(mut, del)]
     /// CHECK: Validated in handler as poi-vrf PDA for the delegated session.

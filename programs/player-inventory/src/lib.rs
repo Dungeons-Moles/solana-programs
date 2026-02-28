@@ -51,6 +51,14 @@ pub const GAMEPLAY_STATE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     0xa5, 0x69, 0x33, 0xc3, 0x32, 0x44, 0x5d, 0xb7, 0x52, 0x8d, 0x7a, 0x6b, 0xc3, 0x01, 0x56, 0x1e,
     0x68, 0x50, 0xaa, 0x96, 0x7a, 0x85, 0xea, 0x62, 0xb5, 0x79, 0xe3, 0x23, 0xe4, 0xa8, 0x88, 0x36,
 ]);
+
+/// Session manager program ID for session key rotation CPI
+pub const SESSION_MANAGER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
+    0x58, 0x20, 0x64, 0x87, 0xdf, 0xd8, 0x68, 0xf1, 0xa4, 0x79, 0x15, 0x8b, 0xb2, 0x8a, 0x56, 0x0c,
+    0xa9, 0x4f, 0x56, 0x2e, 0x62, 0x85, 0x26, 0xb7, 0x4f, 0x8b, 0xa1, 0x4d, 0x08, 0x36, 0x20, 0x99,
+]);
+
+pub const SESSION_MANAGER_AUTHORITY_SEED: &[u8] = b"session_manager_authority";
 fn local_delegate_config(validator: Option<Pubkey>) -> DelegateConfig {
     DelegateConfig {
         validator,
@@ -389,6 +397,17 @@ pub mod player_inventory {
             player: ctx.accounts.inventory.player,
         });
 
+        Ok(())
+    }
+
+    /// Rotates the owner (session_signer) on an inventory account.
+    /// Called via CPI from session-manager during rotate_session_key.
+    /// Only the session_manager_authority PDA can authorize this.
+    pub fn rotate_inventory_owner(
+        ctx: Context<RotateInventoryOwner>,
+        new_owner: Pubkey,
+    ) -> Result<()> {
+        ctx.accounts.inventory.player = new_owner;
         Ok(())
     }
 
@@ -1187,6 +1206,20 @@ pub struct CloseInventory<'info> {
 
     #[account(mut)]
     pub player: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct RotateInventoryOwner<'info> {
+    #[account(mut)]
+    pub inventory: Account<'info, PlayerInventory>,
+
+    #[account(
+        seeds = [SESSION_MANAGER_AUTHORITY_SEED],
+        bump,
+        seeds::program = SESSION_MANAGER_PROGRAM_ID
+    )]
+    /// Session manager PDA authority (only session-manager can sign)
+    pub session_manager_authority: Signer<'info>,
 }
 
 // =============================================================================

@@ -9,26 +9,48 @@ export function getSessionCounterPda(): [PublicKey, number] {
   );
 }
 
-export function getSessionPda(
-  player: PublicKey,
-  campaignLevel: number
+export function getSessionNoncesPda(
+  player: PublicKey
 ): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
-    [Buffer.from("session"), player.toBuffer(), Buffer.from([campaignLevel])],
+    [Buffer.from("session_nonces"), player.toBuffer()],
     PROGRAM_IDS.sessionManager
   );
 }
 
-export function getDuelSessionPda(player: PublicKey): [PublicKey, number] {
+export function getSessionPda(
+  player: PublicKey,
+  campaignLevel: number,
+  nonce: bigint | number = 0
+): [PublicKey, number] {
+  const nonceBuf = Buffer.alloc(8);
+  nonceBuf.writeBigUInt64LE(BigInt(nonce));
   return PublicKey.findProgramAddressSync(
-    [Buffer.from("duel_session"), player.toBuffer()],
+    [Buffer.from("session"), player.toBuffer(), Buffer.from([campaignLevel]), nonceBuf],
     PROGRAM_IDS.sessionManager
   );
 }
 
-export function getGauntletSessionPda(player: PublicKey): [PublicKey, number] {
+export function getDuelSessionPda(
+  player: PublicKey,
+  nonce: bigint | number = 0
+): [PublicKey, number] {
+  const nonceBuf = Buffer.alloc(8);
+  nonceBuf.writeBigUInt64LE(BigInt(nonce));
   return PublicKey.findProgramAddressSync(
-    [Buffer.from("gauntlet_session"), player.toBuffer()],
+    [Buffer.from("duel_session"), player.toBuffer(), nonceBuf],
+    PROGRAM_IDS.sessionManager
+  );
+}
+
+export function getGauntletSessionPda(
+  player: PublicKey,
+  nonce: bigint | number = 0
+): [PublicKey, number] {
+  const nonceBuf = Buffer.alloc(8);
+  nonceBuf.writeBigUInt64LE(BigInt(nonce));
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("gauntlet_session"), player.toBuffer(), nonceBuf],
     PROGRAM_IDS.sessionManager
   );
 }

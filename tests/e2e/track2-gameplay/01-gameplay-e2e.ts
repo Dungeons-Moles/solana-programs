@@ -16,6 +16,7 @@ import {
 } from "../shared/setup";
 import {
   getSessionCounterPda,
+  getSessionNoncesPda,
   getSessionPda,
   getSessionManagerAuthorityPda,
   getPlayerProfilePda,
@@ -47,6 +48,7 @@ const ER_RPC_URL =
   process.env.EXPO_PUBLIC_EPHEMERAL_PROVIDER_ENDPOINT || "http://127.0.0.1:7799";
 
 const DELEGATION_PROGRAM_ID = PROGRAM_IDS.delegation;
+const ER_VALIDATOR = new PublicKey("mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev");
 
 // ── Shared mutable state across describe blocks ─────────────────────────────
 let connection: Connection;
@@ -61,6 +63,7 @@ const campaignLevel = 1;
 
 // PDAs populated during tests
 let sessionCounterPda: PublicKey;
+let sessionNoncesPda: PublicKey;
 let mapConfigPda: PublicKey;
 let playerProfilePda: PublicKey;
 let sessionPda: PublicKey;
@@ -164,6 +167,25 @@ const waitForBaseOwner = async (
 };
 
 /**
+ * Poll ER until an account owner matches expected program.
+ */
+const waitForErOwner = async (
+  account: PublicKey,
+  _owner: PublicKey,
+  label: string
+): Promise<void> => {
+  for (let i = 0; i < 60; i++) {
+    const info = await erConnection.getAccountInfo(account, "confirmed");
+    if (info) return;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  const info = await erConnection.getAccountInfo(account, "confirmed");
+  throw new Error(
+    `${label} account did not become visible on ER (currentOwner=${info?.owner.toBase58() ?? "missing"})`
+  );
+};
+
+/**
  * Decode game state from raw account data on an arbitrary connection.
  */
 const fetchGameStateFrom = async (
@@ -211,6 +233,7 @@ before(async function () {
   // Generate fresh user + session signer keypairs
   user = Keypair.generate();
   sessionSigner = Keypair.generate();
+  [sessionNoncesPda] = getSessionNoncesPda(user.publicKey);
 
   // Fund both
   await airdropAndConfirm(connection, user.publicKey, 5 * LAMPORTS_PER_SOL);
@@ -403,6 +426,7 @@ describe("Track 2 E2E: Create profile + start session", function () {
     await programs.sessionManager.methods
       .startSession(campaignLevel)
       .accounts({
+        sessionNonces: sessionNoncesPda,
         gameSession: sessionPda,
         sessionCounter: sessionCounterPda,
         playerProfile: playerProfilePda,
@@ -426,6 +450,11 @@ describe("Track 2 E2E: Create profile + start session", function () {
       ])
       .signers([user, sessionSigner])
       .rpc();
+
+    // Verify SessionNonces account created with correct bump
+    const noncesInfo = await connection.getAccountInfo(sessionNoncesPda, "confirmed");
+    expect(noncesInfo).to.not.be.null;
+    expect(noncesInfo!.owner.equals(PROGRAM_IDS.sessionManager)).to.be.true;
 
     // Verify all sub-accounts created
     const sessionInfo = await connection.getAccountInfo(sessionPda, "confirmed");
@@ -472,7 +501,7 @@ describe("Track 2 E2E: Delegate to ER", function () {
     );
 
     const ix = await programs.gameplayState.methods
-      .delegateGameplayAccounts()
+      .delegateGameplayAccounts(ER_VALIDATOR)
       .accountsStrict({
         bufferGameState: gameplayGameStateDelegate.buffer,
         delegationRecordGameState: gameplayGameStateDelegate.delegationRecord,
@@ -506,7 +535,7 @@ describe("Track 2 E2E: Delegate to ER", function () {
     );
 
     const ix = await programs.mapGenerator.methods
-      .delegateGeneratedMap()
+      .delegateGeneratedMap(ER_VALIDATOR)
       .accountsStrict({
         bufferGeneratedMap: generatedMapDelegate.buffer,
         delegationRecordGeneratedMap: generatedMapDelegate.delegationRecord,
@@ -533,7 +562,7 @@ describe("Track 2 E2E: Delegate to ER", function () {
     );
 
     const ix = await programs.playerInventory.methods
-      .delegateInventory()
+      .delegateInventory(ER_VALIDATOR)
       .accountsStrict({
         bufferInventory: inventoryDelegate.buffer,
         delegationRecordInventory: inventoryDelegate.delegationRecord,
@@ -560,7 +589,7 @@ describe("Track 2 E2E: Delegate to ER", function () {
     );
 
     const ix = await programs.poiSystem.methods
-      .delegateMapPois()
+      .delegateMapPois(ER_VALIDATOR)
       .accountsStrict({
         bufferMapPois: mapPoisDelegate.buffer,
         delegationRecordMapPois: mapPoisDelegate.delegationRecord,
@@ -582,11 +611,12 @@ describe("Track 2 E2E: Delegate to ER", function () {
 
   it("delegates session (user signs)", async () => {
     const ix = await programs.sessionManager.methods
-      .delegateSession(campaignLevel)
+      .delegateSession(campaignLevel, ER_VALIDATOR)
       .accounts({
         gameSession: sessionPda,
         player: user.publicKey,
         sessionSigner: sessionSigner.publicKey,
+        sessionNonces: sessionNoncesPda,
       } as any)
       .instruction();
 
@@ -622,16 +652,25 @@ describe("Track 2 E2E: Gameplay on ER", function () {
   this.timeout(120_000);
 
   it("moves player on ER with retry logic", async () => {
+    // Base-layer delegation transactions need a short propagation window before
+    // ER accepts writes to delegated accounts.
+    await waitForErOwner(gameStatePda, DELEGATION_PROGRAM_ID, "game_state");
+    await waitForErOwner(mapEnemiesPda, DELEGATION_PROGRAM_ID, "map_enemies");
+    await waitForErOwner(generatedMapPda, DELEGATION_PROGRAM_ID, "generated_map");
+    await waitForErOwner(inventoryPda, DELEGATION_PROGRAM_ID, "inventory");
+    await waitForErOwner(mapPoisPda, DELEGATION_PROGRAM_ID, "map_pois");
+    await waitForErOwner(sessionPda, DELEGATION_PROGRAM_ID, "session");
+
     const targetX = initialX > 0 ? initialX - 1 : initialX + 1;
     const targetY = initialY;
 
     let moveSucceeded = false;
     let lastMoveError: unknown = null;
 
-    for (let attempt = 1; attempt <= 12; attempt++) {
+    for (let attempt = 1; attempt <= 24; attempt++) {
       const moveTx = await programs.gameplayState.methods
         .movePlayer(targetX, targetY)
-        .accounts({
+        .accountsPartial({
           gameState: gameStatePda,
           gameSession: sessionPda,
           mapEnemies: mapEnemiesPda,
@@ -642,8 +681,9 @@ describe("Track 2 E2E: Gameplay on ER", function () {
           mapGeneratorProgram: programs.mapGenerator.programId,
           mapPois: mapPoisPda,
           poiSystemProgram: programs.poiSystem.programId,
+          gameplayVrfState: null,
           player: sessionSigner.publicKey,
-        } as any)
+        })
         .transaction();
 
       moveTx.feePayer = sessionSigner.publicKey;
@@ -677,7 +717,7 @@ describe("Track 2 E2E: Gameplay on ER", function () {
     }
 
     if (!moveSucceeded) {
-      throw lastMoveError ?? new Error("movePlayer failed after 12 attempts");
+      throw lastMoveError ?? new Error("movePlayer failed after 24 attempts");
     }
 
     // Verify position changed on ER
@@ -702,6 +742,13 @@ describe("Track 2 E2E: Undelegate", function () {
   this.timeout(120_000);
 
   it("undelegates gameplay accounts (gameState + mapEnemies)", async () => {
+    await waitForErOwner(gameStatePda, DELEGATION_PROGRAM_ID, "game_state");
+    await waitForErOwner(mapEnemiesPda, DELEGATION_PROGRAM_ID, "map_enemies");
+    await waitForErOwner(generatedMapPda, DELEGATION_PROGRAM_ID, "generated_map");
+    await waitForErOwner(inventoryPda, DELEGATION_PROGRAM_ID, "inventory");
+    await waitForErOwner(mapPoisPda, DELEGATION_PROGRAM_ID, "map_pois");
+    await waitForErOwner(sessionPda, DELEGATION_PROGRAM_ID, "session");
+
     const ix = await programs.gameplayState.methods
       .undelegateGameplayAccounts()
       .accounts({
@@ -830,7 +877,7 @@ describe("Track 2 E2E: End session", function () {
 
     const endSessionIx = await programs.sessionManager.methods
       .endSession(campaignLevel)
-      .accounts({
+      .accountsPartial({
         gameSession: sessionPda,
         gameState: gameStatePda,
         mapEnemies: mapEnemiesPda,
@@ -841,12 +888,15 @@ describe("Track 2 E2E: End session", function () {
         sessionSigner: sessionSigner.publicKey,
         sessionManagerAuthority: sessionManagerAuthorityPda,
         inventory: inventoryPda,
+        mapVrfState: null,
+        poiVrfState: null,
+        gameplayVrfState: null,
         playerInventoryProgram: programs.playerInventory.programId,
         gameplayStateProgram: programs.gameplayState.programId,
         playerProfileProgram: programs.playerProfile.programId,
         mapGeneratorProgram: programs.mapGenerator.programId,
         poiSystemProgram: programs.poiSystem.programId,
-      } as any)
+      })
       .instruction();
 
     const tx = new Transaction().add(endSessionIx);
@@ -898,6 +948,7 @@ describe("Track 2 E2E: Error cases", function () {
     );
 
     const [noProfilePda] = getPlayerProfilePda(noProfileUser.publicKey);
+    const [noSessionNoncesPda] = getSessionNoncesPda(noProfileUser.publicKey);
     const [noSessionPda] = getSessionPda(noProfileUser.publicKey, campaignLevel);
     const [noGameStatePda] = getGameStatePda(noSessionPda);
     const [noMapEnemiesPda] = getMapEnemiesPda(noSessionPda);
@@ -909,6 +960,7 @@ describe("Track 2 E2E: Error cases", function () {
       await programs.sessionManager.methods
         .startSession(campaignLevel)
         .accounts({
+          sessionNonces: noSessionNoncesPda,
           gameSession: noSessionPda,
           sessionCounter: sessionCounterPda,
           playerProfile: noProfilePda,
@@ -959,6 +1011,7 @@ describe("Track 2 E2E: Error cases", function () {
     await programs.sessionManager.methods
       .startSession(campaignLevel)
       .accounts({
+        sessionNonces: sessionNoncesPda,
         gameSession: dupSessionPda,
         sessionCounter: sessionCounterPda,
         playerProfile: playerProfilePda,
@@ -991,6 +1044,7 @@ describe("Track 2 E2E: Error cases", function () {
       await programs.sessionManager.methods
         .startSession(campaignLevel)
         .accounts({
+          sessionNonces: sessionNoncesPda,
           gameSession: dupSessionPda,
           sessionCounter: sessionCounterPda,
           playerProfile: playerProfilePda,
@@ -1022,5 +1076,117 @@ describe("Track 2 E2E: Error cases", function () {
         /already in use|custom program error|Error|already.*exist|ConstraintRaw/i
       );
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. Session nonce override flow
+// ─────────────────────────────────────────────────────────────────────────────
+describe("Track 2 E2E: Session nonce override", function () {
+  this.timeout(60_000);
+
+  it("override_campaign_session increments campaign nonce", async () => {
+    // Read nonces before override
+    const noncesBefore = (
+      programs.sessionManager as any
+    ).coder.accounts.decode(
+      "sessionNonces",
+      (await connection.getAccountInfo(sessionNoncesPda, "confirmed"))!.data
+    ) as { campaignNonce: { toString(): string } };
+    const nonceBefore = BigInt(noncesBefore.campaignNonce.toString());
+
+    await programs.sessionManager.methods
+      .overrideCampaignSession()
+      .accounts({
+        sessionNonces: sessionNoncesPda,
+        player: user.publicKey,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .signers([user])
+      .rpc();
+
+    const noncesAfter = (
+      programs.sessionManager as any
+    ).coder.accounts.decode(
+      "sessionNonces",
+      (await connection.getAccountInfo(sessionNoncesPda, "confirmed"))!.data
+    ) as { campaignNonce: { toString(): string } };
+    const nonceAfter = BigInt(noncesAfter.campaignNonce.toString());
+
+    expect(nonceAfter).to.equal(nonceBefore + 1n);
+  });
+
+  it("can start a new session at the new nonce PDA", async () => {
+    // Read current campaign nonce
+    const nonces = (
+      programs.sessionManager as any
+    ).coder.accounts.decode(
+      "sessionNonces",
+      (await connection.getAccountInfo(sessionNoncesPda, "confirmed"))!.data
+    ) as { campaignNonce: { toString(): string } };
+    const currentNonce = BigInt(nonces.campaignNonce.toString());
+
+    // Derive session PDA at the new nonce
+    const [newSessionPda] = getSessionPda(
+      user.publicKey,
+      campaignLevel,
+      currentNonce
+    );
+    const [newGameStatePda] = getGameStatePda(newSessionPda);
+    const [newMapEnemiesPda] = getMapEnemiesPda(newSessionPda);
+    const [newGeneratedMapPda] = getGeneratedMapPda(newSessionPda);
+    const [newInventoryPda] = getInventoryPda(newSessionPda);
+    const [newMapPoisPda] = getMapPoisPda(newSessionPda);
+
+    const overrideSessionSigner = Keypair.generate();
+    await airdropAndConfirm(
+      connection,
+      overrideSessionSigner.publicKey,
+      2 * LAMPORTS_PER_SOL
+    );
+
+    await programs.sessionManager.methods
+      .startSession(campaignLevel)
+      .accounts({
+        sessionNonces: sessionNoncesPda,
+        gameSession: newSessionPda,
+        sessionCounter: sessionCounterPda,
+        playerProfile: playerProfilePda,
+        player: user.publicKey,
+        sessionSigner: overrideSessionSigner.publicKey,
+        mapConfig: mapConfigPda,
+        generatedMap: newGeneratedMapPda,
+        gameState: newGameStatePda,
+        mapEnemies: newMapEnemiesPda,
+        mapPois: newMapPoisPda,
+        inventory: newInventoryPda,
+        mapGeneratorProgram: programs.mapGenerator.programId,
+        gameplayStateProgram: programs.gameplayState.programId,
+        poiSystemProgram: programs.poiSystem.programId,
+        playerInventoryProgram: programs.playerInventory.programId,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .preInstructions([
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+        ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
+      ])
+      .signers([user, overrideSessionSigner])
+      .rpc();
+
+    // Verify new session created at new PDA
+    const sessionInfo = await connection.getAccountInfo(
+      newSessionPda,
+      "confirmed"
+    );
+    expect(sessionInfo).to.not.be.null;
+    expect(sessionInfo!.owner.equals(PROGRAM_IDS.sessionManager)).to.be.true;
+
+    // Old session at nonce=0 should still exist (stuck, not closed)
+    const [oldSessionPda] = getSessionPda(user.publicKey, campaignLevel, 0);
+    const oldSessionInfo = await connection.getAccountInfo(
+      oldSessionPda,
+      "confirmed"
+    );
+    expect(oldSessionInfo).to.not.be.null;
   });
 });

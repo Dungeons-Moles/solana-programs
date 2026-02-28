@@ -510,8 +510,8 @@ pub struct RequestMapVrf<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
 
-    /// CHECK: Session PDA owned by session-manager; used for PDA derivation.
-    #[account(owner = SESSION_MANAGER_PROGRAM_ID @ MapGeneratorError::InvalidSessionOwner)]
+    /// CHECK: Session PDA key used only for VRF PDA derivation.
+    /// This may be called before session account initialization.
     pub session: UncheckedAccount<'info>,
 
     #[account(

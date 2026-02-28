@@ -2094,6 +2094,17 @@ pub mod gameplay_state {
         Ok(())
     }
 
+    /// Rotates the session_signer on a GameState account.
+    /// Called via CPI from session-manager during rotate_session_key.
+    /// Only the session_manager_authority PDA can authorize this.
+    pub fn rotate_game_state_session_key(
+        ctx: Context<RotateGameStateSessionKey>,
+        new_session_signer: Pubkey,
+    ) -> Result<()> {
+        ctx.accounts.game_state.session_signer = new_session_signer;
+        Ok(())
+    }
+
     /// Closes GameplayVrfState account and returns rent to the player.
     /// Called via CPI from session-manager during end_session/abandon_session.
     pub fn close_gameplay_vrf_state(ctx: Context<CloseGameplayVrfState>) -> Result<()> {
@@ -3873,6 +3884,20 @@ pub struct ConfigureRunMode<'info> {
         seeds::program = SESSION_MANAGER_PROGRAM_ID
     )]
     /// Must be the session-manager PDA signer used to authorize mode configuration.
+    pub session_manager_authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct RotateGameStateSessionKey<'info> {
+    #[account(mut)]
+    pub game_state: Account<'info, GameState>,
+
+    #[account(
+        seeds = [SESSION_MANAGER_RUNMODE_AUTHORITY_SEED],
+        bump,
+        seeds::program = SESSION_MANAGER_PROGRAM_ID
+    )]
+    /// Session manager PDA authority (only session-manager can sign)
     pub session_manager_authority: Signer<'info>,
 }
 

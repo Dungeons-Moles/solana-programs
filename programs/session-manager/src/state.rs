@@ -62,6 +62,23 @@ impl GameSession {
     pub const SESSION_SIGNER_OFFSET: usize = 77;
 }
 
+/// Per-player session nonces for override-based recovery.
+/// When a session is permanently stuck, incrementing the mode's nonce
+/// causes start_session to create at a new PDA, bypassing the old one.
+/// PDA: [b"session_nonces", player.key()]
+#[account]
+#[derive(InitSpace)]
+pub struct SessionNonces {
+    pub campaign_nonce: u64,
+    pub duel_nonce: u64,
+    pub gauntlet_nonce: u64,
+    pub bump: u8,
+}
+
+impl SessionNonces {
+    pub const SEED_PREFIX: &'static [u8] = b"session_nonces";
+}
+
 /// Global counter for generating unique session IDs
 #[account]
 #[derive(InitSpace)]

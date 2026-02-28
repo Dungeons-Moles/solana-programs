@@ -16,6 +16,7 @@ import {
 } from "../shared/setup";
 import {
   getSessionCounterPda,
+  getSessionNoncesPda,
   getSessionPda,
   getSessionManagerAuthorityPda,
   getPlayerProfilePda,
@@ -351,6 +352,7 @@ const navigatePlayerTo = async (
           mapGeneratorProgram: PROGRAM_IDS.mapGenerator,
           mapPois: ctx.mapPoisPda,
           poiSystemProgram: PROGRAM_IDS.poiSystem,
+          gameplayVrfState: null,
           player: ctx.sessionSigner.publicKey,
         } as any)
         .instruction();
@@ -445,6 +447,7 @@ const exhaustMovesToNight = async (
           mapGeneratorProgram: PROGRAM_IDS.mapGenerator,
           mapPois: ctx.mapPoisPda,
           poiSystemProgram: PROGRAM_IDS.poiSystem,
+          gameplayVrfState: null,
           player: ctx.sessionSigner.publicKey,
         } as any)
         .instruction();
@@ -561,6 +564,7 @@ const buildInteractRest = async (
       gameplayAuthority: gameplayAuthorityPda,
       gameplayStateProgram: PROGRAM_IDS.gameplayState,
       playerInventoryProgram: PROGRAM_IDS.playerInventory,
+      gameplayVrfState: null,
       player: ctx.sessionSigner.publicKey,
     } as any)
     .instruction();
@@ -581,6 +585,7 @@ const buildGenerateCacheOffer = async (
       playerInventoryProgram: PROGRAM_IDS.playerInventory,
       gameplayStateProgram: PROGRAM_IDS.gameplayState,
       gameSession: ctx.sessionPda,
+      poiVrfState: null,
       player: ctx.sessionSigner.publicKey,
     } as any)
     .instruction();
@@ -602,6 +607,7 @@ const buildInteractPickItem = async (
       playerInventoryProgram: PROGRAM_IDS.playerInventory,
       gameplayStateProgram: PROGRAM_IDS.gameplayState,
       gameSession: ctx.sessionPda,
+      poiVrfState: null,
       player: ctx.sessionSigner.publicKey,
     } as any)
     .instruction();
@@ -619,6 +625,7 @@ const buildGenerateOilOffer = async (
       inventory: ctx.inventoryPda,
       poiAuthority: poiAuthorityPda,
       playerInventoryProgram: PROGRAM_IDS.playerInventory,
+      poiVrfState: null,
       player: ctx.sessionSigner.publicKey,
     } as any)
     .instruction();
@@ -637,6 +644,7 @@ const buildInteractToolOil = async (
       inventory: ctx.inventoryPda,
       poiAuthority: poiAuthorityPda,
       playerInventoryProgram: PROGRAM_IDS.playerInventory,
+      poiVrfState: null,
       player: ctx.sessionSigner.publicKey,
     } as any)
     .instruction();
@@ -652,6 +660,7 @@ const buildEnterShop = async (
       mapPois: ctx.mapPoisPda,
       gameState: ctx.gameStatePda,
       gameSession: ctx.sessionPda,
+      poiVrfState: null,
       player: ctx.sessionSigner.publicKey,
     } as any)
     .instruction();
@@ -807,9 +816,11 @@ const createProfileAndCampaignSession = async (
     .signers([ctx.user])
     .rpc();
 
+  const [sessionNoncesPda] = getSessionNoncesPda(ctx.user.publicKey);
   await programs.sessionManager.methods
     .startSession(ctx.campaignLevel)
     .accounts({
+      sessionNonces: sessionNoncesPda,
       gameSession: ctx.sessionPda,
       sessionCounter: sessionCounterPda,
       playerProfile: ctx.playerProfilePda,
@@ -821,6 +832,9 @@ const createProfileAndCampaignSession = async (
       mapEnemies: ctx.mapEnemiesPda,
       mapPois: ctx.mapPoisPda,
       inventory: ctx.inventoryPda,
+      mapVrfState: null,
+      poiVrfState: null,
+      gameplayVrfState: null,
       mapGeneratorProgram: PROGRAM_IDS.mapGenerator,
       gameplayStateProgram: PROGRAM_IDS.gameplayState,
       poiSystemProgram: PROGRAM_IDS.poiSystem,
@@ -864,6 +878,9 @@ const createProfileAndDuelSession = async (
       mapEnemies: ctx.mapEnemiesPda,
       mapPois: ctx.mapPoisPda,
       inventory: ctx.inventoryPda,
+      mapVrfState: null,
+      poiVrfState: null,
+      gameplayVrfState: null,
       mapGeneratorProgram: PROGRAM_IDS.mapGenerator,
       gameplayStateProgram: PROGRAM_IDS.gameplayState,
       poiSystemProgram: PROGRAM_IDS.poiSystem,
@@ -906,6 +923,9 @@ const createProfileAndGauntletSession = async (
       mapEnemies: ctx.mapEnemiesPda,
       mapPois: ctx.mapPoisPda,
       inventory: ctx.inventoryPda,
+      mapVrfState: null,
+      poiVrfState: null,
+      gameplayVrfState: null,
       mapGeneratorProgram: PROGRAM_IDS.mapGenerator,
       gameplayStateProgram: PROGRAM_IDS.gameplayState,
       poiSystemProgram: PROGRAM_IDS.poiSystem,
@@ -947,6 +967,7 @@ const createProfileAndGauntletSession = async (
     .accounts({
       gameState: ctx.gameStatePda,
       player: ctx.user.publicKey,
+      gameplayVrfState: null,
       gauntletConfig: gauntletConfigPda,
       gauntletPoolVault: gauntletPoolVaultPda,
       companyTreasury: treasuryPk,
@@ -988,6 +1009,9 @@ const endSession = async (ctx: SessionCtx): Promise<void> => {
         sessionSigner: ctx.sessionSigner.publicKey,
         sessionManagerAuthority: sessionManagerAuthorityPda,
         inventory: ctx.inventoryPda,
+        mapVrfState: null,
+        poiVrfState: null,
+        gameplayVrfState: null,
         playerInventoryProgram: PROGRAM_IDS.playerInventory,
         gameplayStateProgram: PROGRAM_IDS.gameplayState,
         playerProfileProgram: PROGRAM_IDS.playerProfile,

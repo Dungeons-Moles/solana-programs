@@ -20,7 +20,7 @@ idl-build = ["anchor-lang/idl-build"]
 sha2 = "0.10"
 
 [dependencies]
-anchor-lang = "0.32.0"
+anchor-lang = { version = "0.32.0", features = ["init-if-needed"] }
 gameplay-state = { path = "../gameplay-state", features = ["cpi"] }
 map-generator = { path = "../map-generator", features = ["cpi"] }
 player-inventory = { path = "../player-inventory", features = ["cpi"] }

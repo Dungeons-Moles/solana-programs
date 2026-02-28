@@ -13,7 +13,7 @@ use gameplay_state::state::{GameState, MapEnemies};
 use map_generator::program::MapGenerator;
 use map_generator::state::{GeneratedMap, MapConfig as MapConfigAccount};
 use player_inventory::program::PlayerInventory;
-use state::{GameSession, SessionCounter, EMPTY_STATE_HASH};
+use state::{GameSession, SessionCounter, SessionNonces, EMPTY_STATE_HASH};
 
 declare_id!("6w1XVMSTRmZU9AWCKVvKohGAHSFMENhda7vqhKPQ8TPn");
 
@@ -94,6 +94,9 @@ pub mod session_manager {
     /// - Initializes inventory via CPI to player-inventory
     /// - Emits SessionStarted event
     pub fn start_session(ctx: Context<StartSession>, campaign_level: u8) -> Result<()> {
+        // Store bump on first creation (idempotent for existing accounts)
+        ctx.accounts.session_nonces.bump = ctx.bumps.session_nonces;
+
         let player_profile = &ctx.accounts.player_profile;
 
         // Validate campaign level is within range
@@ -276,6 +279,9 @@ pub mod session_manager {
     /// - Derives duel seed on-chain.
     /// - Does not consume campaign runs.
     pub fn start_duel_session(ctx: Context<StartDuelSession>) -> Result<()> {
+        // Store bump on first creation (idempotent for existing accounts)
+        ctx.accounts.session_nonces.bump = ctx.bumps.session_nonces;
+
         let player_profile = &ctx.accounts.player_profile;
         let campaign_level = DUEL_CAMPAIGN_LEVEL;
 
@@ -289,9 +295,10 @@ pub mod session_manager {
             .checked_add(1)
             .ok_or(SessionManagerError::ArithmeticOverflow)?;
 
-        // Derive session PDA key for VRF lookup (duel uses fixed seed prefix)
+        // Derive session PDA key for VRF lookup (duel uses fixed seed prefix + nonce)
+        let duel_nonce_bytes = ctx.accounts.session_nonces.duel_nonce.to_le_bytes();
         let (session_pda, _) = Pubkey::find_program_address(
-            &[GameSession::DUEL_SEED_PREFIX, session_player.as_ref()],
+            &[GameSession::DUEL_SEED_PREFIX, session_player.as_ref(), &duel_nonce_bytes],
             &crate::ID,
         );
 
@@ -466,6 +473,9 @@ pub mod session_manager {
 
     /// Starts a gauntlet session using the same fixed difficulty profile as Duels.
     pub fn start_gauntlet_session(ctx: Context<StartGauntletSession>) -> Result<()> {
+        // Store bump on first creation (idempotent for existing accounts)
+        ctx.accounts.session_nonces.bump = ctx.bumps.session_nonces;
+
         let player_profile = &ctx.accounts.player_profile;
         let campaign_level = GAUNTLET_CAMPAIGN_LEVEL;
 
@@ -479,9 +489,10 @@ pub mod session_manager {
             .checked_add(1)
             .ok_or(SessionManagerError::ArithmeticOverflow)?;
 
-        // Derive session PDA key for VRF lookup
+        // Derive session PDA key for VRF lookup (gauntlet uses prefix + nonce)
+        let gauntlet_nonce_bytes = ctx.accounts.session_nonces.gauntlet_nonce.to_le_bytes();
         let (session_pda, _) = Pubkey::find_program_address(
-            &[GameSession::GAUNTLET_SEED_PREFIX, session_player.as_ref()],
+            &[GameSession::GAUNTLET_SEED_PREFIX, session_player.as_ref(), &gauntlet_nonce_bytes],
             &crate::ID,
         );
 
@@ -656,7 +667,7 @@ pub mod session_manager {
     /// Delegates gameplay-state account to the MagicBlock delegation program.
     pub fn delegate_game_state(ctx: Context<DelegateGameState>, campaign_level: u8) -> Result<()> {
         let game_session_key =
-            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level);
+            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level, ctx.accounts.session_nonces.campaign_nonce);
         let (expected_game_state, _) = Pubkey::find_program_address(
             &[b"game_state", game_session_key.as_ref()],
             &gameplay_state::ID,
@@ -681,7 +692,7 @@ pub mod session_manager {
         campaign_level: u8,
     ) -> Result<()> {
         let game_session_key =
-            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level);
+            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level, ctx.accounts.session_nonces.campaign_nonce);
         let (expected_map_enemies, _) = Pubkey::find_program_address(
             &[MapEnemies::SEED_PREFIX, game_session_key.as_ref()],
             &gameplay_state::ID,
@@ -706,7 +717,7 @@ pub mod session_manager {
         campaign_level: u8,
     ) -> Result<()> {
         let game_session_key =
-            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level);
+            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level, ctx.accounts.session_nonces.campaign_nonce);
         let (expected_generated_map, _) = Pubkey::find_program_address(
             &[GeneratedMap::SEED_PREFIX, game_session_key.as_ref()],
             &map_generator::ID,
@@ -728,7 +739,7 @@ pub mod session_manager {
     /// Delegates inventory account to the MagicBlock delegation program.
     pub fn delegate_inventory(ctx: Context<DelegateInventory>, campaign_level: u8) -> Result<()> {
         let game_session_key =
-            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level);
+            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level, ctx.accounts.session_nonces.campaign_nonce);
         let (expected_inventory, _) = Pubkey::find_program_address(
             &[b"inventory", game_session_key.as_ref()],
             &player_inventory::ID,
@@ -750,7 +761,7 @@ pub mod session_manager {
     /// Delegates map-pois account to the MagicBlock delegation program.
     pub fn delegate_map_pois(ctx: Context<DelegateMapPois>, campaign_level: u8) -> Result<()> {
         let game_session_key =
-            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level);
+            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level, ctx.accounts.session_nonces.campaign_nonce);
         let (expected_map_pois, _) = Pubkey::find_program_address(
             &[b"map_pois", game_session_key.as_ref()],
             &POI_SYSTEM_PROGRAM_ID,
@@ -830,15 +841,20 @@ pub mod session_manager {
         };
 
         let campaign_seed = [campaign_level];
+        let campaign_nonce_bytes = ctx.accounts.session_nonces.campaign_nonce.to_le_bytes();
+        let duel_nonce_bytes = ctx.accounts.session_nonces.duel_nonce.to_le_bytes();
+        let gauntlet_nonce_bytes = ctx.accounts.session_nonces.gauntlet_nonce.to_le_bytes();
+
         let campaign_session_seeds: &[&[u8]] = &[
             GameSession::SEED_PREFIX,
             session_player.as_ref(),
             &campaign_seed,
+            &campaign_nonce_bytes,
         ];
         let duel_session_seeds: &[&[u8]] =
-            &[GameSession::DUEL_SEED_PREFIX, session_player.as_ref()];
+            &[GameSession::DUEL_SEED_PREFIX, session_player.as_ref(), &duel_nonce_bytes];
         let gauntlet_session_seeds: &[&[u8]] =
-            &[GameSession::GAUNTLET_SEED_PREFIX, session_player.as_ref()];
+            &[GameSession::GAUNTLET_SEED_PREFIX, session_player.as_ref(), &gauntlet_nonce_bytes];
 
         let (campaign_session_pda, _) =
             Pubkey::find_program_address(campaign_session_seeds, &crate::ID);
@@ -1571,6 +1587,104 @@ pub mod session_manager {
         // 6. Session account will be closed by Anchor (close = player constraint)
         Ok(())
     }
+
+    /// Override a stuck campaign session by incrementing the campaign nonce.
+    /// Wallet-only — no session key required. After calling this, start_session
+    /// will create at a new PDA, bypassing the stuck session.
+    pub fn override_campaign_session(ctx: Context<OverrideSession>) -> Result<()> {
+        let nonces = &mut ctx.accounts.session_nonces;
+        nonces.bump = ctx.bumps.session_nonces;
+        nonces.campaign_nonce = nonces
+            .campaign_nonce
+            .checked_add(1)
+            .ok_or(SessionManagerError::ArithmeticOverflow)?;
+        emit!(SessionOverridden {
+            player: ctx.accounts.player.key(),
+            mode: "campaign".to_string(),
+            new_nonce: nonces.campaign_nonce,
+        });
+        Ok(())
+    }
+
+    /// Override a stuck duel session by incrementing the duel nonce.
+    pub fn override_duel_session(ctx: Context<OverrideSession>) -> Result<()> {
+        let nonces = &mut ctx.accounts.session_nonces;
+        nonces.bump = ctx.bumps.session_nonces;
+        nonces.duel_nonce = nonces
+            .duel_nonce
+            .checked_add(1)
+            .ok_or(SessionManagerError::ArithmeticOverflow)?;
+        emit!(SessionOverridden {
+            player: ctx.accounts.player.key(),
+            mode: "duel".to_string(),
+            new_nonce: nonces.duel_nonce,
+        });
+        Ok(())
+    }
+
+    /// Override a stuck gauntlet session by incrementing the gauntlet nonce.
+    pub fn override_gauntlet_session(ctx: Context<OverrideSession>) -> Result<()> {
+        let nonces = &mut ctx.accounts.session_nonces;
+        nonces.bump = ctx.bumps.session_nonces;
+        nonces.gauntlet_nonce = nonces
+            .gauntlet_nonce
+            .checked_add(1)
+            .ok_or(SessionManagerError::ArithmeticOverflow)?;
+        emit!(SessionOverridden {
+            player: ctx.accounts.player.key(),
+            mode: "gauntlet".to_string(),
+            new_nonce: nonces.gauntlet_nonce,
+        });
+        Ok(())
+    }
+
+    /// Rotates the session key on a game session and its child accounts.
+    /// Requires the player wallet AND the new session signer to both sign.
+    /// Used when the original session key is lost but the wallet is available.
+    pub fn rotate_session_key(ctx: Context<RotateSessionKey>) -> Result<()> {
+        let old_signer = ctx.accounts.game_session.session_signer;
+        let new_signer = ctx.accounts.new_session_signer.key();
+
+        // 1. Update GameSession
+        ctx.accounts.game_session.session_signer = new_signer;
+
+        // 2. CPI to gameplay-state to update GameState.session_signer
+        let authority_bump = ctx.bumps.session_manager_authority;
+        let signer_seeds: &[&[&[u8]]] = &[&[SESSION_MANAGER_AUTHORITY_SEED, &[authority_bump]]];
+
+        gameplay_state::cpi::rotate_game_state_session_key(
+            CpiContext::new_with_signer(
+                ctx.accounts.gameplay_state_program.to_account_info(),
+                gameplay_state::cpi::accounts::RotateGameStateSessionKey {
+                    game_state: ctx.accounts.game_state.to_account_info(),
+                    session_manager_authority: ctx.accounts.session_manager_authority.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            new_signer,
+        )?;
+
+        // 3. CPI to player-inventory to update PlayerInventory.player
+        player_inventory::cpi::rotate_inventory_owner(
+            CpiContext::new_with_signer(
+                ctx.accounts.player_inventory_program.to_account_info(),
+                player_inventory::cpi::accounts::RotateInventoryOwner {
+                    inventory: ctx.accounts.inventory.to_account_info(),
+                    session_manager_authority: ctx.accounts.session_manager_authority.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            new_signer,
+        )?;
+
+        emit!(SessionKeyRotated {
+            player: ctx.accounts.player.key(),
+            session_id: ctx.accounts.game_session.session_id,
+            old_session_signer: old_signer,
+            new_session_signer: new_signer,
+        });
+        Ok(())
+    }
 }
 
 // ============================================================================
@@ -1656,10 +1770,19 @@ impl anchor_lang::Owner for PlayerProfile {
 #[instruction(campaign_level: u8)]
 pub struct StartSession<'info> {
     #[account(
+        init_if_needed,
+        payer = player,
+        space = 8 + SessionNonces::INIT_SPACE,
+        seeds = [SessionNonces::SEED_PREFIX, player.key().as_ref()],
+        bump
+    )]
+    pub session_nonces: Account<'info, SessionNonces>,
+
+    #[account(
         init,
         payer = player,
         space = 8 + GameSession::INIT_SPACE,
-        seeds = [GameSession::SEED_PREFIX, player.key().as_ref(), &[campaign_level]],
+        seeds = [GameSession::SEED_PREFIX, player.key().as_ref(), &[campaign_level], &session_nonces.campaign_nonce.to_le_bytes()],
         bump
     )]
     pub game_session: Account<'info, GameSession>,
@@ -1727,10 +1850,19 @@ pub struct StartSession<'info> {
 #[derive(Accounts)]
 pub struct StartDuelSession<'info> {
     #[account(
+        init_if_needed,
+        payer = player,
+        space = 8 + SessionNonces::INIT_SPACE,
+        seeds = [SessionNonces::SEED_PREFIX, player.key().as_ref()],
+        bump
+    )]
+    pub session_nonces: Account<'info, SessionNonces>,
+
+    #[account(
         init,
         payer = player,
         space = 8 + GameSession::INIT_SPACE,
-        seeds = [GameSession::DUEL_SEED_PREFIX, player.key().as_ref()],
+        seeds = [GameSession::DUEL_SEED_PREFIX, player.key().as_ref(), &session_nonces.duel_nonce.to_le_bytes()],
         bump
     )]
     pub game_session: Account<'info, GameSession>,
@@ -1803,10 +1935,19 @@ pub struct StartDuelSession<'info> {
 #[derive(Accounts)]
 pub struct StartGauntletSession<'info> {
     #[account(
+        init_if_needed,
+        payer = player,
+        space = 8 + SessionNonces::INIT_SPACE,
+        seeds = [SessionNonces::SEED_PREFIX, player.key().as_ref()],
+        bump
+    )]
+    pub session_nonces: Account<'info, SessionNonces>,
+
+    #[account(
         init,
         payer = player,
         space = 8 + GameSession::INIT_SPACE,
-        seeds = [GameSession::GAUNTLET_SEED_PREFIX, player.key().as_ref()],
+        seeds = [GameSession::GAUNTLET_SEED_PREFIX, player.key().as_ref(), &session_nonces.gauntlet_nonce.to_le_bytes()],
         bump
     )]
     pub game_session: Account<'info, GameSession>,
@@ -1886,6 +2027,12 @@ pub struct DelegateSession<'info> {
     /// CHECK: Must match game_session.player, but does not need to sign.
     pub player: AccountInfo<'info>,
     pub session_signer: Signer<'info>,
+
+    #[account(
+        seeds = [SessionNonces::SEED_PREFIX, player.key().as_ref()],
+        bump = session_nonces.bump
+    )]
+    pub session_nonces: Account<'info, SessionNonces>,
 }
 
 #[delegate]
@@ -1897,6 +2044,12 @@ pub struct DelegateGameState<'info> {
     pub game_state: AccountInfo<'info>,
 
     pub player: Signer<'info>,
+
+    #[account(
+        seeds = [SessionNonces::SEED_PREFIX, player.key().as_ref()],
+        bump = session_nonces.bump
+    )]
+    pub session_nonces: Account<'info, SessionNonces>,
 }
 
 #[delegate]
@@ -1908,6 +2061,12 @@ pub struct DelegateMapEnemies<'info> {
     pub map_enemies: AccountInfo<'info>,
 
     pub player: Signer<'info>,
+
+    #[account(
+        seeds = [SessionNonces::SEED_PREFIX, player.key().as_ref()],
+        bump = session_nonces.bump
+    )]
+    pub session_nonces: Account<'info, SessionNonces>,
 }
 
 #[delegate]
@@ -1919,6 +2078,12 @@ pub struct DelegateGeneratedMap<'info> {
     pub generated_map: AccountInfo<'info>,
 
     pub player: Signer<'info>,
+
+    #[account(
+        seeds = [SessionNonces::SEED_PREFIX, player.key().as_ref()],
+        bump = session_nonces.bump
+    )]
+    pub session_nonces: Account<'info, SessionNonces>,
 }
 
 #[delegate]
@@ -1930,6 +2095,12 @@ pub struct DelegateInventory<'info> {
     pub inventory: AccountInfo<'info>,
 
     pub player: Signer<'info>,
+
+    #[account(
+        seeds = [SessionNonces::SEED_PREFIX, player.key().as_ref()],
+        bump = session_nonces.bump
+    )]
+    pub session_nonces: Account<'info, SessionNonces>,
 }
 
 #[delegate]
@@ -1941,6 +2112,12 @@ pub struct DelegateMapPois<'info> {
     pub map_pois: AccountInfo<'info>,
 
     pub player: Signer<'info>,
+
+    #[account(
+        seeds = [SessionNonces::SEED_PREFIX, player.key().as_ref()],
+        bump = session_nonces.bump
+    )]
+    pub session_nonces: Account<'info, SessionNonces>,
 }
 
 #[delegate]
@@ -2068,9 +2245,10 @@ fn validate_secondary_runtime_accounts(
     Ok(())
 }
 
-fn derive_campaign_session_pda(player: &Pubkey, campaign_level: u8) -> Pubkey {
+fn derive_campaign_session_pda(player: &Pubkey, campaign_level: u8, nonce: u64) -> Pubkey {
     let campaign_seed = [campaign_level];
-    let seeds: &[&[u8]] = &[GameSession::SEED_PREFIX, player.as_ref(), &campaign_seed];
+    let nonce_bytes = nonce.to_le_bytes();
+    let seeds: &[&[u8]] = &[GameSession::SEED_PREFIX, player.as_ref(), &campaign_seed, &nonce_bytes];
     Pubkey::find_program_address(seeds, &crate::ID).0
 }
 
@@ -2487,6 +2665,54 @@ pub struct AbandonSession<'info> {
 }
 
 // ============================================================================
+// Override & Rotation Contexts
+// ============================================================================
+
+#[derive(Accounts)]
+pub struct OverrideSession<'info> {
+    #[account(
+        init_if_needed,
+        payer = player,
+        space = 8 + SessionNonces::INIT_SPACE,
+        seeds = [SessionNonces::SEED_PREFIX, player.key().as_ref()],
+        bump
+    )]
+    pub session_nonces: Account<'info, SessionNonces>,
+
+    #[account(mut)]
+    pub player: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct RotateSessionKey<'info> {
+    #[account(mut, has_one = player @ SessionManagerError::Unauthorized)]
+    pub game_session: Account<'info, GameSession>,
+
+    #[account(mut)]
+    /// CHECK: Validated by PDA derivation in handler
+    pub game_state: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    /// CHECK: Validated by PDA derivation in handler
+    pub inventory: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    pub player: Signer<'info>,
+
+    /// New session key — must sign to prove possession of private key
+    pub new_session_signer: Signer<'info>,
+
+    #[account(seeds = [SESSION_MANAGER_AUTHORITY_SEED], bump)]
+    /// CHECK: PDA signer for CPI
+    pub session_manager_authority: UncheckedAccount<'info>,
+
+    pub gameplay_state_program: Program<'info, GameplayState>,
+    pub player_inventory_program: Program<'info, PlayerInventory>,
+}
+
+// ============================================================================
 // Events
 // ============================================================================
 
@@ -2528,6 +2754,21 @@ pub struct SessionResultSettled {
 #[event]
 pub struct OrphanedAccountsClosed {
     pub player: Pubkey,
+}
+
+#[event]
+pub struct SessionOverridden {
+    pub player: Pubkey,
+    pub mode: String,
+    pub new_nonce: u64,
+}
+
+#[event]
+pub struct SessionKeyRotated {
+    pub player: Pubkey,
+    pub session_id: u64,
+    pub old_session_signer: Pubkey,
+    pub new_session_signer: Pubkey,
 }
 
 /// The discriminator for end_session instruction.

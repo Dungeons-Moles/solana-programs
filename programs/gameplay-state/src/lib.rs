@@ -2080,10 +2080,38 @@ pub mod gameplay_state {
         Ok(())
     }
 
+    /// LOCALNET ONLY: request local RNG (same lifecycle as request_gameplay_vrf).
+    #[cfg(feature = "local-rng")]
+    pub fn request_gameplay_rng(ctx: Context<RequestGameplayRng>) -> Result<()> {
+        let vrf = &mut ctx.accounts.vrf_state;
+        vrf.session = ctx.accounts.session.key();
+        vrf.randomness = [0u8; 32];
+        vrf.nonce = 1;
+        vrf.status = VrfStatus::Requested;
+        vrf.bump = ctx.bumps.vrf_state;
+        Ok(())
+    }
+
     /// Oracle callback: writes randomness into VrfState and sets status = Fulfilled.
     /// In production, the signer must be the VRF oracle program identity.
     /// Under `mock-vrf` feature, any signer is accepted for testing.
     pub fn fulfill_gameplay_vrf(ctx: Context<FulfillGameplayVrf>, randomness: [u8; 32]) -> Result<()> {
+        let vrf = &mut ctx.accounts.vrf_state;
+        require!(
+            vrf.status == VrfStatus::Requested,
+            GameplayStateError::VrfNotRequested
+        );
+        vrf.randomness = randomness;
+        vrf.status = VrfStatus::Fulfilled;
+        Ok(())
+    }
+
+    /// LOCALNET ONLY: self-fulfill local RNG (same lifecycle as fulfill_gameplay_vrf).
+    #[cfg(feature = "local-rng")]
+    pub fn fulfill_gameplay_rng(
+        ctx: Context<FulfillGameplayRng>,
+        randomness: [u8; 32],
+    ) -> Result<()> {
         let vrf = &mut ctx.accounts.vrf_state;
         require!(
             vrf.status == VrfStatus::Requested,
@@ -4765,11 +4793,45 @@ pub struct RequestGameplayVrf<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[cfg(feature = "local-rng")]
+#[derive(Accounts)]
+pub struct RequestGameplayRng<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    /// CHECK: Session PDA; used only for VRF state seed derivation.
+    pub session: UncheckedAccount<'info>,
+
+    #[account(
+        init,
+        payer = payer,
+        space = 8 + GameplayVrfState::SPACE,
+        seeds = [GameplayVrfState::SEED_PREFIX, session.key().as_ref()],
+        bump,
+    )]
+    pub vrf_state: Account<'info, GameplayVrfState>,
+
+    pub system_program: Program<'info, System>,
+}
+
 #[derive(Accounts)]
 pub struct FulfillGameplayVrf<'info> {
     /// In production: oracle program identity signer.
     /// Under `mock-vrf`: any signer accepted.
     #[cfg_attr(not(feature = "mock-vrf"), account(/* address = VRF_PROGRAM_IDENTITY */))]
+    pub vrf_program_identity: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [GameplayVrfState::SEED_PREFIX, vrf_state.session.as_ref()],
+        bump = vrf_state.bump,
+    )]
+    pub vrf_state: Account<'info, GameplayVrfState>,
+}
+
+#[cfg(feature = "local-rng")]
+#[derive(Accounts)]
+pub struct FulfillGameplayRng<'info> {
     pub vrf_program_identity: Signer<'info>,
 
     #[account(

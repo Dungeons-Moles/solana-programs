@@ -1788,8 +1788,33 @@ pub mod poi_system {
         Ok(())
     }
 
+    /// LOCALNET ONLY: request local RNG (same lifecycle as request_poi_vrf).
+    #[cfg(feature = "local-rng")]
+    pub fn request_poi_rng(ctx: Context<RequestPoiRng>) -> Result<()> {
+        let vrf_state = &mut ctx.accounts.vrf_state;
+        vrf_state.session = ctx.accounts.session.key();
+        vrf_state.randomness = [0u8; 32];
+        vrf_state.nonce = 1;
+        vrf_state.status = VrfStatus::Requested;
+        vrf_state.bump = ctx.bumps.vrf_state;
+        Ok(())
+    }
+
     /// Oracle callback: receives VRF randomness for POI offers.
     pub fn fulfill_poi_vrf(ctx: Context<FulfillPoiVrf>, randomness: [u8; 32]) -> Result<()> {
+        let vrf_state = &mut ctx.accounts.vrf_state;
+        require!(
+            vrf_state.status == VrfStatus::Requested,
+            PoiSystemError::VrfNotRequested
+        );
+        vrf_state.randomness = randomness;
+        vrf_state.status = VrfStatus::Fulfilled;
+        Ok(())
+    }
+
+    /// LOCALNET ONLY: self-fulfill local RNG (same lifecycle as fulfill_poi_vrf).
+    #[cfg(feature = "local-rng")]
+    pub fn fulfill_poi_rng(ctx: Context<FulfillPoiRng>, randomness: [u8; 32]) -> Result<()> {
         let vrf_state = &mut ctx.accounts.vrf_state;
         require!(
             vrf_state.status == VrfStatus::Requested,
@@ -2603,9 +2628,44 @@ pub struct RequestPoiVrf<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[cfg(feature = "local-rng")]
+#[derive(Accounts)]
+pub struct RequestPoiRng<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    /// CHECK: Session PDA owned by session-manager.
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID @ PoiSystemError::InvalidSessionOwner)]
+    pub session: UncheckedAccount<'info>,
+
+    #[account(
+        init,
+        payer = payer,
+        space = PoiVrfState::SPACE,
+        seeds = [PoiVrfState::SEED_PREFIX, session.key().as_ref()],
+        bump
+    )]
+    pub vrf_state: Account<'info, PoiVrfState>,
+
+    pub system_program: Program<'info, System>,
+}
+
 #[derive(Accounts)]
 pub struct FulfillPoiVrf<'info> {
     /// Oracle identity signer.
+    pub oracle: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [PoiVrfState::SEED_PREFIX, vrf_state.session.as_ref()],
+        bump = vrf_state.bump,
+    )]
+    pub vrf_state: Account<'info, PoiVrfState>,
+}
+
+#[cfg(feature = "local-rng")]
+#[derive(Accounts)]
+pub struct FulfillPoiRng<'info> {
     pub oracle: Signer<'info>,
 
     #[account(

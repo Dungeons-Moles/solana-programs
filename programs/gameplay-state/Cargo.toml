@@ -16,6 +16,7 @@ no-idl = []
 no-log-ix-name = []
 idl-build = ["anchor-lang/idl-build"]
 mock-vrf = ["vrf-rng/mock-vrf"]
+local-rng = []
 
 [dev-dependencies]
 sha2 = "0.10"

@@ -231,9 +231,34 @@ pub mod map_generator {
         Ok(())
     }
 
+    /// LOCALNET ONLY: request local RNG (same lifecycle as request_map_vrf).
+    #[cfg(feature = "local-rng")]
+    pub fn request_map_rng(ctx: Context<RequestMapRng>) -> Result<()> {
+        let vrf_state = &mut ctx.accounts.vrf_state;
+        vrf_state.session = ctx.accounts.session.key();
+        vrf_state.randomness = [0u8; 32];
+        vrf_state.nonce = 1;
+        vrf_state.status = VrfStatus::Requested;
+        vrf_state.bump = ctx.bumps.vrf_state;
+        Ok(())
+    }
+
     /// Oracle callback: receives VRF randomness and writes it to state.
     /// TODO: Verify vrf_program_identity signer when ephemeral-vrf-sdk is available.
     pub fn fulfill_map_vrf(ctx: Context<FulfillMapVrf>, randomness: [u8; 32]) -> Result<()> {
+        let vrf_state = &mut ctx.accounts.vrf_state;
+        require!(
+            vrf_state.status == VrfStatus::Requested,
+            MapGeneratorError::VrfNotRequested
+        );
+        vrf_state.randomness = randomness;
+        vrf_state.status = VrfStatus::Fulfilled;
+        Ok(())
+    }
+
+    /// LOCALNET ONLY: self-fulfill local RNG (same lifecycle as fulfill_map_vrf).
+    #[cfg(feature = "local-rng")]
+    pub fn fulfill_map_rng(ctx: Context<FulfillMapRng>, randomness: [u8; 32]) -> Result<()> {
         let vrf_state = &mut ctx.accounts.vrf_state;
         require!(
             vrf_state.status == VrfStatus::Requested,
@@ -526,10 +551,44 @@ pub struct RequestMapVrf<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[cfg(feature = "local-rng")]
+#[derive(Accounts)]
+pub struct RequestMapRng<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    /// CHECK: Session PDA key used only for VRF PDA derivation.
+    pub session: UncheckedAccount<'info>,
+
+    #[account(
+        init,
+        payer = payer,
+        space = MapVrfState::SPACE,
+        seeds = [MapVrfState::SEED_PREFIX, session.key().as_ref()],
+        bump
+    )]
+    pub vrf_state: Account<'info, MapVrfState>,
+
+    pub system_program: Program<'info, System>,
+}
+
 #[derive(Accounts)]
 pub struct FulfillMapVrf<'info> {
     /// Oracle identity signer.
     /// TODO: Constrain to VRF_PROGRAM_IDENTITY when ephemeral-vrf-sdk is available.
+    pub oracle: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [MapVrfState::SEED_PREFIX, vrf_state.session.as_ref()],
+        bump = vrf_state.bump,
+    )]
+    pub vrf_state: Account<'info, MapVrfState>,
+}
+
+#[cfg(feature = "local-rng")]
+#[derive(Accounts)]
+pub struct FulfillMapRng<'info> {
     pub oracle: Signer<'info>,
 
     #[account(

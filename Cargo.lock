@@ -899,6 +899,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "ephemeral-vrf-sdk"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25ff20b2a2d23ac2ab4adc69f7af4e9ef0f880db3ae2ae04a895a3f77380d681"
+dependencies = [
+ "anchor-lang 0.32.1",
+ "borsh 1.6.0",
+ "ephemeral-vrf-sdk-vrf-macro",
+ "solana-program 2.3.0",
+]
+
+[[package]]
+name = "ephemeral-vrf-sdk-vrf-macro"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ea39346a86e65d6b44ed861f0b8151ac07d52d68c7f6f7ea47f67cfbe0280e8"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -996,6 +1019,7 @@ dependencies = [
  "boss-system",
  "combat-system",
  "ephemeral-rollups-sdk",
+ "ephemeral-vrf-sdk",
  "field-enemies",
  "map-generator",
  "player-inventory",
@@ -1252,6 +1276,7 @@ version = "0.1.0"
 dependencies = [
  "anchor-lang 0.32.1",
  "ephemeral-rollups-sdk",
+ "ephemeral-vrf-sdk",
  "vrf-rng",
 ]
 
@@ -1465,6 +1490,7 @@ dependencies = [
  "anchor-lang 0.32.1",
  "boss-system",
  "ephemeral-rollups-sdk",
+ "ephemeral-vrf-sdk",
  "gameplay-state",
  "player-inventory",
  "session-manager",

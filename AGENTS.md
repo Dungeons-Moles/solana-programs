@@ -53,6 +53,17 @@ Base-layer wallet transactions are only for **out-of-session** actions:
 
 **Implication:** Settlement, point crediting, echo insertion, and any other post-game bookkeeping that touches global/shared accounts must either (a) be deferred to session end and signed by the session key, or (b) be handled by a PDA authority so the session key can invoke it via CPI. Never require the player wallet mid-session or at session teardown.
 
+### Rule 2.1: All VRF must be on the Ephemeral Rollup (MANDATORY)
+
+This rule is non-negotiable across programs and frontend integration.
+
+- **Localnet only:** `*Rng` flows are allowed for local deterministic testing.
+- **Devnet/Mainnet:** all session-critical randomness must use `*Vrf` flows and on-chain fulfillment/callbacks.
+- **VRF oracle queue:** All programs must use the ER oracle queue (`5hBR571xnXppuCPveTrctfTU7tJLSN94nq7kv7FRK5Tc`). Never use the base-layer `DEFAULT_QUEUE` (`Cuj97ggrhhidhbu39TijNVqE74xvKJ69gDervRUXAxGh`) in any VRF instruction (`oracle_queue` accounts must be `UncheckedAccount` — not constrained to a specific address).
+- **VRF timing:** `init_*_vrf_state` and `request_*_vrf` MUST run on the Ephemeral Rollup **after** delegation, never on the base chain. The frontend must send these transactions via the routed ER connection (`sendRoutedErTransaction`).
+- Programs must not rely on client-generated randomness on devnet/mainnet for gameplay-critical decisions.
+- Frontend must gate gameplay until required VRF state accounts are fulfilled on ER.
+
 ### Rule 3: E2E test coverage for on-chain changes
 
 Every on-chain change that affects instruction signatures, account layouts, or session lifecycle **must** have a corresponding E2E test in `tests/e2e/`. Tests live alongside the programs in this repo and exercise the full flow: account initialization → session start → delegation → ER gameplay → undelegation → settlement → session end.

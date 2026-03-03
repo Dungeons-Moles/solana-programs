@@ -24,6 +24,7 @@ sha2 = "0.10"
 [dependencies]
 anchor-lang = { version = "0.32.0", features = ["init-if-needed"] }
 ephemeral-rollups-sdk = { version = "0.7.3", features = ["anchor", "disable-realloc"] }
+ephemeral-vrf-sdk = { version = "0.2.3", features = ["anchor"] }
 combat-system = { path = "../../crates/combat-system" }
 map-generator = { path = "../map-generator", features = ["cpi"] }
 field-enemies = { path = "../../crates/field-enemies" }

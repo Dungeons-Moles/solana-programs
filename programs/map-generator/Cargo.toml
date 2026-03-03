@@ -19,6 +19,7 @@ mock-vrf = ["vrf-rng/mock-vrf"]
 local-rng = []
 
 [dependencies]
-anchor-lang = "0.32.0"
+anchor-lang = { version = "0.32.0", features = ["init-if-needed"] }
 ephemeral-rollups-sdk = { version = "0.7.3", features = ["anchor", "disable-realloc"] }
+ephemeral-vrf-sdk = { version = "0.2.3", features = ["anchor"] }
 vrf-rng = { path = "../../crates/vrf-rng", features = ["anchor"] }

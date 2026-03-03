@@ -69,7 +69,7 @@ mb-test-validator --reset --ledger .mb-ledger --rpc-port 8899 --faucet-port 9901
 2. Start the ephemeral validator:
 
 ```bash
-ephemeral-validator --remotes http://127.0.0.1:8899 --remotes ws://127.0.0.1:8900 --listen 127.0.0.1:7799 --reset
+ephemeral-validator --remotes http://127.0.0.1:8899 --remotes ws://127.0.0.1:8900 --listen 127.0.0.1:7799 --storage /tmp/mb-er-storage --reset
 ```
 
 3. Build, deploy, and initialize:

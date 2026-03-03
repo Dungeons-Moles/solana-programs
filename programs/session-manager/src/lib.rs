@@ -11,7 +11,7 @@ use errors::SessionManagerError;
 use gameplay_state::program::GameplayState;
 use gameplay_state::state::{GameState, MapEnemies};
 use map_generator::program::MapGenerator;
-use map_generator::state::{GeneratedMap, MapConfig as MapConfigAccount};
+use map_generator::state::GeneratedMap;
 use player_inventory::program::PlayerInventory;
 use state::{GameSession, SessionCounter, SessionNonces, EMPTY_STATE_HASH};
 
@@ -154,14 +154,13 @@ pub mod session_manager {
             session.settled_at = 0;
         }
 
-        // 1. Generate Map
-        map_generator::cpi::generate_map(
+        // 1. Allocate empty GeneratedMap (no maze generation — map is filled on ER via fill_map_with_seed)
+        map_generator::cpi::init_map_account(
             CpiContext::new(
                 ctx.accounts.map_generator_program.to_account_info(),
-                map_generator::cpi::accounts::GenerateMap {
+                map_generator::cpi::accounts::InitMapAccount {
                     payer: ctx.accounts.player.to_account_info(),
                     session: ctx.accounts.game_session.to_account_info(),
-                    map_config: ctx.accounts.map_config.to_account_info(),
                     generated_map: ctx.accounts.generated_map.to_account_info(),
                     system_program: ctx.accounts.system_program.to_account_info(),
                 },
@@ -169,30 +168,9 @@ pub mod session_manager {
             campaign_level,
         )?;
 
-        // 2. Deserialize Generated Map to get dimensions and spawn
-        // We borrow the account info to read the data just written
-        let map_info = ctx.accounts.generated_map.to_account_info();
-        let map_data = map_info.try_borrow_data()?;
-        let mut map_slice: &[u8] = &map_data;
-        // Skip 8-byte discriminator
-        if map_slice.len() < 8 {
-            return Err(ProgramError::InvalidAccountData.into());
-        }
-        // AccountDeserialize handles discriminator check, so we can just pass the slice?
-        // GeneratedMap implements AccountDeserialize via #[account]
-        // But the data in map_slice starts with discriminator.
-        // Let's use try_deserialize directly.
-        let generated_map = GeneratedMap::try_deserialize(&mut map_slice)?;
-
-        let width = generated_map.width;
-        let height = generated_map.height;
-        let start_x = generated_map.spawn_x;
-        let start_y = generated_map.spawn_y;
-
-        // Drop the borrow so we can use the account in next CPI
-        drop(map_data);
-
-        // 3. Initialize Game State
+        // 2. Initialize Game State with placeholder map dimensions (50x50, spawn 0,0).
+        // Map dimensions and spawn position will be synced by sync_map_enemies on ER
+        // after fill_map_with_seed populates the GeneratedMap with actual maze content.
         gameplay_state::cpi::initialize_game_state(
             CpiContext::new(
                 ctx.accounts.gameplay_state_program.to_account_info(),
@@ -207,10 +185,10 @@ pub mod session_manager {
                 },
             ),
             campaign_level,
-            width,
-            height,
-            start_x,
-            start_y,
+            50, // MAP_WIDTH — fixed 50x50 map; actual dims confirmed by sync_map_enemies on ER
+            50, // MAP_HEIGHT
+            0,  // placeholder spawn_x — real value set by sync_map_enemies on ER
+            0,  // placeholder spawn_y
         )?;
 
         // 4. Initialize Inventory for this session
@@ -302,21 +280,27 @@ pub mod session_manager {
             &crate::ID,
         );
 
-        // Try VRF-derived seed; fall back to legacy derive_pvp_seed
+        // POI seed: use VRF randomness if provided and fulfilled, otherwise derive
+        // a fallback deterministic seed from clock + session PDA.
+        // Map generation is now handled on the ER via generate_map_with_vrf.
         let vrf_data = extract_map_vrf(&ctx.accounts.map_vrf_state, &session_pda)?;
-        let duel_seed = if let Some((ref randomness, nonce)) = vrf_data {
-            let mut rng = vrf_rng::GameRng::from_vrf(
-                randomness, nonce, vrf_rng::domains::MAP_GENERATION,
-            );
-            rng.next_val()
-        } else {
-            derive_pvp_seed(
-                b"duel_seed",
-                &clock,
-                counter.count,
-                &session_player,
-                &session_signer_key,
-            )
+        let poi_seed = match vrf_data {
+            Some((randomness, nonce)) => {
+                let mut rng = vrf_rng::GameRng::from_vrf(
+                    &randomness,
+                    nonce,
+                    vrf_rng::domains::POI_SUPPLY_CACHE,
+                );
+                rng.next_val()
+            }
+            None => {
+                let pda_bytes = session_pda.to_bytes();
+                u64::from_le_bytes(
+                    pda_bytes[8..16].try_into().unwrap_or([0u8; 8]),
+                )
+                .wrapping_add(clock.slot)
+                .wrapping_mul(6364136223846793005u64)
+            }
         };
 
         {
@@ -336,35 +320,21 @@ pub mod session_manager {
             session.settled_at = 0;
         }
 
-        map_generator::cpi::generate_map_with_seed(
+        // Allocate empty GeneratedMap (filled on ER via generate_map_with_vrf after VRF fulfillment)
+        map_generator::cpi::init_map_account(
             CpiContext::new(
                 ctx.accounts.map_generator_program.to_account_info(),
-                map_generator::cpi::accounts::GenerateMap {
+                map_generator::cpi::accounts::InitMapAccount {
                     payer: ctx.accounts.player.to_account_info(),
                     session: ctx.accounts.game_session.to_account_info(),
-                    map_config: ctx.accounts.map_config.to_account_info(),
                     generated_map: ctx.accounts.generated_map.to_account_info(),
                     system_program: ctx.accounts.system_program.to_account_info(),
                 },
             ),
             campaign_level,
-            duel_seed,
         )?;
 
-        let map_info = ctx.accounts.generated_map.to_account_info();
-        let map_data = map_info.try_borrow_data()?;
-        let mut map_slice: &[u8] = &map_data;
-        if map_slice.len() < 8 {
-            return Err(ProgramError::InvalidAccountData.into());
-        }
-        let generated_map = GeneratedMap::try_deserialize(&mut map_slice)?;
-
-        let width = generated_map.width;
-        let height = generated_map.height;
-        let start_x = generated_map.spawn_x;
-        let start_y = generated_map.spawn_y;
-        drop(map_data);
-
+        // Initialize Game State with placeholder dimensions; actual spawn set by sync_map_enemies on ER.
         gameplay_state::cpi::initialize_game_state(
             CpiContext::new(
                 ctx.accounts.gameplay_state_program.to_account_info(),
@@ -379,10 +349,10 @@ pub mod session_manager {
                 },
             ),
             campaign_level,
-            width,
-            height,
-            start_x,
-            start_y,
+            50, // MAP_WIDTH placeholder
+            50, // MAP_HEIGHT placeholder
+            0,  // placeholder spawn_x
+            0,  // placeholder spawn_y
         )?;
 
         let session_manager_authority_signer: &[&[&[u8]]] = &[&[
@@ -417,15 +387,6 @@ pub mod session_manager {
 
         let act = (campaign_level - 1) / 10 + 1;
         let week = 1u8;
-        // When VRF is available, derive POI seed from separate domain
-        let poi_seed = if let Some((ref randomness, nonce)) = vrf_data {
-            let mut rng = vrf_rng::GameRng::from_vrf(
-                randomness, nonce, vrf_rng::domains::POI_SUPPLY_CACHE,
-            );
-            rng.next_val()
-        } else {
-            duel_seed
-        };
 
         initialize_map_pois_cpi(
             &ctx.accounts.poi_system_program,
@@ -496,21 +457,27 @@ pub mod session_manager {
             &crate::ID,
         );
 
-        // Try VRF-derived seed; fall back to legacy derive_pvp_seed
+        // POI seed: use VRF randomness if provided and fulfilled, otherwise derive
+        // a fallback deterministic seed from clock + session PDA.
+        // Map generation is now handled on the ER via generate_map_with_vrf.
         let vrf_data = extract_map_vrf(&ctx.accounts.map_vrf_state, &session_pda)?;
-        let gauntlet_seed = if let Some((ref randomness, nonce)) = vrf_data {
-            let mut rng = vrf_rng::GameRng::from_vrf(
-                randomness, nonce, vrf_rng::domains::MAP_GENERATION,
-            );
-            rng.next_val()
-        } else {
-            derive_pvp_seed(
-                b"gauntlet_seed",
-                &clock,
-                counter.count,
-                &session_player,
-                &session_signer_key,
-            )
+        let poi_seed = match vrf_data {
+            Some((randomness, nonce)) => {
+                let mut rng = vrf_rng::GameRng::from_vrf(
+                    &randomness,
+                    nonce,
+                    vrf_rng::domains::POI_SUPPLY_CACHE,
+                );
+                rng.next_val()
+            }
+            None => {
+                let pda_bytes = session_pda.to_bytes();
+                u64::from_le_bytes(
+                    pda_bytes[8..16].try_into().unwrap_or([0u8; 8]),
+                )
+                .wrapping_add(clock.slot)
+                .wrapping_mul(6364136223846793005u64)
+            }
         };
 
         {
@@ -530,35 +497,21 @@ pub mod session_manager {
             session.settled_at = 0;
         }
 
-        map_generator::cpi::generate_map_with_seed(
+        // Allocate empty GeneratedMap (filled on ER via generate_map_with_vrf after VRF fulfillment)
+        map_generator::cpi::init_map_account(
             CpiContext::new(
                 ctx.accounts.map_generator_program.to_account_info(),
-                map_generator::cpi::accounts::GenerateMap {
+                map_generator::cpi::accounts::InitMapAccount {
                     payer: ctx.accounts.player.to_account_info(),
                     session: ctx.accounts.game_session.to_account_info(),
-                    map_config: ctx.accounts.map_config.to_account_info(),
                     generated_map: ctx.accounts.generated_map.to_account_info(),
                     system_program: ctx.accounts.system_program.to_account_info(),
                 },
             ),
             campaign_level,
-            gauntlet_seed,
         )?;
 
-        let map_info = ctx.accounts.generated_map.to_account_info();
-        let map_data = map_info.try_borrow_data()?;
-        let mut map_slice: &[u8] = &map_data;
-        if map_slice.len() < 8 {
-            return Err(ProgramError::InvalidAccountData.into());
-        }
-        let generated_map = GeneratedMap::try_deserialize(&mut map_slice)?;
-
-        let width = generated_map.width;
-        let height = generated_map.height;
-        let start_x = generated_map.spawn_x;
-        let start_y = generated_map.spawn_y;
-        drop(map_data);
-
+        // Initialize Game State with placeholder dimensions; actual spawn set by sync_map_enemies on ER.
         gameplay_state::cpi::initialize_game_state(
             CpiContext::new(
                 ctx.accounts.gameplay_state_program.to_account_info(),
@@ -573,10 +526,10 @@ pub mod session_manager {
                 },
             ),
             campaign_level,
-            width,
-            height,
-            start_x,
-            start_y,
+            50, // MAP_WIDTH placeholder
+            50, // MAP_HEIGHT placeholder
+            0,  // placeholder spawn_x
+            0,  // placeholder spawn_y
         )?;
 
         let session_manager_authority_signer: &[&[&[u8]]] = &[&[
@@ -611,14 +564,6 @@ pub mod session_manager {
 
         let act = (campaign_level - 1) / 10 + 1;
         let week = 1u8;
-        let poi_seed = if let Some((ref randomness, nonce)) = vrf_data {
-            let mut rng = vrf_rng::GameRng::from_vrf(
-                randomness, nonce, vrf_rng::domains::POI_SUPPLY_CACHE,
-            );
-            rng.next_val()
-        } else {
-            gauntlet_seed
-        };
 
         initialize_map_pois_cpi(
             &ctx.accounts.poi_system_program,
@@ -1811,9 +1756,6 @@ pub struct StartSession<'info> {
     #[account(mut)]
     pub session_signer: Signer<'info>,
 
-    /// Map configuration for map generation
-    pub map_config: Account<'info, MapConfigAccount>,
-
     #[account(mut)]
     /// CHECK: PDA created by map-generator CPI
     pub generated_map: UncheckedAccount<'info>,
@@ -1894,8 +1836,6 @@ pub struct StartDuelSession<'info> {
     /// CHECK: PDA signer used to authorize configure_run_mode CPI.
     pub session_manager_authority: UncheckedAccount<'info>,
 
-    pub map_config: Account<'info, MapConfigAccount>,
-
     #[account(mut)]
     /// CHECK: PDA created by map-generator CPI
     pub generated_map: UncheckedAccount<'info>,
@@ -1917,7 +1857,6 @@ pub struct StartDuelSession<'info> {
     pub inventory: UncheckedAccount<'info>,
 
     /// Optional MapVrfState for VRF-derived map/POI seeds.
-    /// When provided, seeds are derived from VRF randomness instead of derive_pvp_seed.
     /// CHECK: Validated via PDA derivation and manual deserialization in handler.
     #[account(mut)]
     pub map_vrf_state: Option<UncheckedAccount<'info>>,
@@ -1978,8 +1917,6 @@ pub struct StartGauntletSession<'info> {
     )]
     /// CHECK: PDA signer used to authorize configure_run_mode CPI.
     pub session_manager_authority: UncheckedAccount<'info>,
-
-    pub map_config: Account<'info, MapConfigAccount>,
 
     #[account(mut)]
     /// CHECK: PDA created by map-generator CPI
@@ -2831,31 +2768,6 @@ fn extract_map_vrf(
     );
 
     Ok(Some((vrf_state.randomness, vrf_state.nonce)))
-}
-
-fn derive_pvp_seed(
-    domain: &[u8],
-    clock: &Clock,
-    session_counter: u64,
-    player: &Pubkey,
-    session_signer: &Pubkey,
-) -> u64 {
-    let mut acc = session_counter
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        .wrapping_add(clock.slot)
-        .wrapping_add(clock.unix_timestamp as u64);
-
-    for byte in domain {
-        acc = acc.wrapping_mul(0x100_0000_01B3).wrapping_add(*byte as u64);
-    }
-    for byte in player.as_ref() {
-        acc = acc.wrapping_mul(0x100_0000_01B3).wrapping_add(*byte as u64);
-    }
-    for byte in session_signer.as_ref() {
-        acc = acc.wrapping_mul(0x100_0000_01B3).wrapping_add(*byte as u64);
-    }
-
-    acc
 }
 
 // ============================================================================

@@ -2,6 +2,8 @@ use anchor_lang::prelude::*;
 use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
 use ephemeral_rollups_sdk::cpi::DelegateConfig;
 use ephemeral_rollups_sdk::ephem::commit_and_undelegate_accounts;
+use ephemeral_vrf_sdk::instructions::{create_request_randomness_ix, RequestRandomnessParams};
+use ephemeral_vrf_sdk::types::SerializableAccountMeta;
 
 pub mod constants;
 pub mod errors;
@@ -94,6 +96,44 @@ pub mod map_generator {
         generated_map.session = ctx.accounts.session.key();
         generated_map.bump = ctx.bumps.generated_map;
 
+        let success = maze::generate_map(generated_map, seed, campaign_level);
+        require!(success, MapGeneratorError::MapGenerationFailed);
+
+        Ok(())
+    }
+
+    /// Allocates an empty GeneratedMap account without generating any maze content.
+    /// Called via CPI from session-manager during session start so the account
+    /// exists and can be delegated to ER. Actual maze generation happens on ER
+    /// via fill_map_with_seed (PvE) or generate_map_with_vrf (Gauntlet/Duel).
+    pub fn init_map_account(ctx: Context<InitMapAccount>, campaign_level: u8) -> Result<()> {
+        require!(
+            campaign_level > 0 && campaign_level <= MAX_LEVEL,
+            MapGeneratorError::InvalidLevel
+        );
+
+        let generated_map = &mut ctx.accounts.generated_map;
+        generated_map.session = ctx.accounts.session.key();
+        generated_map.bump = ctx.bumps.generated_map;
+        // All other fields (tiles, enemies, pois) remain zeroed by Anchor account init.
+        // Width/height/spawn will be set by fill_map_with_seed or generate_map_with_vrf on ER.
+
+        Ok(())
+    }
+
+    /// Fills the map with a deterministic seed. Used for PvE campaign sessions on ER.
+    /// Must be called after init_map_account and delegation (runs on Ephemeral Rollup).
+    pub fn fill_map_with_seed(
+        ctx: Context<FillMapWithSeed>,
+        seed: u64,
+        campaign_level: u8,
+    ) -> Result<()> {
+        require!(
+            campaign_level > 0 && campaign_level <= MAX_LEVEL,
+            MapGeneratorError::InvalidLevel
+        );
+
+        let generated_map = &mut ctx.accounts.generated_map;
         let success = maze::generate_map(generated_map, seed, campaign_level);
         require!(success, MapGeneratorError::MapGenerationFailed);
 
@@ -217,9 +257,45 @@ pub mod map_generator {
     // VRF Instructions
     // ========================================================================
 
+    /// Pre-creates MapVrfState PDA on base chain without requesting randomness.
+    /// Used to initialize the account before delegation to ER, so VRF requests
+    /// on the Ephemeral Rollup don't need to create new accounts inline.
+    pub fn init_map_vrf_state(ctx: Context<InitMapVrfState>) -> Result<()> {
+        let vrf_state = &mut ctx.accounts.vrf_state;
+        vrf_state.session = ctx.accounts.session.key();
+        vrf_state.randomness = [0u8; 32];
+        vrf_state.nonce = 1;
+        vrf_state.status = VrfStatus::Requested;
+        vrf_state.bump = ctx.bumps.vrf_state;
+        Ok(())
+    }
+
+    /// Delegates MapVrfState PDA to MagicBlock from its owning program.
+    pub fn delegate_map_vrf_state(
+        ctx: Context<DelegateMapVrfState>,
+        validator: Option<Pubkey>,
+    ) -> Result<()> {
+        let session_key = ctx.accounts.session.key();
+        let (expected_vrf_state, _) = Pubkey::find_program_address(
+            &[MapVrfState::SEED_PREFIX, session_key.as_ref()],
+            &crate::ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.map_vrf_state.key(),
+            expected_vrf_state,
+            MapGeneratorError::Unauthorized
+        );
+        let vrf_seeds: &[&[u8]] = &[MapVrfState::SEED_PREFIX, session_key.as_ref()];
+        ctx.accounts.delegate_map_vrf_state(
+            &ctx.accounts.player,
+            vrf_seeds,
+            local_delegate_config(validator),
+        )?;
+        Ok(())
+    }
+
     /// Requests VRF randomness for map generation.
     /// Initializes a MapVrfState account with status=Requested.
-    /// Oracle CPI will be added when ephemeral-vrf-sdk is available.
     pub fn request_map_vrf(ctx: Context<RequestMapVrf>) -> Result<()> {
         let vrf_state = &mut ctx.accounts.vrf_state;
         vrf_state.session = ctx.accounts.session.key();
@@ -227,7 +303,40 @@ pub mod map_generator {
         vrf_state.nonce = 1;
         vrf_state.status = VrfStatus::Requested;
         vrf_state.bump = ctx.bumps.vrf_state;
-        // TODO: CPI to oracle via ephemeral-vrf-sdk create_request_randomness_ix
+
+        let mut caller_seed = [0u8; 32];
+        caller_seed.copy_from_slice(ctx.accounts.session.key().as_ref());
+        caller_seed[..8].copy_from_slice(&vrf_state.nonce.to_le_bytes());
+
+        let ix = create_request_randomness_ix(RequestRandomnessParams {
+            payer: ctx.accounts.payer.key(),
+            oracle_queue: ctx.accounts.oracle_queue.key(),
+            callback_program_id: crate::ID,
+            callback_discriminator: instruction::FulfillMapVrf::DISCRIMINATOR.to_vec(),
+            accounts_metas: Some(vec![SerializableAccountMeta {
+                pubkey: ctx.accounts.vrf_state.key(),
+                is_signer: false,
+                is_writable: true,
+            }]),
+            caller_seed,
+            ..Default::default()
+        });
+
+        let (_, identity_bump) = Pubkey::find_program_address(
+            &[ephemeral_vrf_sdk::consts::IDENTITY],
+            &crate::ID,
+        );
+        anchor_lang::solana_program::program::invoke_signed(
+            &ix,
+            &[
+                ctx.accounts.payer.to_account_info(),
+                ctx.accounts.program_identity.to_account_info(),
+                ctx.accounts.oracle_queue.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.slot_hashes.to_account_info(),
+            ],
+            &[&[ephemeral_vrf_sdk::consts::IDENTITY, &[identity_bump]]],
+        )?;
         Ok(())
     }
 
@@ -269,9 +378,9 @@ pub mod map_generator {
         Ok(())
     }
 
-    /// Re-generates the map using VRF-derived randomness.
-    /// Must be called after fulfill_map_vrf and before delegation.
-    pub fn regenerate_map(ctx: Context<RegenerateMap>, campaign_level: u8) -> Result<()> {
+    /// Generates the map using VRF-derived randomness. Used for Gauntlet/Duel sessions on ER.
+    /// Must be called after VRF fulfillment on the Ephemeral Rollup.
+    pub fn generate_map_with_vrf(ctx: Context<GenerateMapWithVrf>, campaign_level: u8) -> Result<()> {
         require!(
             campaign_level > 0 && campaign_level <= MAX_LEVEL,
             MapGeneratorError::InvalidLevel
@@ -474,6 +583,52 @@ pub struct MarkPoiUsed<'info> {
     pub session: UncheckedAccount<'info>,
 }
 
+/// Context for allocating an empty GeneratedMap (no maze generation).
+/// Called via CPI from session-manager; actual generation happens on ER.
+#[derive(Accounts)]
+pub struct InitMapAccount<'info> {
+    /// Payer for rent
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    /// Game session PDA reference
+    /// CHECK: Ownership is validated by constraint; PDA relationship is enforced by seeds on generated_map.
+    #[account(
+        owner = SESSION_MANAGER_PROGRAM_ID @ MapGeneratorError::InvalidSessionOwner
+    )]
+    pub session: UncheckedAccount<'info>,
+
+    /// Generated map output (allocated empty, filled on ER)
+    #[account(
+        init,
+        payer = payer,
+        space = GeneratedMap::SPACE,
+        seeds = [GeneratedMap::SEED_PREFIX, session.key().as_ref()],
+        bump
+    )]
+    pub generated_map: Account<'info, GeneratedMap>,
+
+    pub system_program: Program<'info, System>,
+}
+
+/// Context for filling map with a deterministic seed (PvE campaign on ER).
+#[derive(Accounts)]
+pub struct FillMapWithSeed<'info> {
+    pub session_signer: Signer<'info>,
+
+    /// CHECK: Session PDA used for seed derivation.
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID @ MapGeneratorError::InvalidSessionOwner)]
+    pub session: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        seeds = [GeneratedMap::SEED_PREFIX, session.key().as_ref()],
+        bump = generated_map.bump,
+        has_one = session,
+    )]
+    pub generated_map: Account<'info, GeneratedMap>,
+}
+
 /// Context for setting a tile as floor, authorized by gameplay-state via CPI.
 /// Uses gameplay_authority PDA from gameplay-state as signer.
 #[derive(Accounts)]
@@ -540,13 +695,29 @@ pub struct RequestMapVrf<'info> {
     pub session: UncheckedAccount<'info>,
 
     #[account(
-        init,
+        init_if_needed,
         payer = payer,
         space = MapVrfState::SPACE,
         seeds = [MapVrfState::SEED_PREFIX, session.key().as_ref()],
         bump
     )]
     pub vrf_state: Account<'info, MapVrfState>,
+
+    /// CHECK: Program identity PDA used as callback signer.
+    #[account(seeds = [ephemeral_vrf_sdk::consts::IDENTITY], bump)]
+    pub program_identity: UncheckedAccount<'info>,
+
+    /// CHECK: Oracle queue account selected by the caller.
+    #[account(mut)]
+    pub oracle_queue: UncheckedAccount<'info>,
+
+    /// CHECK: Slot hashes sysvar for VRF request validation.
+    #[account(address = anchor_lang::solana_program::sysvar::slot_hashes::ID)]
+    pub slot_hashes: UncheckedAccount<'info>,
+
+    /// CHECK: VRF program for CPI invocation.
+    #[account(address = ephemeral_vrf_sdk::consts::VRF_PROGRAM_ID)]
+    pub vrf_program: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -575,7 +746,10 @@ pub struct RequestMapRng<'info> {
 #[derive(Accounts)]
 pub struct FulfillMapVrf<'info> {
     /// Oracle identity signer.
-    /// TODO: Constrain to VRF_PROGRAM_IDENTITY when ephemeral-vrf-sdk is available.
+    #[cfg_attr(
+        not(feature = "mock-vrf"),
+        account(address = ephemeral_vrf_sdk::consts::VRF_PROGRAM_IDENTITY)
+    )]
     pub oracle: Signer<'info>,
 
     #[account(
@@ -632,7 +806,7 @@ pub struct CloseMapVrfState<'info> {
 }
 
 #[derive(Accounts)]
-pub struct RegenerateMap<'info> {
+pub struct GenerateMapWithVrf<'info> {
     pub session_signer: Signer<'info>,
 
     /// CHECK: Session PDA used for seed derivation.
@@ -654,6 +828,39 @@ pub struct RegenerateMap<'info> {
         has_one = session,
     )]
     pub vrf_state: Account<'info, MapVrfState>,
+}
+
+/// Pre-creates MapVrfState on base chain (no VRF request).
+#[derive(Accounts)]
+pub struct InitMapVrfState<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    /// CHECK: Session PDA owned by session-manager.
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID @ MapGeneratorError::InvalidSessionOwner)]
+    pub session: UncheckedAccount<'info>,
+
+    #[account(
+        init,
+        payer = payer,
+        space = MapVrfState::SPACE,
+        seeds = [MapVrfState::SEED_PREFIX, session.key().as_ref()],
+        bump,
+    )]
+    pub vrf_state: Account<'info, MapVrfState>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[delegate]
+#[derive(Accounts)]
+pub struct DelegateMapVrfState<'info> {
+    #[account(mut, del)]
+    /// CHECK: PDA is validated via explicit seed check in handler.
+    pub map_vrf_state: AccountInfo<'info>,
+    /// CHECK: Session PDA owned by session-manager; used only for seed derivation.
+    pub session: UncheckedAccount<'info>,
+    pub player: Signer<'info>,
 }
 
 // ============================================================================

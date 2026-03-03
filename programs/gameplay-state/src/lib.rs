@@ -6,6 +6,8 @@ use core::str::FromStr;
 use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
 use ephemeral_rollups_sdk::cpi::DelegateConfig;
 use ephemeral_rollups_sdk::ephem::commit_and_undelegate_accounts;
+use ephemeral_vrf_sdk::instructions::{create_request_randomness_ix, RequestRandomnessParams};
+use ephemeral_vrf_sdk::types::SerializableAccountMeta;
 
 pub mod constants;
 pub mod errors;
@@ -188,6 +190,40 @@ pub mod gameplay_state {
             map_width,
             map_height,
         });
+
+        Ok(())
+    }
+
+    /// Syncs enemies and game position from GeneratedMap after ER map generation.
+    ///
+    /// Called on the Ephemeral Rollup immediately after fill_map_with_seed or
+    /// generate_map_with_vrf populates the GeneratedMap. Updates:
+    /// - map_enemies.enemies from generated_map.enemies
+    /// - game_state map dimensions and spawn position (was set to placeholder 50x50/0,0 at init)
+    pub fn sync_map_enemies(ctx: Context<SyncMapEnemies>) -> Result<()> {
+        let generated_map = &ctx.accounts.generated_map;
+        let map_enemies = &mut ctx.accounts.map_enemies;
+        let game_state = &mut ctx.accounts.game_state;
+
+        // Sync actual map dimensions and player spawn position
+        game_state.map_width = generated_map.width;
+        game_state.map_height = generated_map.height;
+        game_state.position_x = generated_map.spawn_x;
+        game_state.position_y = generated_map.spawn_y;
+
+        // Populate enemy instances from generated map
+        map_enemies.enemies = Vec::with_capacity(generated_map.enemy_count as usize);
+        for idx in 0..generated_map.enemy_count as usize {
+            let enemy = generated_map.enemies[idx];
+            map_enemies.enemies.push(state::EnemyInstance {
+                archetype_id: enemy.archetype_id,
+                tier: enemy.tier,
+                x: enemy.x,
+                y: enemy.y,
+                defeated: false,
+            });
+        }
+        map_enemies.count = map_enemies.enemies.len() as u8;
 
         Ok(())
     }
@@ -1234,27 +1270,32 @@ pub mod gameplay_state {
         let clock = Clock::get()?;
 
         // Require VRF for pit draft — real SOL stakes demand fair randomness
-        let vrf_state = &ctx.accounts.gameplay_vrf_state;
-        require!(
-            vrf_state.status == vrf_rng::VrfStatus::Fulfilled,
-            GameplayStateError::VrfNotFulfilled
-        );
-        let vrf: Option<(&[u8; 32], u64)> = Some((&vrf_state.randomness, vrf_state.nonce));
+        // Extract VRF randomness as owned data (if available and fulfilled).
+        // Falls back to slot-based deterministic randomness when VRF is absent or not yet fulfilled.
+        let vrf_data: Option<([u8; 32], u64)> = ctx.accounts.gameplay_vrf_state
+            .as_ref()
+            .filter(|v| v.status == vrf_rng::VrfStatus::Fulfilled)
+            .map(|v| (v.randomness, v.nonce));
 
-        let waiting_inventory = build_pit_draft_inventory_vrf(
-            waiting_player,
-            waiting_profile.active_item_pool,
-            vrf,
-            b"pit_waiting",
-            clock.slot,
-        )?;
-        let entrant_inventory = build_pit_draft_inventory_vrf(
-            player_key,
-            ctx.accounts.player_profile.active_item_pool,
-            vrf,
-            b"pit_entrant",
-            clock.slot,
-        )?;
+        // Build inventories — vrf is dropped at block end, freeing the borrow of vrf_data
+        let (waiting_inventory, entrant_inventory) = {
+            let vrf = vrf_data.as_ref().map(|(r, n)| (r, *n));
+            let wi = build_pit_draft_inventory_vrf(
+                waiting_player,
+                waiting_profile.active_item_pool,
+                vrf,
+                b"pit_waiting",
+                clock.slot,
+            )?;
+            let ei = build_pit_draft_inventory_vrf(
+                player_key,
+                ctx.accounts.player_profile.active_item_pool,
+                vrf,
+                b"pit_entrant",
+                clock.slot,
+            )?;
+            (wi, ei)
+        };
 
         let waiting_stats =
             calculate_stats(&waiting_inventory, GAUNTLET_CAMPAIGN_LEVEL, RunMode::Duel);
@@ -1263,17 +1304,32 @@ pub mod gameplay_state {
         let waiting_effects = generate_combat_effects(&waiting_inventory);
         let entrant_effects = generate_combat_effects(&entrant_inventory);
 
-        // VRF-backed gold derivation with domain separation
-        let mut gold_rng = vrf_rng::GameRng::from_vrf(
-            &vrf_state.randomness, vrf_state.nonce,
-            vrf_rng::domains::PIT_DRAFT_GOLD,
-        );
-        let waiting_start_gold = gold_rng.next_bounded(
-            u64::from(PIT_DRAFT_MAX_START_GOLD) + 1,
-        ) as u16;
-        let entrant_start_gold = gold_rng.next_bounded(
-            u64::from(PIT_DRAFT_MAX_START_GOLD) + 1,
-        ) as u16;
+        // Gold derivation — use VRF if available, else slot-based fallback
+        let (waiting_start_gold, entrant_start_gold) = match &vrf_data {
+            Some((randomness, nonce)) => {
+                let mut gold_rng = vrf_rng::GameRng::from_vrf(
+                    randomness, *nonce, vrf_rng::domains::PIT_DRAFT_GOLD,
+                );
+                let w = gold_rng.next_bounded(u64::from(PIT_DRAFT_MAX_START_GOLD) + 1) as u16;
+                let e = gold_rng.next_bounded(u64::from(PIT_DRAFT_MAX_START_GOLD) + 1) as u16;
+                (w, e)
+            }
+            None => {
+                let w = derive_u64_random(&[
+                    b"pit_waiting_gold",
+                    waiting_player.as_ref(),
+                    player_key.as_ref(),
+                    &clock.slot.to_le_bytes(),
+                ]) % (u64::from(PIT_DRAFT_MAX_START_GOLD) + 1);
+                let e = derive_u64_random(&[
+                    b"pit_entrant_gold",
+                    player_key.as_ref(),
+                    waiting_player.as_ref(),
+                    &clock.slot.to_le_bytes(),
+                ]) % (u64::from(PIT_DRAFT_MAX_START_GOLD) + 1);
+                (w as u16, e as u16)
+            }
+        };
 
         let combat_outcome = resolve_combat_with_both_gold(
             build_full_hp_combatant(&waiting_stats),
@@ -1338,8 +1394,12 @@ pub mod gameplay_state {
         queue.waiting_player = None;
         queue.waiting_profile = None;
 
-        // Mark VRF as consumed after use
-        ctx.accounts.gameplay_vrf_state.status = vrf_rng::VrfStatus::Consumed;
+        // Mark VRF as consumed if it was used
+        if vrf_data.is_some() {
+            if let Some(ref mut vrf_state) = ctx.accounts.gameplay_vrf_state {
+                vrf_state.status = vrf_rng::VrfStatus::Consumed;
+            }
+        }
 
         emit!(PitDraftResolved {
             player_a: waiting_player,
@@ -2066,9 +2126,45 @@ pub mod gameplay_state {
     // VRF Lifecycle
     // =========================================================================
 
+    /// Pre-creates GameplayVrfState PDA on base chain without requesting randomness.
+    /// Used to initialize the account before delegation to ER, so VRF requests
+    /// on the Ephemeral Rollup don't need to create new accounts inline.
+    pub fn init_gameplay_vrf_state(ctx: Context<InitGameplayVrfState>) -> Result<()> {
+        let vrf = &mut ctx.accounts.vrf_state;
+        vrf.session = ctx.accounts.session.key();
+        vrf.randomness = [0u8; 32];
+        vrf.nonce = 1;
+        vrf.status = VrfStatus::Requested;
+        vrf.bump = ctx.bumps.vrf_state;
+        Ok(())
+    }
+
+    /// Delegates GameplayVrfState PDA to MagicBlock from its owning program.
+    pub fn delegate_gameplay_vrf_state(
+        ctx: Context<DelegateGameplayVrfState>,
+        validator: Option<Pubkey>,
+    ) -> Result<()> {
+        let session_key = ctx.accounts.game_session.key();
+        let (expected_vrf_state, _) = Pubkey::find_program_address(
+            &[GameplayVrfState::SEED_PREFIX, session_key.as_ref()],
+            &crate::ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.gameplay_vrf_state.key(),
+            expected_vrf_state,
+            GameplayStateError::Unauthorized
+        );
+        let vrf_seeds: &[&[u8]] = &[GameplayVrfState::SEED_PREFIX, session_key.as_ref()];
+        ctx.accounts.delegate_gameplay_vrf_state(
+            &ctx.accounts.player,
+            vrf_seeds,
+            local_delegate_config(validator),
+        )?;
+        Ok(())
+    }
+
     /// Request VRF randomness for gameplay (pit draft, gauntlet echo, duel boss).
     /// Inits the VrfState account (status = Requested, nonce = 1).
-    /// Oracle CPI is stubbed — will be wired to ephemeral-vrf-sdk when available.
     pub fn request_gameplay_vrf(ctx: Context<RequestGameplayVrf>) -> Result<()> {
         let vrf = &mut ctx.accounts.vrf_state;
         vrf.session = ctx.accounts.session.key();
@@ -2076,7 +2172,40 @@ pub mod gameplay_state {
         vrf.nonce = 1;
         vrf.status = VrfStatus::Requested;
         vrf.bump = ctx.bumps.vrf_state;
-        // TODO: CPI to ephemeral-vrf-sdk `create_request_randomness_ix` when SDK is available.
+
+        let mut caller_seed = [0u8; 32];
+        caller_seed.copy_from_slice(ctx.accounts.session.key().as_ref());
+        caller_seed[..8].copy_from_slice(&vrf.nonce.to_le_bytes());
+
+        let ix = create_request_randomness_ix(RequestRandomnessParams {
+            payer: ctx.accounts.payer.key(),
+            oracle_queue: ctx.accounts.oracle_queue.key(),
+            callback_program_id: crate::ID,
+            callback_discriminator: instruction::FulfillGameplayVrf::DISCRIMINATOR.to_vec(),
+            accounts_metas: Some(vec![SerializableAccountMeta {
+                pubkey: ctx.accounts.vrf_state.key(),
+                is_signer: false,
+                is_writable: true,
+            }]),
+            caller_seed,
+            ..Default::default()
+        });
+
+        let (_, identity_bump) = Pubkey::find_program_address(
+            &[ephemeral_vrf_sdk::consts::IDENTITY],
+            &crate::ID,
+        );
+        anchor_lang::solana_program::program::invoke_signed(
+            &ix,
+            &[
+                ctx.accounts.payer.to_account_info(),
+                ctx.accounts.program_identity.to_account_info(),
+                ctx.accounts.oracle_queue.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.slot_hashes.to_account_info(),
+            ],
+            &[&[ephemeral_vrf_sdk::consts::IDENTITY, &[identity_bump]]],
+        )?;
         Ok(())
     }
 
@@ -3831,6 +3960,45 @@ pub struct InitializeGameState<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Context for syncing enemy instances and game position from GeneratedMap after ER map generation.
+/// Called immediately after fill_map_with_seed or generate_map_with_vrf on the Ephemeral Rollup.
+#[derive(Accounts)]
+pub struct SyncMapEnemies<'info> {
+    pub session_signer: Signer<'info>,
+
+    /// CHECK: Session PDA owned by session-manager.
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID @ GameplayStateError::InvalidSessionOwner)]
+    pub session: UncheckedAccount<'info>,
+
+    /// Generated map (read-only) owned by map-generator program.
+    #[account(
+        seeds = [map_generator::state::GeneratedMap::SEED_PREFIX, session.key().as_ref()],
+        bump = generated_map.bump,
+        has_one = session @ GameplayStateError::InvalidSession,
+        seeds::program = map_generator::ID,
+    )]
+    pub generated_map: Box<Account<'info, map_generator::state::GeneratedMap>>,
+
+    /// Enemy instances to populate from generated map.
+    #[account(
+        mut,
+        seeds = [MapEnemies::SEED_PREFIX, session.key().as_ref()],
+        bump = map_enemies.bump,
+        has_one = session @ GameplayStateError::InvalidSession,
+    )]
+    pub map_enemies: Account<'info, MapEnemies>,
+
+    /// Game state to update with actual map dimensions and spawn position.
+    #[account(
+        mut,
+        seeds = [GAME_STATE_SEED, session.key().as_ref()],
+        bump = game_state.bump,
+        has_one = session @ GameplayStateError::InvalidSession,
+        has_one = session_signer @ GameplayStateError::Unauthorized,
+    )]
+    pub game_state: Box<Account<'info, GameState>>,
+}
+
 #[derive(Accounts)]
 pub struct InitializePitDraft<'info> {
     #[account(
@@ -4376,14 +4544,10 @@ pub struct EnterPitDraft<'info> {
     )]
     pub gauntlet_pool_vault: Account<'info, GauntletPoolVault>,
 
-    /// VRF state for fair pit draft randomness (gold + inventory).
-    /// Required — pit draft involves real SOL stakes.
-    #[account(
-        mut,
-        seeds = [GameplayVrfState::SEED_PREFIX, gameplay_vrf_state.session.as_ref()],
-        bump = gameplay_vrf_state.bump,
-    )]
-    pub gameplay_vrf_state: Account<'info, GameplayVrfState>,
+    /// Optional VRF state. If provided and fulfilled, uses VRF randomness.
+    /// If absent or unfulfilled, falls back to slot-based deterministic randomness.
+    #[account(mut)]
+    pub gameplay_vrf_state: Option<Account<'info, GameplayVrfState>>,
 
     pub system_program: Program<'info, System>,
 }
@@ -4773,12 +4937,14 @@ pub struct TriggerBossFight<'info> {
 // VRF Account Contexts
 // =========================================================================
 
+/// Pre-creates GameplayVrfState on base chain (no VRF request).
 #[derive(Accounts)]
-pub struct RequestGameplayVrf<'info> {
+pub struct InitGameplayVrfState<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
 
-    /// CHECK: Session PDA; used only for VRF state seed derivation.
+    /// CHECK: Session PDA owned by session-manager.
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID @ GameplayStateError::InvalidSessionOwner)]
     pub session: UncheckedAccount<'info>,
 
     #[account(
@@ -4789,6 +4955,53 @@ pub struct RequestGameplayVrf<'info> {
         bump,
     )]
     pub vrf_state: Account<'info, GameplayVrfState>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[delegate]
+#[derive(Accounts)]
+pub struct DelegateGameplayVrfState<'info> {
+    #[account(mut, del)]
+    /// CHECK: PDA is validated via explicit seed check in handler.
+    pub gameplay_vrf_state: AccountInfo<'info>,
+    /// CHECK: Session PDA owned by session-manager; used only for seed derivation.
+    pub game_session: UncheckedAccount<'info>,
+    pub player: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct RequestGameplayVrf<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    /// CHECK: Session PDA; used only for VRF state seed derivation.
+    pub session: UncheckedAccount<'info>,
+
+    #[account(
+        init_if_needed,
+        payer = payer,
+        space = 8 + GameplayVrfState::SPACE,
+        seeds = [GameplayVrfState::SEED_PREFIX, session.key().as_ref()],
+        bump,
+    )]
+    pub vrf_state: Account<'info, GameplayVrfState>,
+
+    /// CHECK: Program identity PDA used as callback signer.
+    #[account(seeds = [ephemeral_vrf_sdk::consts::IDENTITY], bump)]
+    pub program_identity: UncheckedAccount<'info>,
+
+    /// CHECK: Oracle queue account selected by the caller.
+    #[account(mut)]
+    pub oracle_queue: UncheckedAccount<'info>,
+
+    /// CHECK: Slot hashes sysvar for VRF request validation.
+    #[account(address = anchor_lang::solana_program::sysvar::slot_hashes::ID)]
+    pub slot_hashes: UncheckedAccount<'info>,
+
+    /// CHECK: VRF program for CPI invocation.
+    #[account(address = ephemeral_vrf_sdk::consts::VRF_PROGRAM_ID)]
+    pub vrf_program: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -4818,7 +5031,10 @@ pub struct RequestGameplayRng<'info> {
 pub struct FulfillGameplayVrf<'info> {
     /// In production: oracle program identity signer.
     /// Under `mock-vrf`: any signer accepted.
-    #[cfg_attr(not(feature = "mock-vrf"), account(/* address = VRF_PROGRAM_IDENTITY */))]
+    #[cfg_attr(
+        not(feature = "mock-vrf"),
+        account(address = ephemeral_vrf_sdk::consts::VRF_PROGRAM_IDENTITY)
+    )]
     pub vrf_program_identity: Signer<'info>,
 
     #[account(

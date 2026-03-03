@@ -11,6 +11,9 @@ use anchor_lang::context::CpiContext;
 use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
 use ephemeral_rollups_sdk::cpi::DelegateConfig;
 use ephemeral_rollups_sdk::ephem::commit_and_undelegate_accounts;
+use ephemeral_vrf_sdk::anchor::vrf;
+use ephemeral_vrf_sdk::instructions::{create_request_randomness_ix, RequestRandomnessParams};
+use ephemeral_vrf_sdk::types::SerializableAccountMeta;
 use errors::PoiSystemError;
 use gameplay_state::state::{GameState, RunMode};
 pub use pois::PoiDefinition;
@@ -426,6 +429,100 @@ pub mod poi_system {
         Ok(())
     }
 
+    /// Refreshes existing MapPois from GeneratedMap after ER map generation.
+    /// Unlike initialize_map_pois, this does not create the account.
+    pub fn refresh_map_pois(
+        ctx: Context<RefreshMapPois>,
+        act: u8,
+        week: u8,
+        seed: u64,
+    ) -> Result<()> {
+        require_keys_eq!(
+            *ctx.accounts.session.owner,
+            SESSION_MANAGER_PROGRAM_ID,
+            PoiSystemError::InvalidSessionOwner
+        );
+        require!((1..=4).contains(&act), PoiSystemError::InvalidAct);
+
+        // Read POI data from the generated map account
+        let generated_map_info = &ctx.accounts.generated_map;
+        let generated_map_data = generated_map_info.try_borrow_data()?;
+
+        // Validate minimum size: 8 (discriminator) + 32 (session) + basic fields
+        require!(
+            generated_map_data.len() > 8 + 32 + 1 + 1 + 8 + 1 + 1 + 1 + 1 + 2 + 313 + 1 + (48 * 4),
+            PoiSystemError::InvalidGeneratedMap
+        );
+
+        // Parse generated map fields:
+        // Offset: 8 (discriminator) + 32 (session) + 1 (width) + 1 (height) + 8 (seed)
+        //       + 1 (spawn_x) + 1 (spawn_y) + 1 (mole_den_x) + 1 (mole_den_y)
+        //       + 2 (walkable_count) + 313 (packed_tiles) + 1 (enemy_count)
+        //       + 192 (enemies: 48 * 4) = 562
+        // poi_count is at offset 562
+        let poi_count_offset = 8 + 32 + 1 + 1 + 8 + 1 + 1 + 1 + 1 + 2 + 313 + 1 + (48 * 4);
+        let poi_count = generated_map_data[poi_count_offset] as usize;
+
+        // POIs start at offset 563, each POI is 4 bytes: (poi_type, is_used, x, y)
+        let pois_offset = poi_count_offset + 1;
+
+        // Reinitialize the existing MapPois account
+        let map_pois = &mut ctx.accounts.map_pois;
+        map_pois.session = ctx.accounts.session.key();
+        map_pois.act = act;
+        map_pois.week = week;
+        map_pois.seed = seed;
+        map_pois.shop_state = ShopState::default();
+
+        // ABI NOTE:
+        // `generated_map_data` stores raw POI type IDs encoded by map-generator (1..=14).
+        // The ID mapping is a cross-program ABI and must remain stable between map-generator
+        // placement logic and poi-system POI definitions (`pois::L*_*.id` constants).
+        //
+        // Counter Cache (L13) is boss-prep content and must not appear in PvP run modes.
+        let exclude_counter_cache = matches!(
+            ctx.accounts.game_state.run_mode,
+            RunMode::Duel | RunMode::Gauntlet
+        );
+
+        // Copy POIs from generated map to MapPois
+        let mut pois = Vec::with_capacity(poi_count);
+        for i in 0..poi_count {
+            let poi_start = pois_offset + (i * 4);
+            if poi_start + 4 > generated_map_data.len() {
+                break;
+            }
+
+            let poi_type = generated_map_data[poi_start];
+            if exclude_counter_cache && poi_type == pois::L13_COUNTER_CACHE.id {
+                continue;
+            }
+            let is_used = generated_map_data[poi_start + 1] != 0;
+            let x = generated_map_data[poi_start + 2];
+            let y = generated_map_data[poi_start + 3];
+
+            pois.push(state::PoiInstance {
+                poi_type,
+                x,
+                y,
+                used: is_used,
+                discovered: poi_type == pois::L1_MOLE_DEN.id,
+                week_spawned: week,
+            });
+        }
+
+        map_pois.count = pois.len() as u8;
+        map_pois.pois = pois;
+
+        emit!(PoisInitialized {
+            session: map_pois.session,
+            count: map_pois.count,
+            act,
+        });
+
+        Ok(())
+    }
+
     /// Delegates map-pois PDA to MagicBlock from poi-system (its owner program).
     pub fn delegate_map_pois(
         ctx: Context<DelegateMapPois>,
@@ -443,6 +540,30 @@ pub mod poi_system {
         ctx.accounts.delegate_map_pois(
             &ctx.accounts.player,
             map_pois_seeds,
+            local_delegate_config(validator),
+        )?;
+        Ok(())
+    }
+
+    /// Delegates poi-vrf-state PDA to MagicBlock from poi-system (its owner program).
+    pub fn delegate_poi_vrf_state(
+        ctx: Context<DelegatePoiVrfState>,
+        validator: Option<Pubkey>,
+    ) -> Result<()> {
+        let session_key = ctx.accounts.game_session.key();
+        let (expected_poi_vrf_state, _) = Pubkey::find_program_address(
+            &[PoiVrfState::SEED_PREFIX, session_key.as_ref()],
+            &crate::ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.poi_vrf_state.key(),
+            expected_poi_vrf_state,
+            PoiSystemError::Unauthorized
+        );
+        let poi_vrf_state_seeds: &[&[u8]] = &[PoiVrfState::SEED_PREFIX, session_key.as_ref()];
+        ctx.accounts.delegate_poi_vrf_state(
+            &ctx.accounts.player,
+            poi_vrf_state_seeds,
             local_delegate_config(validator),
         )?;
         Ok(())
@@ -490,6 +611,50 @@ pub mod poi_system {
         commit_and_undelegate_accounts(
             &ctx.accounts.session_signer.to_account_info(),
             vec![&map_pois_info],
+            &ctx.accounts.magic_context,
+            &ctx.accounts.magic_program.to_account_info(),
+        )?;
+        Ok(())
+    }
+
+    /// Commits and undelegates poi-vrf-state PDA from ER back to base layer.
+    pub fn undelegate_poi_vrf_state(ctx: Context<UndelegatePoiVrfState>) -> Result<()> {
+        use session_manager::state::GameSession;
+
+        let session_key = ctx.accounts.game_session.key();
+        let (expected_poi_vrf_state, _) = Pubkey::find_program_address(
+            &[PoiVrfState::SEED_PREFIX, session_key.as_ref()],
+            &crate::ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.poi_vrf_state.key(),
+            expected_poi_vrf_state,
+            PoiSystemError::Unauthorized
+        );
+
+        let session_signer_end = GameSession::SESSION_SIGNER_OFFSET + 32;
+        let session_data = ctx.accounts.game_session.try_borrow_data()?;
+        require!(
+            session_data.len() >= session_signer_end,
+            PoiSystemError::InvalidSession
+        );
+        let stored_session_signer = Pubkey::from(
+            <[u8; 32]>::try_from(
+                &session_data[GameSession::SESSION_SIGNER_OFFSET..session_signer_end],
+            )
+            .unwrap(),
+        );
+        require_keys_eq!(
+            stored_session_signer,
+            ctx.accounts.session_signer.key(),
+            PoiSystemError::Unauthorized
+        );
+        drop(session_data);
+
+        let poi_vrf_state_info = ctx.accounts.poi_vrf_state.to_account_info();
+        commit_and_undelegate_accounts(
+            &ctx.accounts.session_signer.to_account_info(),
+            vec![&poi_vrf_state_info],
             &ctx.accounts.magic_context,
             &ctx.accounts.magic_program.to_account_info(),
         )?;
@@ -702,18 +867,13 @@ pub mod poi_system {
             PoiSystemError::OfferAlreadyGenerated
         );
 
-        // When VRF is available, derive seed from VRF with domain separation.
-        // Otherwise, use legacy deterministic seed.
-        let seed = if let Some((ref randomness, nonce)) = vrf_data {
+        // Devnet/mainnet rule: POI offer generation is VRF-only.
+        let (randomness, nonce) = vrf_data.ok_or(PoiSystemError::VrfRequired)?;
+        let seed = {
             let offer_ctx = offers::OfferContext::new(act, game_state.week, 0, poi_index);
-            let vrf_ref: Option<(&[u8; 32], u64)> = Some((randomness, nonce));
+            let vrf_ref: Option<(&[u8; 32], u64)> = Some((&randomness, nonce));
             let mut rng = offer_ctx.create_rng(vrf_ref);
             rng.next_val()
-        } else {
-            map_pois.seed
-                ^ ((poi_index as u64) << 8)
-                ^ ((act as u64) << 16)
-                ^ ((game_state.total_moves as u64) << 32)
         };
 
         // Fetch boss weaknesses on-chain
@@ -998,20 +1158,15 @@ pub mod poi_system {
             PoiSystemError::OfferAlreadyGenerated
         );
 
-        // When VRF is available, derive seed from VRF with tool oil domain.
-        // Otherwise, use legacy deterministic seed.
-        let seed = if let Some((ref randomness, nonce)) = vrf_data {
+        // Devnet/mainnet rule: tool oil offers are VRF-only.
+        let (randomness, nonce) = vrf_data.ok_or(PoiSystemError::VrfRequired)?;
+        let seed = {
             let mut rng = vrf_rng::GameRng::from_vrf(
-                randomness,
+                &randomness,
                 nonce,
                 vrf_rng::domains::POI_TOOL_OIL ^ ((poi_index as u64) << 16),
             );
             rng.next_val()
-        } else {
-            map_pois.seed
-                ^ ((poi_index as u64) << 8)
-                ^ ((game_state.total_moves as u64) << 32)
-                ^ 0x4f494c_u64 // "OIL" domain separator
         };
 
         // Generate oil offer
@@ -1156,20 +1311,15 @@ pub mod poi_system {
 
         interactions::validate_shop_poi(poi, is_night)?;
 
-        // When VRF is available, derive seed from VRF with smuggler hatch domain.
-        // Otherwise, use legacy deterministic seed.
-        let seed = if let Some((ref randomness, nonce)) = vrf_data {
+        // Devnet/mainnet rule: shop offer generation is VRF-only.
+        let (randomness, nonce) = vrf_data.ok_or(PoiSystemError::VrfRequired)?;
+        let seed = {
             let mut rng = vrf_rng::GameRng::from_vrf(
-                randomness,
+                &randomness,
                 nonce,
                 vrf_rng::domains::POI_SMUGGLER_HATCH ^ ((poi_index as u64) << 16),
             );
             rng.next_val()
-        } else {
-            map_pois.seed
-                ^ ((poi_index as u64) << 8)
-                ^ ((act as u64) << 16)
-                ^ ((game_state.total_moves as u64) << 32)
         };
 
         // Fetch boss weaknesses on-chain
@@ -1775,8 +1925,22 @@ pub mod poi_system {
     // VRF Instructions
     // ========================================================================
 
-    /// Requests VRF randomness for POI offer generation.
-    /// Initializes a PoiVrfState account with status=Requested.
+    /// Initializes PoiVrfState PDA without requesting randomness.
+    /// Used to pre-create the account on base before delegating to ER.
+    pub fn init_poi_vrf_state(ctx: Context<InitPoiVrfState>) -> Result<()> {
+        let vrf_state = &mut ctx.accounts.vrf_state;
+        vrf_state.session = ctx.accounts.session.key();
+        vrf_state.randomness = [0u8; 32];
+        vrf_state.nonce = 1;
+        vrf_state.status = VrfStatus::Requested;
+        vrf_state.bump = ctx.bumps.vrf_state;
+        Ok(())
+    }
+
+    /// Requests VRF randomness for POI offers via CPI to the VRF program.
+    /// Uses the `#[vrf]` macro which auto-adds program_identity, vrf_program,
+    /// slot_hashes, system_program and provides `invoke_signed_vrf`.
+    /// Inits the VrfState account in the same instruction (matching map/gameplay pattern).
     pub fn request_poi_vrf(ctx: Context<RequestPoiVrf>) -> Result<()> {
         let vrf_state = &mut ctx.accounts.vrf_state;
         vrf_state.session = ctx.accounts.session.key();
@@ -1784,7 +1948,28 @@ pub mod poi_system {
         vrf_state.nonce = 1;
         vrf_state.status = VrfStatus::Requested;
         vrf_state.bump = ctx.bumps.vrf_state;
-        // TODO: CPI to oracle via ephemeral-vrf-sdk
+
+        // Build caller_seed: first 8 bytes = nonce as u64 LE, rest from session key
+        let mut caller_seed = [0u8; 32];
+        caller_seed[..8].copy_from_slice(&1u64.to_le_bytes());
+        caller_seed[8..].copy_from_slice(&ctx.accounts.session.key().to_bytes()[..24]);
+
+        let ix = create_request_randomness_ix(RequestRandomnessParams {
+            payer: ctx.accounts.payer.key(),
+            oracle_queue: ctx.accounts.oracle_queue.key(),
+            callback_program_id: ID,
+            callback_discriminator: instruction::FulfillPoiVrf::DISCRIMINATOR.to_vec(),
+            caller_seed,
+            accounts_metas: Some(vec![SerializableAccountMeta {
+                pubkey: ctx.accounts.vrf_state.key(),
+                is_signer: false,
+                is_writable: true,
+            }]),
+            ..Default::default()
+        });
+
+        ctx.accounts
+            .invoke_signed_vrf(&ctx.accounts.payer.to_account_info(), &ix)?;
         Ok(())
     }
 
@@ -1873,12 +2058,35 @@ pub struct DelegateMapPois<'info> {
     pub player: Signer<'info>,
 }
 
+#[delegate]
+#[derive(Accounts)]
+pub struct DelegatePoiVrfState<'info> {
+    #[account(mut, del)]
+    /// CHECK: PDA is validated in handler.
+    pub poi_vrf_state: AccountInfo<'info>,
+    /// CHECK: Session PDA owned by session-manager; used only for seed derivation.
+    pub game_session: UncheckedAccount<'info>,
+    pub player: Signer<'info>,
+}
+
 #[commit]
 #[derive(Accounts)]
 pub struct UndelegateMapPois<'info> {
     #[account(mut)]
     /// CHECK: PDA is validated and deserialized in handler.
     pub map_pois: AccountInfo<'info>,
+    /// CHECK: Session account is read for session signer authorization.
+    pub game_session: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub session_signer: Signer<'info>,
+}
+
+#[commit]
+#[derive(Accounts)]
+pub struct UndelegatePoiVrfState<'info> {
+    #[account(mut)]
+    /// CHECK: PDA is validated in handler.
+    pub poi_vrf_state: AccountInfo<'info>,
     /// CHECK: Session account is read for session signer authorization.
     pub game_session: UncheckedAccount<'info>,
     #[account(mut)]
@@ -1923,6 +2131,37 @@ pub struct InitializeMapPois<'info> {
     pub payer: Signer<'info>,
 
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct RefreshMapPois<'info> {
+    #[account(
+        mut,
+        seeds = [MAP_POIS_SEED, map_pois.session.as_ref()],
+        bump = map_pois.bump
+    )]
+    pub map_pois: Account<'info, MapPois>,
+
+    /// CHECK: session key is validated against map_pois.session and owner.
+    #[account(
+        constraint = session.key() == map_pois.session @ PoiSystemError::InvalidSession,
+        owner = SESSION_MANAGER_PROGRAM_ID @ PoiSystemError::InvalidSessionOwner
+    )]
+    pub session: AccountInfo<'info>,
+
+    /// CHECK: Validated by owner check (must be owned by map-generator program).
+    #[account(
+        owner = MAP_GENERATOR_PROGRAM_ID @ PoiSystemError::InvalidGeneratedMap
+    )]
+    pub generated_map: AccountInfo<'info>,
+
+    #[account(
+        constraint = game_state.session == session.key() @ PoiSystemError::InvalidSession,
+        has_one = session_signer @ PoiSystemError::Unauthorized,
+    )]
+    pub game_state: Box<Account<'info, GameState>>,
+
+    pub session_signer: Signer<'info>,
 }
 
 #[derive(Accounts)]
@@ -2608,7 +2847,7 @@ pub struct InteractScrapChute<'info> {
 // =============================================================================
 
 #[derive(Accounts)]
-pub struct RequestPoiVrf<'info> {
+pub struct InitPoiVrfState<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
 
@@ -2626,6 +2865,30 @@ pub struct RequestPoiVrf<'info> {
     pub vrf_state: Account<'info, PoiVrfState>,
 
     pub system_program: Program<'info, System>,
+}
+
+#[vrf]
+#[derive(Accounts)]
+pub struct RequestPoiVrf<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    /// CHECK: Session PDA key used only for VRF PDA derivation.
+    /// Same pattern as map_generator::RequestMapVrf and gameplay_state::RequestGameplayVrf.
+    pub session: UncheckedAccount<'info>,
+
+    #[account(
+        init_if_needed,
+        payer = payer,
+        space = PoiVrfState::SPACE,
+        seeds = [PoiVrfState::SEED_PREFIX, session.key().as_ref()],
+        bump,
+    )]
+    pub vrf_state: Account<'info, PoiVrfState>,
+
+    /// CHECK: Oracle queue for VRF requests. Must be the ER oracle queue.
+    #[account(mut)]
+    pub oracle_queue: UncheckedAccount<'info>,
 }
 
 #[cfg(feature = "local-rng")]
@@ -2653,6 +2916,10 @@ pub struct RequestPoiRng<'info> {
 #[derive(Accounts)]
 pub struct FulfillPoiVrf<'info> {
     /// Oracle identity signer.
+    #[cfg_attr(
+        not(feature = "mock-vrf"),
+        account(address = ephemeral_vrf_sdk::consts::VRF_PROGRAM_IDENTITY)
+    )]
     pub oracle: Signer<'info>,
 
     #[account(

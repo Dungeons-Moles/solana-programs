@@ -1,10 +1,10 @@
-use crate::effects::chill_damage_bonus;
 use crate::state::{
-    CombatLogEntry, Condition, EffectType, ItemEffect, StatusEffects, StatusType, TriggerType,
-    STATUS_BLEED, STATUS_CHILL, STATUS_REFLECTION, STATUS_RUST, STATUS_SHRAPNEL,
+    AnnotatedItemEffect, CombatContribution, CombatLogEntry, CombatSourceKind, CombatSourceRef,
+    Condition, EffectType, ItemEffect, StatusEffects, StatusType, TriggerType, STATUS_BLEED,
+    STATUS_CHILL, STATUS_REFLECTION, STATUS_RUST, STATUS_SHRAPNEL,
 };
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct CombatantStats {
     pub hp: i16,
     pub max_hp: u16,
@@ -27,6 +27,9 @@ pub struct CombatantStats {
     pub double_detonation_second: i16,
     pub preserve_shrapnel_cap: u8,
     pub shards_every_turn: bool,
+    pub attack_source: Option<CombatSourceRef>,
+    pub attack_base_value: i16,
+    pub atk_contributions: Vec<CombatContribution>,
 }
 
 /// Check if a trigger should fire.
@@ -170,23 +173,75 @@ fn increase_gold(player_gold: &mut u16, gold_change: Option<&mut i16>, value: i1
 }
 
 #[inline]
+fn add_attack_contribution(
+    stats: &mut CombatantStats,
+    source: Option<&CombatSourceRef>,
+    value: i16,
+) {
+    if value <= 0 {
+        return;
+    }
+
+    let Some(source) = source else {
+        return;
+    };
+
+    if let Some(existing) = stats
+        .atk_contributions
+        .iter_mut()
+        .find(|entry| entry.source == *source)
+    {
+        existing.value = existing.value.saturating_add(value);
+        return;
+    }
+
+    stats.atk_contributions.push(CombatContribution {
+        source: *source,
+        value,
+    });
+}
+
+#[inline]
+fn reflection_source() -> CombatSourceRef {
+    let mut id = [0u8; 16];
+    id[..10].copy_from_slice(b"reflection");
+    CombatSourceRef {
+        kind: CombatSourceKind::Status,
+        id,
+    }
+}
+
+#[inline]
+fn push_log_entry(
+    log: &mut Vec<CombatLogEntry>,
+    entry: CombatLogEntry,
+    source: Option<&CombatSourceRef>,
+) {
+    if let Some(source) = source {
+        log.push(entry.with_source(*source));
+    } else {
+        log.push(entry);
+    }
+}
+
+#[inline]
 fn apply_status_effect(
     status_field: &mut u8,
     value: i16,
     turn: u8,
     is_target_player: bool,
     status_id: u8,
+    source: Option<&CombatSourceRef>,
     log: &mut Vec<CombatLogEntry>,
 ) {
     let add = u8::try_from(value).unwrap_or(u8::MAX);
     *status_field = status_field.saturating_add(add);
     if value > 0 {
-        log.push(CombatLogEntry::apply_status(
-            turn,
-            is_target_player,
-            status_id,
-            value,
-        ));
+        let mut entry = CombatLogEntry::apply_status(turn, is_target_player, status_id, value);
+        if let Some(source) = source {
+            entry = entry.with_source(*source);
+        }
+        log.push(entry);
     }
 }
 
@@ -206,37 +261,41 @@ pub fn apply_effect(
     player_gold: &mut u16,
     enemy_gold: &mut u16,
     gold_change: &mut i16,
+    source: Option<&CombatSourceRef>,
     log: &mut Vec<CombatLogEntry>,
 ) {
     let value = value.max(0);
-    let value_with_chill = value.saturating_add(chill_damage_bonus(status.chill));
 
     match effect_type {
         EffectType::DealDamage => {
             // ARM is "HP before HP": deplete ARM first, overflow to HP
-            let arm_damage = value_with_chill.min(stats.arm.max(0));
+            let arm_damage = value.min(stats.arm.max(0));
             stats.arm = stats.arm.saturating_sub(arm_damage);
-            let hp_damage = value_with_chill.saturating_sub(arm_damage);
+            let hp_damage = value.saturating_sub(arm_damage);
             stats.hp = stats.hp.checked_sub(hp_damage).unwrap_or(i16::MIN);
             if arm_damage > 0 {
-                log.push(CombatLogEntry::armor_change(
-                    turn,
-                    is_target_player,
-                    -arm_damage,
-                ));
+                push_log_entry(
+                    log,
+                    CombatLogEntry::armor_change(turn, is_target_player, -arm_damage),
+                    source,
+                );
             }
             if hp_damage > 0 {
-                log.push(CombatLogEntry::attack(turn, !is_target_player, hp_damage));
+                push_log_entry(
+                    log,
+                    CombatLogEntry::attack(turn, !is_target_player, hp_damage),
+                    source,
+                );
             }
         }
         EffectType::DealNonWeaponDamage => {
-            stats.hp = stats.hp.checked_sub(value_with_chill).unwrap_or(i16::MIN);
-            if value_with_chill > 0 {
-                log.push(CombatLogEntry::non_weapon_damage(
-                    turn,
-                    is_target_player,
-                    value_with_chill,
-                ));
+            stats.hp = stats.hp.checked_sub(value).unwrap_or(i16::MIN);
+            if value > 0 {
+                push_log_entry(
+                    log,
+                    CombatLogEntry::non_weapon_damage(turn, is_target_player, value),
+                    source,
+                );
             }
         }
         EffectType::Heal => {
@@ -246,32 +305,54 @@ pub fn apply_effect(
             stats.hp = healed.min(max_hp);
             let actual_heal = stats.hp - old_hp;
             if actual_heal > 0 {
-                log.push(CombatLogEntry::heal(turn, is_target_player, actual_heal));
+                push_log_entry(
+                    log,
+                    CombatLogEntry::heal(turn, is_target_player, actual_heal),
+                    source,
+                );
             }
         }
         EffectType::GainArmor => {
             stats.arm = stats.arm.checked_add(value).unwrap_or(i16::MAX);
             if value > 0 {
-                log.push(CombatLogEntry::armor_change(turn, is_target_player, value));
+                push_log_entry(
+                    log,
+                    CombatLogEntry::armor_change(turn, is_target_player, value),
+                    source,
+                );
             }
         }
         EffectType::GainAtk => {
             stats.atk = stats.atk.checked_add(value).unwrap_or(i16::MAX);
+            add_attack_contribution(stats, source, value);
             if value > 0 {
-                log.push(CombatLogEntry::atk_change(turn, is_target_player, value));
+                push_log_entry(
+                    log,
+                    CombatLogEntry::atk_change(turn, is_target_player, value),
+                    source,
+                );
             }
         }
         EffectType::GainGearAtk => {
             stats.atk = stats.atk.checked_add(value).unwrap_or(i16::MAX);
             stats.gear_atk_bonus = stats.gear_atk_bonus.saturating_add(value);
+            add_attack_contribution(stats, source, value);
             if value > 0 {
-                log.push(CombatLogEntry::atk_change(turn, is_target_player, value));
+                push_log_entry(
+                    log,
+                    CombatLogEntry::atk_change(turn, is_target_player, value),
+                    source,
+                );
             }
         }
         EffectType::GainSpd => {
             stats.spd = stats.spd.checked_add(value).unwrap_or(i16::MAX);
             if value > 0 {
-                log.push(CombatLogEntry::spd_change(turn, is_target_player, value));
+                push_log_entry(
+                    log,
+                    CombatLogEntry::spd_change(turn, is_target_player, value),
+                    source,
+                );
             }
         }
         EffectType::ApplyChill => {
@@ -281,6 +362,7 @@ pub fn apply_effect(
                 turn,
                 is_target_player,
                 STATUS_CHILL,
+                source,
                 log,
             );
         }
@@ -291,6 +373,7 @@ pub fn apply_effect(
                 turn,
                 is_target_player,
                 STATUS_SHRAPNEL,
+                source,
                 log,
             );
         }
@@ -301,6 +384,7 @@ pub fn apply_effect(
                 turn,
                 is_target_player,
                 STATUS_RUST,
+                source,
                 log,
             );
         }
@@ -311,6 +395,7 @@ pub fn apply_effect(
                 turn,
                 is_target_player,
                 STATUS_BLEED,
+                source,
                 log,
             );
         }
@@ -320,11 +405,24 @@ pub fn apply_effect(
             stats.arm = reduced.max(0);
             let actual_reduction = old_arm - stats.arm;
             if actual_reduction > 0 {
-                log.push(CombatLogEntry::armor_change(
-                    turn,
-                    is_target_player,
-                    -actual_reduction,
-                ));
+                push_log_entry(
+                    log,
+                    CombatLogEntry::armor_change(turn, is_target_player, -actual_reduction),
+                    source,
+                );
+            }
+        }
+        EffectType::RemoveOwnArmor => {
+            let old_arm = stats.arm;
+            let reduced = stats.arm.checked_sub(value).unwrap_or(i16::MIN);
+            stats.arm = reduced.max(0);
+            let actual_reduction = old_arm - stats.arm;
+            if actual_reduction > 0 {
+                push_log_entry(
+                    log,
+                    CombatLogEntry::armor_change(turn, is_target_player, -actual_reduction),
+                    source,
+                );
             }
         }
         EffectType::StealGold => {
@@ -334,7 +432,7 @@ pub fn apply_effect(
                     *player_gold = player_gold.saturating_sub(stolen as u16);
                     *enemy_gold = enemy_gold.saturating_add(stolen as u16);
                     *gold_change = gold_change.saturating_sub(stolen);
-                    log.push(CombatLogEntry::gold_stolen(turn, false, -stolen));
+                    push_log_entry(log, CombatLogEntry::gold_stolen(turn, false, -stolen), source);
                 }
             } else {
                 let stolen = value.min(i16::try_from(*enemy_gold).unwrap_or(i16::MAX));
@@ -342,8 +440,26 @@ pub fn apply_effect(
                     *enemy_gold = enemy_gold.saturating_sub(stolen as u16);
                     *player_gold = player_gold.saturating_add(stolen as u16);
                     *gold_change = gold_change.saturating_add(stolen);
-                    log.push(CombatLogEntry::gold_stolen(turn, true, stolen));
+                    push_log_entry(log, CombatLogEntry::gold_stolen(turn, true, stolen), source);
                 }
+            }
+        }
+        EffectType::GoldToArmor => {
+            let ratio = value.max(1);
+            let ratio_u16 = u16::try_from(ratio).unwrap_or(1);
+            let available_gold = if is_target_player {
+                *player_gold
+            } else {
+                *enemy_gold
+            };
+            let gained_armor = i16::try_from(available_gold / ratio_u16).unwrap_or(i16::MAX);
+            if gained_armor > 0 {
+                stats.arm = stats.arm.saturating_add(gained_armor);
+                push_log_entry(
+                    log,
+                    CombatLogEntry::armor_change(turn, is_target_player, gained_armor),
+                    source,
+                );
             }
         }
         EffectType::ApplyReflection => {
@@ -353,6 +469,7 @@ pub fn apply_effect(
                 turn,
                 is_target_player,
                 STATUS_REFLECTION,
+                source,
                 log,
             );
         }
@@ -361,16 +478,16 @@ pub fn apply_effect(
             stats.spd = stats.spd.saturating_sub(value);
             let actual_reduction = old_spd - stats.spd;
             if actual_reduction > 0 {
-                log.push(CombatLogEntry::spd_change(
-                    turn,
-                    is_target_player,
-                    -actual_reduction,
-                ));
+                push_log_entry(
+                    log,
+                    CombatLogEntry::spd_change(turn, is_target_player, -actual_reduction),
+                    source,
+                );
             }
         }
         EffectType::DealSelfNonWeaponDamage => {
             // Deal non-weapon damage to self (for bomb self-damage)
-            let mut damage = value_with_chill;
+            let mut damage = value;
 
             if matches!(phase, TriggerType::Countdown { .. }) {
                 let reduction = stats.active_bomb_self_damage_reduction.max(0);
@@ -380,11 +497,11 @@ pub fn apply_effect(
 
             stats.hp = stats.hp.checked_sub(damage).unwrap_or(i16::MIN);
             if damage > 0 {
-                log.push(CombatLogEntry::non_weapon_damage(
-                    turn,
-                    is_target_player,
-                    damage,
-                ));
+                push_log_entry(
+                    log,
+                    CombatLogEntry::non_weapon_damage(turn, is_target_player, damage),
+                    source,
+                );
             }
         }
         EffectType::SetArmorPiercing => {
@@ -401,7 +518,11 @@ pub fn apply_effect(
                         .unwrap_or(u16::MAX);
                 let max_hp_i16 = i16::try_from(stats.max_hp).unwrap_or(i16::MAX);
                 stats.hp = stats.hp.saturating_add(converted).min(max_hp_i16);
-                log.push(CombatLogEntry::heal(turn, is_target_player, converted));
+                push_log_entry(
+                    log,
+                    CombatLogEntry::heal(turn, is_target_player, converted),
+                    source,
+                );
             }
         }
         EffectType::StoreDamage => {
@@ -455,19 +576,26 @@ pub fn apply_effect(
                 *gold_change = gold_change.saturating_sub(1);
                 stats.arm = stats.arm.saturating_add(value.max(0));
                 if value > 0 {
-                    log.push(CombatLogEntry::armor_change(turn, is_target_player, value));
+                    push_log_entry(
+                        log,
+                        CombatLogEntry::armor_change(turn, is_target_player, value),
+                        source,
+                    );
                 }
             } else if !is_target_player && *enemy_gold > 0 {
                 *enemy_gold = enemy_gold.saturating_sub(1);
                 stats.arm = stats.arm.saturating_add(value.max(0));
                 if value > 0 {
-                    log.push(CombatLogEntry::armor_change(turn, is_target_player, value));
+                    push_log_entry(
+                        log,
+                        CombatLogEntry::armor_change(turn, is_target_player, value),
+                        source,
+                    );
                 }
             }
         }
         // These effects are processed outside the combat system or need special handling
         EffectType::GainStrikes
-        | EffectType::GoldToArmor
         | EffectType::GainDig
         | EffectType::ApplyBomb
         | EffectType::MaxHp
@@ -494,7 +622,7 @@ fn is_unconditional_status_application(effect: &ItemEffect) -> bool {
 
 #[allow(clippy::too_many_arguments)]
 pub fn process_triggers_for_phase(
-    effects: &mut [ItemEffect],
+    effects: &mut [AnnotatedItemEffect],
     phase: TriggerType,
     turn: u8,
     owner_stats: &mut CombatantStats,
@@ -559,7 +687,7 @@ pub fn process_triggers_for_phase(
 
 #[allow(clippy::too_many_arguments)]
 fn process_effects_pass(
-    effects: &mut [ItemEffect],
+    effects: &mut [AnnotatedItemEffect],
     phase: TriggerType,
     turn: u8,
     owner_stats: &mut CombatantStats,
@@ -580,7 +708,8 @@ fn process_effects_pass(
     let mut pending_countdown_reduction: u8 = 0;
     let mut dealt_non_weapon_damage = false;
 
-    for (index, effect) in effects.iter_mut().enumerate() {
+    for (index, annotated) in effects.iter_mut().enumerate() {
+        let effect = &mut annotated.effect;
         if effect.trigger != phase {
             continue;
         }
@@ -706,6 +835,7 @@ fn process_effects_pass(
                     player_gold,
                     enemy_gold,
                     gold_change,
+                    Some(&reflection_source()),
                     log,
                 );
             } else {
@@ -721,6 +851,7 @@ fn process_effects_pass(
                     player_gold,
                     enemy_gold,
                     gold_change,
+                    annotated.source.as_ref(),
                     log,
                 );
             }
@@ -737,6 +868,7 @@ fn process_effects_pass(
             } else {
                 *enemy_gold
             };
+            let owner_arm_before = owner_stats.arm;
             // Effect targets self (owner)
             apply_effect(
                 phase,
@@ -749,14 +881,19 @@ fn process_effects_pass(
                 player_gold,
                 enemy_gold,
                 gold_change,
+                annotated.source.as_ref(),
                 log,
             );
-            if matches!(effect.effect_type, EffectType::ConsumeGoldForArmor)
-                && (if is_owner_player {
-                    *player_gold < owner_gold_before
-                } else {
-                    *enemy_gold < owner_gold_before
-                })
+            let owner_gold_after = if is_owner_player {
+                *player_gold
+            } else {
+                *enemy_gold
+            };
+            if matches!(
+                effect.effect_type,
+                EffectType::ConsumeGoldForArmor | EffectType::GoldToArmor
+            ) && (owner_gold_after < owner_gold_before
+                || owner_stats.arm > owner_arm_before)
             {
                 gold_armor_conversion_happened = true;
             }
@@ -816,14 +953,14 @@ fn process_effects_pass(
     }
 }
 
-fn reduce_all_countdowns(effects: &mut [ItemEffect], reduction: u8) {
+pub(crate) fn reduce_all_countdowns(effects: &mut [AnnotatedItemEffect], reduction: u8) {
     if reduction == 0 {
         return;
     }
     for effect in effects.iter_mut() {
-        if let TriggerType::Countdown { turns } = effect.trigger {
+        if let TriggerType::Countdown { turns } = effect.effect.trigger {
             let reduced = turns.saturating_sub(reduction).max(1);
-            effect.trigger = TriggerType::Countdown { turns: reduced };
+            effect.effect.trigger = TriggerType::Countdown { turns: reduced };
         }
     }
 }
@@ -857,7 +994,6 @@ fn targets_opponent(effect_type: EffectType) -> bool {
             | EffectType::RemoveArmor
             | EffectType::ApplyBomb
             | EffectType::StealGold
-            | EffectType::ApplyReflection
             | EffectType::ReduceEnemySpd
     )
 }
@@ -865,7 +1001,18 @@ fn targets_opponent(effect_type: EffectType) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::Condition;
+    use crate::state::{AnnotatedItemEffect, Condition, ItemEffect, LogAction};
+
+    fn annotate(effect: ItemEffect) -> AnnotatedItemEffect {
+        AnnotatedItemEffect {
+            effect,
+            source: None,
+        }
+    }
+
+    fn annotate_all(effects: Vec<ItemEffect>) -> Vec<AnnotatedItemEffect> {
+        effects.into_iter().map(annotate).collect()
+    }
 
     #[test]
     fn test_battle_start_trigger() {
@@ -974,13 +1121,13 @@ mod tests {
         };
         let mut opponent_status = StatusEffects::default();
 
-        let mut effects = vec![ItemEffect {
+        let mut effects = vec![annotate(ItemEffect {
             trigger: TriggerType::FirstTurnIfFaster,
             once_per_turn: false,
             effect_type: EffectType::ApplyChill,
             value: 2,
             condition: Condition::None,
-        }];
+        })];
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
         let mut enemy_gold: u16 = 0;
@@ -1059,13 +1206,13 @@ mod tests {
         };
         let mut opponent_status = StatusEffects::default();
 
-        let mut effects = vec![ItemEffect {
+        let mut effects = vec![annotate(ItemEffect {
             trigger: TriggerType::FirstTurnIfFaster,
             once_per_turn: false,
             effect_type: EffectType::ApplyChill,
             value: 2,
             condition: Condition::None,
-        }];
+        })];
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
         let mut enemy_gold: u16 = 0;
@@ -1181,7 +1328,7 @@ mod tests {
         };
         let mut opponent_status = StatusEffects::default();
 
-        let mut effects = vec![
+        let mut effects = annotate_all(vec![
             ItemEffect {
                 trigger: TriggerType::TurnStart,
                 once_per_turn: false,
@@ -1196,7 +1343,7 @@ mod tests {
                 value: 1,
                 condition: Condition::None,
             },
-        ];
+        ]);
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
         let mut enemy_gold: u16 = 0;
@@ -1270,7 +1417,7 @@ mod tests {
         };
         let mut opponent_status = StatusEffects::default();
 
-        let mut effects = vec![
+        let mut effects = annotate_all(vec![
             ItemEffect {
                 trigger: TriggerType::Countdown { turns: 2 },
                 once_per_turn: false,
@@ -1285,7 +1432,7 @@ mod tests {
                 value: 4,
                 condition: Condition::None,
             },
-        ];
+        ]);
 
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
@@ -1346,13 +1493,13 @@ mod tests {
         let mut opponent_stats = CombatantStats::default();
         let mut opponent_status = StatusEffects::default();
 
-        let mut effects = vec![ItemEffect {
+        let mut effects = vec![annotate(ItemEffect {
             trigger: TriggerType::TurnStart,
             once_per_turn: false,
             effect_type: EffectType::ReduceNextBombSelfDamage,
             value: 2,
             condition: Condition::None,
-        }];
+        })];
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
         let mut enemy_gold: u16 = 0;
@@ -1397,6 +1544,97 @@ mod tests {
         assert_eq!(owner_stats.next_bomb_self_damage_reduction, 2);
     }
 
+    #[test]
+    fn test_remove_own_armor_reduces_target_armor_and_logs_it() {
+        let mut owner_stats = CombatantStats {
+            arm: 5,
+            ..Default::default()
+        };
+        let mut owner_status = StatusEffects::default();
+        let mut opponent_stats = CombatantStats::default();
+        let mut opponent_status = StatusEffects::default();
+        let mut effects = vec![annotate(ItemEffect {
+            trigger: TriggerType::OnDealNonWeaponDamage,
+            once_per_turn: false,
+            effect_type: EffectType::RemoveOwnArmor,
+            value: 2,
+            condition: Condition::None,
+        })];
+        let mut flags = vec![false; effects.len()];
+        let mut player_gold = 0u16;
+        let mut enemy_gold = 0u16;
+        let mut gold_change = 0i16;
+        let mut log = Vec::new();
+
+        process_triggers_for_phase(
+            &mut effects,
+            TriggerType::OnDealNonWeaponDamage,
+            1,
+            &mut owner_stats,
+            &mut owner_status,
+            &mut opponent_stats,
+            &mut opponent_status,
+            &mut flags,
+            false,
+            true,
+            &mut player_gold,
+            &mut enemy_gold,
+            &mut gold_change,
+            &mut log,
+        );
+
+        assert_eq!(owner_stats.arm, 3);
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].action, LogAction::ArmorChange);
+        assert_eq!(log[0].value, -2);
+    }
+
+    #[test]
+    fn test_gold_to_armor_converts_owner_gold_by_ratio() {
+        let mut owner_stats = CombatantStats {
+            arm: 1,
+            ..Default::default()
+        };
+        let mut owner_status = StatusEffects::default();
+        let mut opponent_stats = CombatantStats::default();
+        let mut opponent_status = StatusEffects::default();
+        let mut effects = vec![annotate(ItemEffect {
+            trigger: TriggerType::BattleStart,
+            once_per_turn: false,
+            effect_type: EffectType::GoldToArmor,
+            value: 4,
+            condition: Condition::None,
+        })];
+        let mut flags = vec![false; effects.len()];
+        let mut player_gold = 16u16;
+        let mut enemy_gold = 0u16;
+        let mut gold_change = 0i16;
+        let mut log = Vec::new();
+
+        process_triggers_for_phase(
+            &mut effects,
+            TriggerType::BattleStart,
+            1,
+            &mut owner_stats,
+            &mut owner_status,
+            &mut opponent_stats,
+            &mut opponent_status,
+            &mut flags,
+            true,
+            true,
+            &mut player_gold,
+            &mut enemy_gold,
+            &mut gold_change,
+            &mut log,
+        );
+
+        assert_eq!(owner_stats.arm, 5);
+        assert_eq!(player_gold, 16);
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].action, LogAction::ArmorChange);
+        assert_eq!(log[0].value, 4);
+    }
+
     // ========================================================================
     // Reflection Status Effect Tests
     // ========================================================================
@@ -1434,13 +1672,13 @@ mod tests {
         opponent_status.reflection = 1; // Opponent has 1 Reflection stack
 
         // Owner tries to apply Chill to opponent
-        let mut effects = vec![ItemEffect {
+        let mut effects = vec![annotate(ItemEffect {
             trigger: TriggerType::OnHit,
             once_per_turn: false,
             effect_type: EffectType::ApplyChill,
             value: 2,
             condition: Condition::None,
-        }];
+        })];
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
         let mut enemy_gold: u16 = 0;
@@ -1481,13 +1719,13 @@ mod tests {
         let mut opponent_status = StatusEffects::default();
         opponent_status.reflection = 2; // Opponent has 2 Reflection stacks
 
-        let mut effects = vec![ItemEffect {
+        let mut effects = vec![annotate(ItemEffect {
             trigger: TriggerType::OnHit,
             once_per_turn: false,
             effect_type: EffectType::ApplyBleed,
             value: 3,
             condition: Condition::None,
-        }];
+        })];
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
         let mut enemy_gold: u16 = 0;
@@ -1528,13 +1766,13 @@ mod tests {
         let mut opponent_status = StatusEffects::default();
         opponent_status.reflection = 1;
 
-        let mut effects = vec![ItemEffect {
+        let mut effects = vec![annotate(ItemEffect {
             trigger: TriggerType::OnHit,
             once_per_turn: false,
             effect_type: EffectType::ApplyReflection,
             value: 2,
             condition: Condition::None,
-        }];
+        })];
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
         let mut enemy_gold: u16 = 0;
@@ -1558,14 +1796,14 @@ mod tests {
             &mut log,
         );
 
-        // ApplyReflection should go through to opponent, NOT be reflected
+        // ApplyReflection should not be reflected, but it is a self-targeting effect.
         assert_eq!(
-            owner_status.reflection, 0,
-            "Owner should not receive reflected Reflection"
+            owner_status.reflection, 2,
+            "Owner should gain Reflection from its own effect"
         );
         assert_eq!(
-            opponent_status.reflection, 3,
-            "Opponent should have original 1 + applied 2 = 3 Reflection"
+            opponent_status.reflection, 1,
+            "Opponent reflection should remain unchanged"
         );
     }
 
@@ -1577,13 +1815,13 @@ mod tests {
         let mut opponent_status = StatusEffects::default();
         opponent_status.reflection = 0; // No Reflection
 
-        let mut effects = vec![ItemEffect {
+        let mut effects = vec![annotate(ItemEffect {
             trigger: TriggerType::OnHit,
             once_per_turn: false,
             effect_type: EffectType::ApplyRust,
             value: 1,
             condition: Condition::None,
-        }];
+        })];
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
         let mut enemy_gold: u16 = 0;
@@ -1623,13 +1861,13 @@ mod tests {
         opponent_status.reflection = 5; // Lots of Reflection
 
         // Direct damage effect (DealDamage targets opponent but is not a status effect)
-        let mut effects = vec![ItemEffect {
+        let mut effects = vec![annotate(ItemEffect {
             trigger: TriggerType::OnHit,
             once_per_turn: false,
             effect_type: EffectType::DealDamage,
             value: 5,
             condition: Condition::None,
-        }];
+        })];
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
         let mut enemy_gold: u16 = 0;
@@ -1672,7 +1910,7 @@ mod tests {
 
         // Two different status effects that target opponent (Chill and Rust)
         // Note: ApplyShrapnel targets SELF (for Shard Beetle, Spiked Bracers), not opponent
-        let mut effects = vec![
+        let mut effects = annotate_all(vec![
             ItemEffect {
                 trigger: TriggerType::OnHit,
                 once_per_turn: false,
@@ -1687,7 +1925,7 @@ mod tests {
                 value: 2,
                 condition: Condition::None,
             },
-        ];
+        ]);
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
         let mut enemy_gold: u16 = 0;
@@ -1731,7 +1969,7 @@ mod tests {
         opponent_status.reflection = 1; // Only 1 Reflection stack
 
         // Three status effects, but only 1 Reflection
-        let mut effects = vec![
+        let mut effects = annotate_all(vec![
             ItemEffect {
                 trigger: TriggerType::OnHit,
                 once_per_turn: false,
@@ -1753,7 +1991,7 @@ mod tests {
                 value: 3,
                 condition: Condition::None,
             },
-        ];
+        ]);
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
         let mut enemy_gold: u16 = 0;
@@ -1850,7 +2088,7 @@ mod tests {
         let mut opponent_status = StatusEffects::default();
 
         // Frost Lantern first, Frostguard Buckler second
-        let mut effects = vec![
+        let mut effects = annotate_all(vec![
             // Frost Lantern: BattleStart, apply 2 Chill to enemy
             ItemEffect {
                 trigger: TriggerType::BattleStart,
@@ -1867,7 +2105,7 @@ mod tests {
                 value: 3,
                 condition: Condition::EnemyHasStatus(StatusType::Chill),
             },
-        ];
+        ]);
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
         let mut enemy_gold: u16 = 0;
@@ -1954,7 +2192,7 @@ mod tests {
         let mut opponent_status = StatusEffects::default();
 
         // Reverse order: Frostguard Buckler first, Frost Lantern second
-        let mut effects = vec![
+        let mut effects = annotate_all(vec![
             // Frostguard Buckler first: gain 3 ARM if enemy has Chill
             ItemEffect {
                 trigger: TriggerType::BattleStart,
@@ -1971,7 +2209,7 @@ mod tests {
                 value: 2,
                 condition: Condition::None,
             },
-        ];
+        ]);
         let mut flags = vec![false; effects.len()];
         let mut player_gold: u16 = 0;
         let mut enemy_gold: u16 = 0;
@@ -2039,7 +2277,7 @@ mod tests {
         };
         let mut opponent_status = StatusEffects::default();
 
-        let mut effects = vec![
+        let mut effects = annotate_all(vec![
             ItemEffect {
                 trigger: TriggerType::OnHit,
                 once_per_turn: false,
@@ -2054,7 +2292,7 @@ mod tests {
                 value: 1,
                 condition: Condition::None,
             },
-        ];
+        ]);
         let mut flags = vec![false; effects.len()];
         let mut player_gold = 0u16;
         let mut enemy_gold = 0u16;

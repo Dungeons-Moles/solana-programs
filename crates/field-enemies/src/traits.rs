@@ -1,4 +1,7 @@
-use combat_system::state::{Condition, EffectType, ItemEffect, TriggerType};
+use combat_system::state::{
+    AnnotatedItemEffect, CombatSourceKind, CombatSourceRef, Condition, EffectType, ItemEffect,
+    TriggerType,
+};
 
 use crate::archetypes::ids;
 
@@ -130,6 +133,47 @@ pub fn get_enemy_traits(archetype_id: u8) -> &'static [ItemEffect] {
         ids::BLOOD_MOSQUITO => &BLOOD_MOSQUITO_TRAITS,
         _ => &[],
     }
+}
+
+fn enemy_source(archetype_id: u8) -> Option<CombatSourceRef> {
+    let label: &[u8] = match archetype_id {
+        ids::TUNNEL_RAT => b"TUNNEL_RAT",
+        ids::CAVE_BAT => b"CAVE_BAT",
+        ids::SPORE_SLIME => b"SPORE_SLIME",
+        ids::RUST_MITE_SWARM => b"RUST_MITE_SWARM",
+        ids::COLLAPSED_MINER => b"COLLAPSED_MINER",
+        ids::SHARD_BEETLE => b"SHARD_BEETLE",
+        ids::TUNNEL_WARDEN => b"TUNNEL_WARDEN",
+        ids::BURROW_AMBUSHER => b"BURROW_AMBUSHER",
+        ids::FROST_WISP => b"FROST_WISP",
+        ids::POWDER_TICK => b"POWDER_TICK",
+        ids::COIN_SLUG => b"COIN_SLUG",
+        ids::BLOOD_MOSQUITO => b"BLOOD_MOSQUITO",
+        _ => return None,
+    };
+
+    let mut id = [0u8; 16];
+    let len = label.len().min(16);
+    id[..len].copy_from_slice(&label[..len]);
+    Some(CombatSourceRef {
+        kind: CombatSourceKind::Enemy,
+        id,
+    })
+}
+
+pub fn get_enemy_annotated_traits(archetype_id: u8) -> Vec<AnnotatedItemEffect> {
+    let Some(source) = enemy_source(archetype_id) else {
+        return Vec::new();
+    };
+
+    get_enemy_traits(archetype_id)
+        .iter()
+        .copied()
+        .map(|effect| AnnotatedItemEffect {
+            effect,
+            source: Some(source),
+        })
+        .collect()
 }
 
 #[cfg(test)]

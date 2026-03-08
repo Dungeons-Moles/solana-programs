@@ -15,12 +15,13 @@ pub mod movement;
 pub mod state;
 pub mod stats;
 
-use combat_system::state::CombatantInput;
-#[cfg(test)]
-use combat_system::state::Condition;
+use combat_system::state::{
+    AnnotatedItemEffect, CombatContribution, CombatSourceKind, CombatSourceRef, CombatantInput,
+    Condition,
+};
 use combat_system::{
-    resolve_combat_with_both_gold, resolve_combat_with_player_gold, CombatLogEntry, EffectType,
-    ItemEffect,
+    resolve_boss_combat_annotated_with_player_gold, resolve_combat_annotated_with_both_gold,
+    resolve_combat_with_player_gold, CombatLogEntry, EffectType, ItemEffect, TriggerType,
 };
 use constants::{
     base_hp, BASE_ARM, BASE_ATK, BASE_SPD, COMPANY_TREASURY_ADDRESS, DAY_MOVES,
@@ -44,7 +45,7 @@ use movement::{
     get_duel_boss_id_vrf, is_adjacent, is_within_bounds,
     should_process_night_enemy_movement, should_process_target_enemy_combat,
 };
-use player_inventory::effects::generate_combat_effects;
+use player_inventory::effects::{generate_annotated_combat_effects, generate_combat_effects};
 use player_inventory::items::ITEMS;
 use player_inventory::state::{ItemInstance, ItemType, PlayerInventory, Tier, ToolOilModification};
 use player_profile::state::PlayerProfile;
@@ -64,6 +65,93 @@ fn compute_gold_gain_multiplier(effects: &[ItemEffect]) -> i16 {
         .filter(|effect| effect.effect_type == EffectType::AmplifyGoldGain)
         .map(|effect| effect.value.max(0))
         .sum()
+}
+
+fn compute_gold_gain_multiplier_annotated(effects: &[AnnotatedItemEffect]) -> i16 {
+    effects
+        .iter()
+        .filter(|effect| effect.effect.effect_type == EffectType::AmplifyGoldGain)
+        .map(|effect| effect.effect.value.max(0))
+        .sum()
+}
+
+fn is_baked_battle_start_stat_effect(effect: &AnnotatedItemEffect) -> bool {
+    effect.effect.trigger == combat_system::TriggerType::BattleStart
+        && effect.effect.condition == player_inventory::state::Condition::None
+        && matches!(
+            effect.effect.effect_type,
+            EffectType::GainAtk
+                | EffectType::GainGearAtk
+                | EffectType::GainArmor
+                | EffectType::GainSpd
+                | EffectType::GainDig
+                | EffectType::GainStrikes
+                | EffectType::MaxHp
+        )
+        && matches!(
+            effect.source.map(|source| source.kind),
+            Some(CombatSourceKind::Tool | CombatSourceKind::Gear)
+        )
+}
+
+fn strip_baked_battle_start_stat_effects(
+    effects: Vec<AnnotatedItemEffect>,
+) -> Vec<AnnotatedItemEffect> {
+    effects
+        .into_iter()
+        .filter(|effect| !is_baked_battle_start_stat_effect(effect))
+        .collect()
+}
+
+fn attack_source_from_effects(effects: &[AnnotatedItemEffect]) -> Option<CombatSourceRef> {
+    effects.iter().find_map(|effect| match effect.source {
+        Some(source) if matches!(source.kind, CombatSourceKind::Tool) => Some(source),
+        _ => None,
+    })
+}
+
+fn baked_attack_contributions_from_effects(
+    effects: &[AnnotatedItemEffect],
+) -> Vec<CombatContribution> {
+    let mut contributions: Vec<CombatContribution> = Vec::new();
+
+    for effect in effects {
+        let Some(source) = effect.source else {
+            continue;
+        };
+
+        if !matches!(source.kind, CombatSourceKind::Tool | CombatSourceKind::Gear) {
+            continue;
+        }
+
+        if effect.effect.trigger != TriggerType::BattleStart
+            || !matches!(effect.effect.condition, Condition::None)
+        {
+            continue;
+        }
+
+        if !matches!(
+            effect.effect.effect_type,
+            EffectType::GainAtk | EffectType::GainGearAtk
+        ) || effect.effect.value <= 0
+        {
+            continue;
+        }
+
+        if let Some(existing) = contributions
+            .iter_mut()
+            .find(|entry| entry.source == source)
+        {
+            existing.value = existing.value.saturating_add(effect.effect.value);
+        } else {
+            contributions.push(CombatContribution {
+                source,
+                value: effect.effect.value,
+            });
+        }
+    }
+
+    contributions
 }
 
 fn apply_gold_reward_multiplier(base: u16, multiplier_percent: i16) -> u16 {
@@ -989,11 +1077,15 @@ pub mod gameplay_state {
                     GAUNTLET_CAMPAIGN_LEVEL,
                     game_state.run_mode,
                 );
-                let creator_effects = generate_combat_effects(&creator_inventory);
-                let opponent_effects = generate_combat_effects(&opponent_inventory);
-                let combat_outcome = resolve_combat_with_both_gold(
-                    build_full_hp_combatant(&creator_stats),
-                    build_full_hp_combatant(&opponent_stats),
+                let all_creator_effects = generate_annotated_combat_effects(&creator_inventory);
+                let creator_effects =
+                    strip_baked_battle_start_stat_effects(all_creator_effects.clone());
+                let all_opponent_effects = generate_annotated_combat_effects(&opponent_inventory);
+                let opponent_effects =
+                    strip_baked_battle_start_stat_effects(all_opponent_effects.clone());
+                let combat_outcome = resolve_combat_annotated_with_both_gold(
+                    build_full_hp_combatant(&creator_stats, &all_creator_effects),
+                    build_full_hp_combatant(&opponent_stats, &all_opponent_effects),
                     creator_effects,
                     opponent_effects,
                     creator.loadout.gold_at_battle_start,
@@ -1301,9 +1393,6 @@ pub mod gameplay_state {
             calculate_stats(&waiting_inventory, GAUNTLET_CAMPAIGN_LEVEL, RunMode::Duel);
         let entrant_stats =
             calculate_stats(&entrant_inventory, GAUNTLET_CAMPAIGN_LEVEL, RunMode::Duel);
-        let waiting_effects = generate_combat_effects(&waiting_inventory);
-        let entrant_effects = generate_combat_effects(&entrant_inventory);
-
         // Gold derivation — use VRF if available, else slot-based fallback
         let (waiting_start_gold, entrant_start_gold) = match &vrf_data {
             Some((randomness, nonce)) => {
@@ -1331,9 +1420,14 @@ pub mod gameplay_state {
             }
         };
 
-        let combat_outcome = resolve_combat_with_both_gold(
-            build_full_hp_combatant(&waiting_stats),
-            build_full_hp_combatant(&entrant_stats),
+        let all_waiting_effects = generate_annotated_combat_effects(&waiting_inventory);
+        let waiting_effects = strip_baked_battle_start_stat_effects(all_waiting_effects.clone());
+        let all_entrant_effects = generate_annotated_combat_effects(&entrant_inventory);
+        let entrant_effects = strip_baked_battle_start_stat_effects(all_entrant_effects.clone());
+
+        let combat_outcome = resolve_combat_annotated_with_both_gold(
+            build_full_hp_combatant(&waiting_stats, &all_waiting_effects),
+            build_full_hp_combatant(&entrant_stats, &all_entrant_effects),
             waiting_effects,
             entrant_effects,
             waiting_start_gold,
@@ -2446,39 +2540,37 @@ fn remove_enemy(map_enemies: &mut MapEnemies, enemy_index: usize) {
 fn build_player_combatant(
     current_hp: i16,
     stats: &PlayerStats,
-    _player_effects: &[ItemEffect],
+    all_player_effects: &[AnnotatedItemEffect],
 ) -> CombatantInput {
     // current_hp is clamped to stats.max_hp to prevent exceeding derived max.
     let combat_hp = current_hp.clamp(1, stats.max_hp);
-
-    // Combat stats (ATK/ARM/SPD) start at BASE values (0).
-    // BattleStart effects from items will be applied during combat's BattleStart phase.
-    // This prevents double-counting that would occur if we pre-calculated these stats.
-    //
-    // Pre-calculated stats:
-    // - max_hp: Includes permanent HP bonuses (e.g., Work Vest's +HP)
-    // - dig: Used for movement cost AND combat comparators (e.g., "if DIG > enemy DIG")
-    // - strikes: Base 1 + GainStrikes bonuses (e.g., Twin Picks, Pneumatic Drill)
     CombatantInput {
         hp: combat_hp,
         max_hp: stats.max_hp as u16,
-        atk: BASE_ATK,
-        arm: BASE_ARM,
-        spd: BASE_SPD,
+        atk: stats.atk,
+        arm: stats.arm,
+        spd: stats.spd,
         dig: stats.dig,
         strikes: stats.strikes,
+        attack_source: attack_source_from_effects(all_player_effects),
+        atk_contributions: baked_attack_contributions_from_effects(all_player_effects),
     }
 }
 
-fn build_full_hp_combatant(stats: &PlayerStats) -> CombatantInput {
+fn build_full_hp_combatant(
+    stats: &PlayerStats,
+    all_player_effects: &[AnnotatedItemEffect],
+) -> CombatantInput {
     CombatantInput {
         hp: stats.max_hp,
         max_hp: stats.max_hp as u16,
-        atk: BASE_ATK,
-        arm: BASE_ARM,
-        spd: BASE_SPD,
+        atk: stats.atk,
+        arm: stats.arm,
+        spd: stats.spd,
         dig: stats.dig,
         strikes: stats.strikes,
+        attack_source: attack_source_from_effects(all_player_effects),
+        atk_contributions: baked_attack_contributions_from_effects(all_player_effects),
     }
 }
 
@@ -3113,8 +3205,11 @@ fn process_victory_effects(game_state: &mut GameState, inventory: &PlayerInvento
 ///
 /// Currently handles:
 /// - Coin Slug (id=10): BattleStart GainArmor based on player gold (floor(gold/10), cap 3)
-fn preprocess_enemy_effects(archetype_id: u8, player_gold: u16) -> Vec<ItemEffect> {
-    let base_effects = field_enemies::traits::get_enemy_traits(archetype_id);
+fn preprocess_enemy_effects(
+    archetype_id: u8,
+    player_gold: u16,
+) -> Vec<combat_system::state::AnnotatedItemEffect> {
+    let base_effects = field_enemies::traits::get_enemy_annotated_traits(archetype_id);
 
     // Coin Slug: armor = min(player_gold / 10, 3)
     if archetype_id == field_enemies::archetypes::ids::COIN_SLUG {
@@ -3122,19 +3217,22 @@ fn preprocess_enemy_effects(archetype_id: u8, player_gold: u16) -> Vec<ItemEffec
         return base_effects
             .iter()
             .map(|effect| {
-                if matches!(effect.effect_type, EffectType::GainArmor) {
-                    ItemEffect {
+                if matches!(effect.effect.effect_type, EffectType::GainArmor) {
+                    combat_system::state::AnnotatedItemEffect {
+                        effect: ItemEffect {
                         value: armor_from_gold,
-                        ..*effect
+                            ..effect.effect
+                        },
+                        source: effect.source,
                     }
                 } else {
-                    *effect
+                    effect.clone()
                 }
             })
             .collect();
     }
 
-    base_effects.to_vec()
+    base_effects
 }
 
 fn resolve_enemy_combat(
@@ -3153,26 +3251,28 @@ fn resolve_enemy_combat(
     };
 
     let player_stats = calculate_stats(inventory, game_state.campaign_level, game_state.run_mode);
-    let player_effects = generate_combat_effects(inventory);
-    let gold_multiplier = compute_gold_gain_multiplier(&player_effects);
-    let player_input = build_player_combatant(game_state.hp, &player_stats, &player_effects);
+    let all_player_effects = generate_annotated_combat_effects(inventory);
+    let player_effects = strip_baked_battle_start_stat_effects(all_player_effects.clone());
+    let gold_multiplier = compute_gold_gain_multiplier_annotated(&player_effects);
+    let player_input = build_player_combatant(game_state.hp, &player_stats, &all_player_effects);
     let enemy_effects = preprocess_enemy_effects(enemy.archetype_id, game_state.gold);
 
     emit!(CombatStarted {
         player: game_state.player,
         player_hp: game_state.hp,
-        player_atk: BASE_ATK, // ATK bonuses applied during combat's BattleStart phase
+        player_atk: player_input.atk,
         enemy_archetype: enemy.archetype_id,
         enemy_hp: enemy_input.hp,
         enemy_atk: enemy_input.atk,
     });
 
-    let result = resolve_combat_with_player_gold(
+    let result = resolve_combat_annotated_with_both_gold(
         player_input,
         enemy_input,
         player_effects,
         enemy_effects,
         game_state.gold,
+        0,
     )?;
 
     let tier_enum = field_enemies::state::EnemyTier::from_u8(enemy.tier);
@@ -3256,11 +3356,12 @@ fn resolve_boss_fight<'info>(
         )
     };
     let boss_definition = boss_system::get_boss(&boss_id).ok_or(GameplayStateError::InvalidWeek)?;
-    let boss_effects = boss_system::get_boss_item_effects(boss_definition);
+    let boss_effects = boss_system::get_boss_annotated_item_effects(boss_definition);
 
     let player_stats = calculate_stats(inventory, game_state.campaign_level, game_state.run_mode);
-    let player_effects = generate_combat_effects(inventory);
-    let player_input = build_player_combatant(game_state.hp, &player_stats, &player_effects);
+    let all_player_effects = generate_annotated_combat_effects(inventory);
+    let player_effects = strip_baked_battle_start_stat_effects(all_player_effects.clone());
+    let player_input = build_player_combatant(game_state.hp, &player_stats, &all_player_effects);
 
     emit!(BossCombatStarted {
         player: game_state.player,
@@ -3269,12 +3370,13 @@ fn resolve_boss_fight<'info>(
         week: game_state.week,
     });
 
-    let result = resolve_combat_with_player_gold(
+    let result = resolve_boss_combat_annotated_with_player_gold(
         player_input,
         boss_input,
         player_effects,
         boss_effects,
         game_state.gold,
+        boss_id,
     )?;
 
     emit!(CombatEnded {
@@ -3383,18 +3485,20 @@ fn resolve_gauntlet_echo_inline<'info>(
     };
 
     let player_stats = calculate_stats(inventory, GAUNTLET_CAMPAIGN_LEVEL, game_state.run_mode);
-    let player_effects = generate_combat_effects(inventory);
+    let all_player_effects = generate_annotated_combat_effects(inventory);
+    let player_effects = strip_baked_battle_start_stat_effects(all_player_effects.clone());
     let echo_inventory = snapshot_to_inventory(echo, game_state.session, game_state.player);
     let echo_stats = calculate_stats(
         &echo_inventory,
         GAUNTLET_CAMPAIGN_LEVEL,
         game_state.run_mode,
     );
-    let echo_effects = generate_combat_effects(&echo_inventory);
+    let all_echo_effects = generate_annotated_combat_effects(&echo_inventory);
+    let echo_effects = strip_baked_battle_start_stat_effects(all_echo_effects.clone());
 
-    let outcome = resolve_combat_with_both_gold(
-        build_player_combatant(game_state.hp, &player_stats, &player_effects),
-        build_full_hp_combatant(&echo_stats),
+    let outcome = resolve_combat_annotated_with_both_gold(
+        build_player_combatant(game_state.hp, &player_stats, &all_player_effects),
+        build_full_hp_combatant(&echo_stats, &all_echo_effects),
         player_effects,
         echo_effects,
         game_state.gold,
@@ -5440,6 +5544,9 @@ mod hp_logic_tests {
         PlayerStats {
             max_hp: 10,
             dig: 1,
+            atk: 0,
+            arm: 0,
+            spd: 0,
             strikes: 1,
         }
     }
@@ -5452,20 +5559,22 @@ mod hp_logic_tests {
         let stats = PlayerStats {
             max_hp: 15, // Already includes +5 from MaxHp effect (e.g., Work Vest)
             dig: 1,
+            atk: 0,
+            arm: 0,
+            spd: 0,
             strikes: 1,
         };
 
         // Player at full HP
         let current_hp: i16 = 15;
-        let effects = vec![];
+        let effects: Vec<AnnotatedItemEffect> = vec![];
 
         let input = build_player_combatant(current_hp, &stats, &effects);
         assert_eq!(input.hp, 15, "Combat HP should match current HP");
         assert_eq!(input.max_hp, 15, "Combat max_hp should match derived stats");
-        // ATK/ARM/SPD start at base (0) and get bonuses from BattleStart effects
-        assert_eq!(input.atk, BASE_ATK, "ATK should be base value");
-        assert_eq!(input.arm, BASE_ARM, "ARM should be base value");
-        assert_eq!(input.spd, BASE_SPD, "SPD should be base value");
+        assert_eq!(input.atk, 0, "ATK should match baked stat value");
+        assert_eq!(input.arm, 0, "ARM should match baked stat value");
+        assert_eq!(input.spd, 0, "SPD should match baked stat value");
 
         // Simulate combat: lose 3 HP
         let final_combat_hp: i16 = 12;
@@ -5484,11 +5593,14 @@ mod hp_logic_tests {
         let stats = PlayerStats {
             max_hp: 15, // Includes item bonuses from calculate_stats()
             dig: 1,
+            atk: 0,
+            arm: 0,
+            spd: 0,
             strikes: 1,
         };
 
         let current_hp: i16 = 15;
-        let effects = vec![];
+        let effects: Vec<AnnotatedItemEffect> = vec![];
 
         let input = build_player_combatant(current_hp, &stats, &effects);
         assert_eq!(input.hp, 15);
@@ -5512,7 +5624,7 @@ mod hp_logic_tests {
         let current_hp: i16 = 10;
         let stats = make_base_stats();
 
-        let effects = vec![]; // No battle start bonus
+        let effects: Vec<AnnotatedItemEffect> = vec![]; // No battle start bonus
 
         let input = build_player_combatant(current_hp, &stats, &effects);
         assert_eq!(input.hp, 10);
@@ -5528,67 +5640,47 @@ mod hp_logic_tests {
     #[test]
     fn test_derived_stats_in_combat() {
         // Test that derived stats (from inventory) are used correctly in combat
-        // Note: Only max_hp, dig, and strikes are pre-calculated in PlayerStats.
-        // ATK/ARM/SPD start at base values and get bonuses from BattleStart effects.
+        // max_hp/dig/strikes and baked Tool/Gear combat stats should all be reflected.
         let current_hp: i16 = 8;
         let stats = PlayerStats {
             max_hp: 15, // Increased from MaxHp effects (e.g., Work Vest)
             dig: 3,     // From DIG items
+            atk: 2,
+            arm: 4,
+            spd: 1,
             strikes: 2, // From GainStrikes items (e.g., Twin Picks)
         };
 
-        let effects = vec![];
+        let effects: Vec<AnnotatedItemEffect> = vec![];
 
         let input = build_player_combatant(current_hp, &stats, &effects);
         assert_eq!(input.hp, 8);
         assert_eq!(input.max_hp, 15);
-        // ATK/ARM/SPD start at base (0) - bonuses applied during BattleStart phase
-        assert_eq!(input.atk, BASE_ATK);
-        assert_eq!(input.arm, BASE_ARM);
-        assert_eq!(input.spd, BASE_SPD);
+        assert_eq!(input.atk, 2);
+        assert_eq!(input.arm, 4);
+        assert_eq!(input.spd, 1);
         assert_eq!(input.dig, 3);
         // Strikes are pre-calculated from GainStrikes effects
         assert_eq!(input.strikes, 2);
     }
 
     #[test]
-    fn test_battlestart_atk_not_double_counted() {
-        // Regression test: BattleStart ATK/ARM/SPD bonuses should NOT be pre-calculated.
-        // They are applied during combat's BattleStart phase.
-        //
-        // If this test fails, it means ATK/ARM/SPD is being double-counted:
-        // - Once in calculate_stats() -> stats (WRONG - we removed this)
-        // - And again in combat's BattleStart phase
-        //
-        // The fix ensures build_player_combatant() uses base values for ATK/ARM/SPD.
-
-        use combat_system::{EffectType, TriggerType};
-
-        // PlayerStats has max_hp, dig, and strikes
+    fn test_baked_atk_is_reflected_in_combatant_input() {
         let stats = PlayerStats {
             max_hp: 15,
             dig: 1,
+            atk: 5,
+            arm: 0,
+            spd: 0,
             strikes: 1,
         };
 
-        // BattleStart ATK effect from an item (e.g., Rime Pike)
-        let effects = vec![ItemEffect {
-            effect_type: EffectType::GainAtk,
-            trigger: TriggerType::BattleStart,
-            value: 5,
-            once_per_turn: false,
-            condition: Condition::None,
-        }];
+        let effects: Vec<AnnotatedItemEffect> = vec![];
 
         let current_hp: i16 = 15;
         let input = build_player_combatant(current_hp, &stats, &effects);
 
-        // CORRECT: combat_atk = 0 (base), effect applied during BattleStart phase
-        // BUG: combat_atk = 5 (pre-calculated, would be doubled in combat)
-        assert_eq!(
-            input.atk, BASE_ATK,
-            "ATK should be base value, not pre-calculated from BattleStart effects"
-        );
+        assert_eq!(input.atk, 5, "ATK should match baked combat stat");
         assert_eq!(input.max_hp, 15, "max_hp should match derived stats");
     }
 
@@ -5602,33 +5694,33 @@ mod hp_logic_tests {
         // 0 gold = 0 armor
         let effects = preprocess_enemy_effects(COIN_SLUG, 0);
         assert_eq!(effects.len(), 1);
-        assert_eq!(effects[0].value, 0);
+        assert_eq!(effects[0].effect.value, 0);
 
         // 9 gold = 0 armor (floor(9/10) = 0)
         let effects = preprocess_enemy_effects(COIN_SLUG, 9);
-        assert_eq!(effects[0].value, 0);
+        assert_eq!(effects[0].effect.value, 0);
 
         // 10 gold = 1 armor
         let effects = preprocess_enemy_effects(COIN_SLUG, 10);
-        assert_eq!(effects[0].value, 1);
+        assert_eq!(effects[0].effect.value, 1);
 
         // 25 gold = 2 armor
         let effects = preprocess_enemy_effects(COIN_SLUG, 25);
-        assert_eq!(effects[0].value, 2);
+        assert_eq!(effects[0].effect.value, 2);
 
         // 30 gold = 3 armor (cap)
         let effects = preprocess_enemy_effects(COIN_SLUG, 30);
-        assert_eq!(effects[0].value, 3);
+        assert_eq!(effects[0].effect.value, 3);
 
         // 100 gold = 3 armor (capped at 3)
         let effects = preprocess_enemy_effects(COIN_SLUG, 100);
-        assert_eq!(effects[0].value, 3, "Armor should be capped at 3");
+        assert_eq!(effects[0].effect.value, 3, "Armor should be capped at 3");
 
         // Non-Coin Slug enemies should not be affected
         let effects = preprocess_enemy_effects(0, 100); // Tunnel Rat
         assert!(!effects
             .iter()
-            .any(|e| { matches!(e.effect_type, EffectType::GainArmor) && e.value == 3 }));
+            .any(|e| { matches!(e.effect.effect_type, EffectType::GainArmor) && e.effect.value == 3 }));
     }
 
     #[test]

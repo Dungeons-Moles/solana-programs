@@ -34,6 +34,29 @@ pub const STATUS_RUST: u8 = 2;
 pub const STATUS_BLEED: u8 = 3;
 pub const STATUS_REFLECTION: u8 = 4;
 
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace)]
+#[repr(u8)]
+pub enum CombatSourceKind {
+    Tool = 0,
+    Gear = 1,
+    Itemset = 2,
+    Enemy = 3,
+    Boss = 4,
+    Status = 5,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace)]
+pub struct CombatSourceRef {
+    pub kind: CombatSourceKind,
+    pub id: [u8; 16],
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq, Eq, InitSpace)]
+pub struct CombatContribution {
+    pub source: CombatSourceRef,
+    pub value: i16,
+}
+
 /// Status type enum for conditions
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace)]
 #[repr(u8)]
@@ -92,7 +115,7 @@ pub enum Condition {
 
 /// A single entry in the combat log.
 /// Compact format to minimize data cost (~5 bytes per entry).
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct CombatLogEntry {
     /// Turn number (1-50)
     pub turn: u8,
@@ -104,6 +127,8 @@ pub struct CombatLogEntry {
     pub value: i16,
     /// Extra data (status_id for ApplyStatus, SPD bonus for Attack, 0 otherwise)
     pub extra: u8,
+    pub source: Option<CombatSourceRef>,
+    pub contributions: Vec<CombatContribution>,
 }
 
 impl CombatLogEntry {
@@ -114,7 +139,19 @@ impl CombatLogEntry {
             action,
             value,
             extra,
+            source: None,
+            contributions: Vec::new(),
         }
+    }
+
+    pub fn with_source(mut self, source: CombatSourceRef) -> Self {
+        self.source = Some(source);
+        self
+    }
+
+    pub fn with_contributions(mut self, contributions: Vec<CombatContribution>) -> Self {
+        self.contributions = contributions;
+        self
     }
 
     pub fn attack(turn: u8, is_player: bool, damage: i16) -> Self {
@@ -133,8 +170,8 @@ impl CombatLogEntry {
         Self::new(turn, is_player, LogAction::ApplyStatus, stacks, status_id)
     }
 
-    pub fn status_damage(turn: u8, is_player: bool, damage: i16) -> Self {
-        Self::new(turn, is_player, LogAction::StatusDamage, damage, 0)
+    pub fn status_damage(turn: u8, is_player: bool, damage: i16, status_id: u8) -> Self {
+        Self::new(turn, is_player, LogAction::StatusDamage, damage, status_id)
     }
 
     pub fn armor_change(turn: u8, is_player: bool, amount: i16) -> Self {
@@ -171,7 +208,7 @@ pub struct StatusEffects {
     pub reflection: u8,
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, InitSpace)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, InitSpace)]
 pub struct CombatantInput {
     pub hp: i16,
     pub max_hp: u16,
@@ -180,6 +217,9 @@ pub struct CombatantInput {
     pub spd: i16,
     pub dig: i16,
     pub strikes: u8,
+    pub attack_source: Option<CombatSourceRef>,
+    #[max_len(16)]
+    pub atk_contributions: Vec<CombatContribution>,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace)]
@@ -250,6 +290,7 @@ pub enum EffectType {
     ApplyRust,
     ApplyBleed,
     RemoveArmor,
+    RemoveOwnArmor,
     GainStrikes,
     StealGold,
     GoldToArmor,
@@ -314,6 +355,12 @@ pub struct ItemEffect {
     pub condition: Condition,
 }
 
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, InitSpace)]
+pub struct AnnotatedItemEffect {
+    pub effect: ItemEffect,
+    pub source: Option<CombatSourceRef>,
+}
+
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace)]
 pub enum ResolutionType {
     PlayerDefeated,
@@ -326,8 +373,8 @@ pub enum ResolutionType {
 
 /// Per-combatant state during combat. Replaces the flat `player_*`/`enemy_*`
 /// fields that were previously duplicated on `CombatState`.
- #[derive(Default)]
- pub(crate) struct Combatant {
+#[derive(Default)]
+pub(crate) struct Combatant {
     pub hp: i16,
     pub max_hp: u16,
     pub atk: i16,
@@ -350,6 +397,9 @@ pub enum ResolutionType {
     pub double_detonation_second: i16,
     pub preserve_shrapnel_cap: u8,
     pub shards_every_turn: bool,
+    pub attack_source: Option<CombatSourceRef>,
+    pub attack_base_value: i16,
+    pub atk_contributions: Vec<CombatContribution>,
     pub status: StatusEffects,
     /// Bitmask for first-time event flags (WOUNDED, EXPOSED, GAINED_SHRAPNEL).
     pub first_time_flags: u8,
@@ -359,6 +409,10 @@ impl Combatant {
     pub const WOUNDED: u8 = 1;
     pub const EXPOSED: u8 = 2;
     pub const GAINED_SHRAPNEL: u8 = 4;
+    pub const PHASE_ONE_TRIGGERED: u8 = 8;
+    pub const PHASE_TWO_TRIGGERED: u8 = 16;
+    pub const PHASE_THREE_TRIGGERED: u8 = 32;
+    pub const REFLECTION_DEPLETED: u8 = 64;
 
     pub fn has_flag(&self, flag: u8) -> bool {
         self.first_time_flags & flag != 0
@@ -391,6 +445,9 @@ impl Combatant {
             double_detonation_second: self.double_detonation_second,
             preserve_shrapnel_cap: self.preserve_shrapnel_cap,
             shards_every_turn: self.shards_every_turn,
+            attack_source: self.attack_source,
+            attack_base_value: self.attack_base_value,
+            atk_contributions: self.atk_contributions.clone(),
         }
     }
 
@@ -416,6 +473,9 @@ impl Combatant {
         self.double_detonation_second = stats.double_detonation_second;
         self.preserve_shrapnel_cap = stats.preserve_shrapnel_cap;
         self.shards_every_turn = stats.shards_every_turn;
+        self.attack_source = stats.attack_source;
+        self.attack_base_value = stats.attack_base_value;
+        self.atk_contributions = stats.atk_contributions.clone();
     }
 }
 
@@ -428,6 +488,13 @@ pub(crate) struct CombatState {
     pub enemy_gold: u16,
     /// Net gold change during combat (positive = player gains, negative = player loses)
     pub gold_change: i16,
+    pub player_acted_this_turn: bool,
+    pub enemy_acted_this_turn: bool,
+    pub player_preserved_chill: u8,
+    pub enemy_preserved_chill: u8,
+    pub player_temporary_exposed: bool,
+    pub enemy_temporary_exposed: bool,
+    pub enemy_boss_id: Option<[u8; 12]>,
 }
 
 #[cfg(test)]
@@ -458,6 +525,9 @@ mod tests {
             non_weapon_hits_this_turn: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
+            attack_source: None,
+            atk_contributions: Vec::new(),
+            attack_base_value: 0,
             status: StatusEffects::default(),
             first_time_flags: 0,
             double_detonation_first: 0,

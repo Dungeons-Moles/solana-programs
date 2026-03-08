@@ -1,10 +1,5 @@
 use crate::state::StatusEffects;
 
-#[inline]
-pub fn chill_damage_bonus(chill_stacks: u8) -> i16 {
-    i16::from(chill_stacks.min(3))
-}
-
 pub fn apply_chill_to_strikes(base_strikes: u8, chill_stacks: u8) -> u8 {
     let reduced = base_strikes.saturating_sub(chill_stacks);
     reduced.max(1)
@@ -16,20 +11,6 @@ pub fn process_shrapnel_retaliation(shrapnel_stacks: u8, attacker_hp: i16) -> i1
     }
 
     let damage = i16::from(shrapnel_stacks);
-    attacker_hp.checked_sub(damage).unwrap_or(i16::MIN)
-}
-
-pub fn process_shrapnel_retaliation_with_chill(
-    shrapnel_stacks: u8,
-    attacker_chill_stacks: u8,
-    attacker_hp: i16,
-) -> i16 {
-    if shrapnel_stacks == 0 {
-        return attacker_hp;
-    }
-
-    let damage =
-        i16::from(shrapnel_stacks).saturating_add(chill_damage_bonus(attacker_chill_stacks));
     attacker_hp.checked_sub(damage).unwrap_or(i16::MIN)
 }
 
@@ -52,17 +33,22 @@ pub fn process_bleed_damage(bleed_stacks: u8, current_hp: i16) -> i16 {
     current_hp.checked_sub(damage).unwrap_or(i16::MIN)
 }
 
-pub fn process_bleed_damage_with_chill(bleed_stacks: u8, chill_stacks: u8, current_hp: i16) -> i16 {
-    if bleed_stacks == 0 {
-        return current_hp;
-    }
-
-    let damage = i16::from(bleed_stacks).saturating_add(chill_damage_bonus(chill_stacks));
-    current_hp.checked_sub(damage).unwrap_or(i16::MIN)
-}
-
 pub fn decay_status_effects(status: &mut StatusEffects) {
     status.chill = status.chill.saturating_sub(1);
+    status.bleed = status.bleed.saturating_sub(1);
+    status.shrapnel = 0;
+    // Reflection does not decay - it consumes stacks when triggered
+}
+
+pub fn decay_status_effects_preserving_late_chill(
+    status: &mut StatusEffects,
+    preserved_late_chill: &mut u8,
+) {
+    let preserved = (*preserved_late_chill).min(status.chill);
+    let decayable = status.chill.saturating_sub(preserved);
+    status.chill = preserved.saturating_add(decayable.saturating_sub(1));
+    *preserved_late_chill = 0;
+
     status.bleed = status.bleed.saturating_sub(1);
     status.shrapnel = 0;
     // Reflection does not decay - it consumes stacks when triggered
@@ -83,6 +69,26 @@ mod tests {
         };
         decay_status_effects(&mut status);
         assert_eq!(status.chill, 1);
+    }
+
+    #[test]
+    fn test_late_applied_chill_is_preserved_through_turn_end() {
+        let mut status = StatusEffects {
+            chill: 1,
+            ..StatusEffects::default()
+        };
+        let mut preserved = 1;
+        decay_status_effects_preserving_late_chill(&mut status, &mut preserved);
+        assert_eq!(status.chill, 1);
+        assert_eq!(preserved, 0);
+
+        let mut stacked = StatusEffects {
+            chill: 3,
+            ..StatusEffects::default()
+        };
+        let mut stacked_preserved = 1;
+        decay_status_effects_preserving_late_chill(&mut stacked, &mut stacked_preserved);
+        assert_eq!(stacked.chill, 2);
     }
 
     #[test]

@@ -112,6 +112,8 @@ pub fn to_combatant_input(scaled: &ScaledBossStats) -> CombatantInput {
         spd: scaled.spd as i16,
         dig: scaled.dig as i16,
         strikes: scaled.strikes,
+        attack_source: None,
+        atk_contributions: Vec::new(),
     }
 }
 

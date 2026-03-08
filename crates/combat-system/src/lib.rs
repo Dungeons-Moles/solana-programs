@@ -9,17 +9,21 @@ pub mod triggers;
 
 use constants::{MAX_STRIKES, MAX_TURNS, MIN_STRIKES, SUDDEN_DEATH_TURN};
 use effects::{
-    apply_chill_to_strikes, decay_status_effects, process_bleed_damage_with_chill,
+    apply_chill_to_strikes, decay_status_effects_preserving_late_chill,
+    process_bleed_damage,
     process_rust_decay,
 };
 use errors::CombatSystemError;
-use state::{CombatState, Combatant, CombatantInput, StatusEffects};
-use triggers::{check_wounded, process_triggers_for_phase, reset_once_per_turn_flags};
+use state::{AnnotatedItemEffect, CombatState, Combatant, CombatantInput, StatusEffects};
+use triggers::{
+    check_wounded, process_triggers_for_phase, reduce_all_countdowns, reset_once_per_turn_flags,
+};
 
 // Re-export common types for use by other programs
 pub use state::{
-    CombatLogEntry, EffectType, ItemEffect, LogAction, ResolutionType, TriggerType, STATUS_BLEED,
-    STATUS_CHILL, STATUS_REFLECTION, STATUS_RUST, STATUS_SHRAPNEL,
+    CombatContribution, CombatLogEntry, CombatSourceKind, CombatSourceRef, EffectType, ItemEffect,
+    LogAction, ResolutionType, TriggerType, STATUS_BLEED, STATUS_CHILL, STATUS_REFLECTION,
+    STATUS_RUST, STATUS_SHRAPNEL,
 };
 
 pub struct CombatOutcome {
@@ -34,6 +38,116 @@ pub struct CombatOutcome {
     pub gold_change: i16,
 }
 
+const fn boss_id_from_str(s: &str) -> [u8; 12] {
+    let bytes = s.as_bytes();
+    let mut id = [0u8; 12];
+    let mut i = 0;
+    while i < bytes.len() && i < 12 {
+        id[i] = bytes[i];
+        i += 1;
+    }
+    id
+}
+
+const BOSS_MAD_MINER: [u8; 12] = boss_id_from_str("B-A-W1-04");
+const BOSS_CRYSTAL_MIMIC: [u8; 12] = boss_id_from_str("B-A-W2-02");
+const BOSS_POWDER_KEG_BARON: [u8; 12] = boss_id_from_str("B-A-W2-04");
+const BOSS_ELDRITCH_MOLE: [u8; 12] = boss_id_from_str("B-A-W3-01");
+const BOSS_GILDED_DEVOURER: [u8; 12] = boss_id_from_str("B-A-W3-02");
+const BOSS_FROSTBOUND_LEVIATHAN: [u8; 12] = boss_id_from_str("B-B-W3-01");
+const BOSS_RUSTED_CHRONOMANCER: [u8; 12] = boss_id_from_str("B-B-W3-02");
+
+fn annotate_effects(effects: Vec<ItemEffect>) -> Vec<AnnotatedItemEffect> {
+    effects
+        .into_iter()
+        .map(|effect| AnnotatedItemEffect {
+            effect,
+            source: None,
+        })
+        .collect()
+}
+
+fn is_enemy_boss(combat_state: &CombatState, boss_id: [u8; 12]) -> bool {
+    combat_state.enemy_boss_id == Some(boss_id)
+}
+
+fn apply_boss_special_battle_start(combat_state: &mut CombatState, log: &mut Vec<CombatLogEntry>) {
+    if is_enemy_boss(combat_state, BOSS_GILDED_DEVOURER) {
+        let gained_armor = i16::try_from((combat_state.player_gold / 3).min(12)).unwrap_or(i16::MAX);
+        if gained_armor > 0 {
+            combat_state.enemy.arm = combat_state.enemy.arm.saturating_add(gained_armor);
+            log.push(CombatLogEntry::armor_change(combat_state.turn, false, gained_armor));
+        }
+    }
+}
+
+fn apply_boss_turn_start_overrides(combat_state: &mut CombatState, log: &mut Vec<CombatLogEntry>) {
+    if combat_state.turn == 1
+        && is_enemy_boss(combat_state, BOSS_MAD_MINER)
+        && combat_state.enemy.dig > combat_state.player.dig
+    {
+        combat_state.player_temporary_exposed = true;
+    }
+
+    if is_enemy_boss(combat_state, BOSS_ELDRITCH_MOLE)
+        && combat_state.enemy.has_flag(Combatant::PHASE_THREE_TRIGGERED)
+        && combat_state.player.hp > 0
+    {
+        combat_state.player.status.bleed = combat_state.player.status.bleed.saturating_add(2);
+        log.push(CombatLogEntry::apply_status(
+            combat_state.turn,
+            true,
+            STATUS_BLEED,
+            2,
+        ));
+    }
+}
+
+fn apply_threshold_boss_transitions(combat_state: &mut CombatState, log: &mut Vec<CombatLogEntry>) {
+    if !is_enemy_boss(combat_state, BOSS_ELDRITCH_MOLE) {
+        return;
+    }
+
+    let enemy_max_hp = i32::from(combat_state.enemy.max_hp).max(1);
+    let enemy_hp = i32::from(combat_state.enemy.hp.max(0));
+    let hp_pct = enemy_hp.saturating_mul(100) / enemy_max_hp;
+
+    if !combat_state.enemy.has_flag(Combatant::PHASE_ONE_TRIGGERED) && hp_pct <= 75 {
+        combat_state.enemy.set_flag(Combatant::PHASE_ONE_TRIGGERED);
+        combat_state.enemy.arm = combat_state.enemy.arm.saturating_add(6);
+        log.push(CombatLogEntry::armor_change(combat_state.turn, false, 6));
+    }
+
+    if !combat_state.enemy.has_flag(Combatant::PHASE_TWO_TRIGGERED) && hp_pct <= 50 {
+        combat_state.enemy.set_flag(Combatant::PHASE_TWO_TRIGGERED);
+        combat_state.enemy.strikes = combat_state.enemy.strikes.saturating_add(1).min(MAX_STRIKES);
+    }
+
+    if !combat_state.enemy.has_flag(Combatant::PHASE_THREE_TRIGGERED) && hp_pct <= 25 {
+        combat_state.enemy.set_flag(Combatant::PHASE_THREE_TRIGGERED);
+    }
+}
+
+fn handle_enemy_reflection_depleted_transition(
+    combat_state: &mut CombatState,
+    enemy_hp: &mut i16,
+    reflection_before: u8,
+    reflection_after: u8,
+    log: &mut Vec<CombatLogEntry>,
+) {
+    if !is_enemy_boss(combat_state, BOSS_CRYSTAL_MIMIC)
+        || combat_state.enemy.has_flag(Combatant::REFLECTION_DEPLETED)
+        || reflection_before == 0
+        || reflection_after > 0
+    {
+        return;
+    }
+
+    combat_state.enemy.set_flag(Combatant::REFLECTION_DEPLETED);
+    *enemy_hp = enemy_hp.saturating_sub(2);
+    log.push(CombatLogEntry::non_weapon_damage(combat_state.turn, false, 2));
+}
+
 #[allow(clippy::manual_is_multiple_of)]
 pub fn resolve_combat(
     player_stats: CombatantInput,
@@ -41,11 +155,11 @@ pub fn resolve_combat(
     player_effects: Vec<ItemEffect>,
     enemy_effects: Vec<ItemEffect>,
 ) -> Result<CombatOutcome> {
-    resolve_combat_with_both_gold(
+    resolve_combat_annotated_with_both_gold(
         player_stats,
         enemy_stats,
-        player_effects,
-        enemy_effects,
+        annotate_effects(player_effects),
+        annotate_effects(enemy_effects),
         0,
         0,
     )
@@ -58,26 +172,114 @@ pub fn resolve_combat_with_player_gold(
     enemy_effects: Vec<ItemEffect>,
     player_start_gold: u16,
 ) -> Result<CombatOutcome> {
-    resolve_combat_with_both_gold(
+    resolve_combat_annotated_with_both_gold(
         player_stats,
         enemy_stats,
-        player_effects,
-        enemy_effects,
+        annotate_effects(player_effects),
+        annotate_effects(enemy_effects),
         player_start_gold,
         0,
+    )
+}
+
+pub fn resolve_boss_combat_with_player_gold(
+    player_stats: CombatantInput,
+    enemy_stats: CombatantInput,
+    player_effects: Vec<ItemEffect>,
+    enemy_effects: Vec<ItemEffect>,
+    player_start_gold: u16,
+    boss_id: [u8; 12],
+) -> Result<CombatOutcome> {
+    resolve_combat_annotated_with_both_gold_and_boss(
+        player_stats,
+        enemy_stats,
+        annotate_effects(player_effects),
+        annotate_effects(enemy_effects),
+        player_start_gold,
+        0,
+        Some(boss_id),
     )
 }
 
 pub fn resolve_combat_with_both_gold(
     player_stats: CombatantInput,
     enemy_stats: CombatantInput,
-    mut player_effects: Vec<ItemEffect>,
-    mut enemy_effects: Vec<ItemEffect>,
+    player_effects: Vec<ItemEffect>,
+    enemy_effects: Vec<ItemEffect>,
     player_start_gold: u16,
     enemy_start_gold: u16,
 ) -> Result<CombatOutcome> {
+    resolve_combat_annotated_with_both_gold_and_boss(
+        player_stats,
+        enemy_stats,
+        annotate_effects(player_effects),
+        annotate_effects(enemy_effects),
+        player_start_gold,
+        enemy_start_gold,
+        None,
+    )
+}
+
+pub fn resolve_combat_annotated_with_both_gold(
+    player_stats: CombatantInput,
+    enemy_stats: CombatantInput,
+    player_effects: Vec<AnnotatedItemEffect>,
+    enemy_effects: Vec<AnnotatedItemEffect>,
+    player_start_gold: u16,
+    enemy_start_gold: u16,
+) -> Result<CombatOutcome> {
+    resolve_combat_annotated_with_both_gold_and_boss(
+        player_stats,
+        enemy_stats,
+        player_effects,
+        enemy_effects,
+        player_start_gold,
+        enemy_start_gold,
+        None,
+    )
+}
+
+pub fn resolve_boss_combat_annotated_with_player_gold(
+    player_stats: CombatantInput,
+    enemy_stats: CombatantInput,
+    player_effects: Vec<AnnotatedItemEffect>,
+    enemy_effects: Vec<AnnotatedItemEffect>,
+    player_start_gold: u16,
+    boss_id: [u8; 12],
+) -> Result<CombatOutcome> {
+    resolve_combat_annotated_with_both_gold_and_boss(
+        player_stats,
+        enemy_stats,
+        player_effects,
+        enemy_effects,
+        player_start_gold,
+        0,
+        Some(boss_id),
+    )
+}
+
+fn resolve_combat_annotated_with_both_gold_and_boss(
+    player_stats: CombatantInput,
+    enemy_stats: CombatantInput,
+    mut player_effects: Vec<AnnotatedItemEffect>,
+    mut enemy_effects: Vec<AnnotatedItemEffect>,
+    player_start_gold: u16,
+    enemy_start_gold: u16,
+    enemy_boss_id: Option<[u8; 12]>,
+) -> Result<CombatOutcome> {
     validate_combatant(&player_stats)?;
     validate_combatant(&enemy_stats)?;
+
+    let player_baked_attack_total: i16 = player_stats
+        .atk_contributions
+        .iter()
+        .map(|entry| entry.value)
+        .sum();
+    let enemy_baked_attack_total: i16 = enemy_stats
+        .atk_contributions
+        .iter()
+        .map(|entry| entry.value)
+        .sum();
 
     // Initialize combat log (pre-allocate for typical combat length)
     let mut log: Vec<CombatLogEntry> = Vec::with_capacity(64);
@@ -107,6 +309,12 @@ pub fn resolve_combat_with_both_gold(
             double_detonation_second: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
+            attack_source: player_stats.attack_source,
+            attack_base_value: player_stats
+                .atk
+                .saturating_sub(player_baked_attack_total)
+                .max(0),
+            atk_contributions: player_stats.atk_contributions.clone(),
             status: StatusEffects::default(),
             first_time_flags: 0,
         },
@@ -133,6 +341,12 @@ pub fn resolve_combat_with_both_gold(
             double_detonation_second: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
+            attack_source: enemy_stats.attack_source,
+            attack_base_value: enemy_stats
+                .atk
+                .saturating_sub(enemy_baked_attack_total)
+                .max(0),
+            atk_contributions: enemy_stats.atk_contributions.clone(),
             status: StatusEffects::default(),
             first_time_flags: 0,
         },
@@ -140,10 +354,19 @@ pub fn resolve_combat_with_both_gold(
         player_gold: player_start_gold,
         enemy_gold: enemy_start_gold,
         gold_change: 0,
+        player_acted_this_turn: false,
+        enemy_acted_this_turn: false,
+        player_preserved_chill: 0,
+        enemy_preserved_chill: 0,
+        player_temporary_exposed: false,
+        enemy_temporary_exposed: false,
+        enemy_boss_id,
     };
 
     let mut player_triggered = vec![false; player_effects.len()];
     let mut enemy_triggered = vec![false; enemy_effects.len()];
+
+    apply_boss_special_battle_start(&mut combat_state, &mut log);
 
     apply_status_effects(
         &mut player_effects,
@@ -163,6 +386,12 @@ pub fn resolve_combat_with_both_gold(
 
     loop {
         let is_first_turn = turn == 1;
+        combat_state.player_acted_this_turn = false;
+        combat_state.enemy_acted_this_turn = false;
+        combat_state.player_temporary_exposed = false;
+        combat_state.enemy_temporary_exposed = false;
+
+        apply_boss_turn_start_overrides(&mut combat_state, &mut log);
         if is_first_turn {
             apply_status_effects(
                 &mut player_effects,
@@ -194,6 +423,14 @@ pub fn resolve_combat_with_both_gold(
                 &mut log,
             );
         }
+        apply_countdown_effects(
+            &mut player_effects,
+            &mut enemy_effects,
+            &mut combat_state,
+            &mut player_triggered,
+            &mut enemy_triggered,
+            &mut log,
+        );
 
         execute_turn(
             &mut combat_state,
@@ -223,6 +460,19 @@ pub fn resolve_combat_with_both_gold(
             &mut enemy_triggered,
             &mut log,
         );
+
+        if let Some((player_won, resolution_type)) = resolve_if_ended(&combat_state, turn) {
+            release_stored_damage_on_battle_end(&mut combat_state, &mut log);
+            return Ok(CombatOutcome {
+                player_won,
+                final_player_hp: combat_state.player.hp,
+                final_enemy_hp: combat_state.enemy.hp,
+                turns_taken: turn,
+                resolution_type,
+                log,
+                gold_change: combat_state.gold_change,
+            });
+        }
 
         apply_end_of_turn_effects(
             &mut combat_state,
@@ -305,11 +555,42 @@ fn validate_combatant(stats: &CombatantInput) -> Result<()> {
     Ok(())
 }
 
+fn apply_countdown_effects(
+    player_effects: &mut [AnnotatedItemEffect],
+    enemy_effects: &mut [AnnotatedItemEffect],
+    combat_state: &mut CombatState,
+    player_triggered: &mut [bool],
+    enemy_triggered: &mut [bool],
+    log: &mut Vec<CombatLogEntry>,
+) {
+    let mut countdown_turns = Vec::new();
+    for effect in player_effects.iter().chain(enemy_effects.iter()) {
+        if let TriggerType::Countdown { turns } = effect.effect.trigger {
+            if turns > 0 && !countdown_turns.contains(&turns) {
+                countdown_turns.push(turns);
+            }
+        }
+    }
+    countdown_turns.sort_unstable();
+
+    for turns in countdown_turns {
+        apply_status_effects(
+            player_effects,
+            enemy_effects,
+            combat_state,
+            TriggerType::Countdown { turns },
+            player_triggered,
+            enemy_triggered,
+            log,
+        );
+    }
+}
+
 fn execute_turn(
     combat_state: &mut CombatState,
     turn: u8,
-    player_effects: &mut [ItemEffect],
-    enemy_effects: &mut [ItemEffect],
+    player_effects: &mut [AnnotatedItemEffect],
+    enemy_effects: &mut [AnnotatedItemEffect],
     player_triggered: &mut [bool],
     enemy_triggered: &mut [bool],
     log: &mut Vec<CombatLogEntry>,
@@ -323,10 +604,19 @@ fn execute_turn(
         combat_state.player.strikes.min(MAX_STRIKES),
         combat_state.player.status.chill,
     );
-    let enemy_strikes = apply_chill_to_strikes(
+    let mut enemy_strikes = apply_chill_to_strikes(
         combat_state.enemy.strikes.min(MAX_STRIKES),
         combat_state.enemy.status.chill,
     );
+    if turn == 1 && is_enemy_boss(combat_state, BOSS_RUSTED_CHRONOMANCER) {
+        enemy_strikes = enemy_strikes.saturating_add(1).min(MAX_STRIKES);
+    }
+    if turn == 1
+        && is_enemy_boss(combat_state, BOSS_MAD_MINER)
+        && combat_state.enemy.dig > combat_state.player.dig
+    {
+        enemy_strikes = enemy_strikes.saturating_add(1).min(MAX_STRIKES);
+    }
 
     let mut player_stats = combat_state.player.to_stats();
     let mut enemy_stats = combat_state.enemy.to_stats();
@@ -337,7 +627,10 @@ fn execute_turn(
     let mut enemy_damage_dealt = 0;
 
     if player_first {
-        let (enemy_hp, damage) = engine::execute_strikes(
+        combat_state.player_acted_this_turn = true;
+        let player_status_before_phase = player_status;
+        let enemy_status_before_phase = enemy_status;
+        let (enemy_hp, damage) = engine::execute_strikes_with_armor_override(
             player_strikes,
             &mut player_stats,
             &mut player_status,
@@ -353,12 +646,49 @@ fn execute_turn(
             &mut combat_state.enemy_gold,
             &mut combat_state.gold_change,
             log,
+            combat_state.enemy_temporary_exposed,
         );
         enemy_stats.hp = enemy_hp;
         player_damage_dealt = damage;
+        combat_state.player_preserved_chill = combat_state
+            .player_preserved_chill
+            .saturating_add(player_status.chill.saturating_sub(player_status_before_phase.chill));
+        if combat_state.enemy_acted_this_turn {
+            combat_state.enemy_preserved_chill = combat_state
+                .enemy_preserved_chill
+                .saturating_add(enemy_status.chill.saturating_sub(enemy_status_before_phase.chill));
+        }
+        handle_enemy_reflection_depleted_transition(
+            combat_state,
+            &mut enemy_stats.hp,
+            enemy_status_before_phase.reflection,
+            enemy_status.reflection,
+            log,
+        );
+        combat_state.enemy.hp = enemy_stats.hp;
+        combat_state.enemy.arm = enemy_stats.arm;
+        apply_threshold_boss_transitions(combat_state, log);
+        enemy_stats.hp = combat_state.enemy.hp;
+        enemy_stats.arm = combat_state.enemy.arm;
+        enemy_strikes = apply_chill_to_strikes(
+            combat_state.enemy.strikes.min(MAX_STRIKES),
+            enemy_status.chill,
+        );
+        if turn == 1 && is_enemy_boss(combat_state, BOSS_RUSTED_CHRONOMANCER) {
+            enemy_strikes = enemy_strikes.saturating_add(1).min(MAX_STRIKES);
+        }
+        if turn == 1
+            && is_enemy_boss(combat_state, BOSS_MAD_MINER)
+            && combat_state.enemy.dig > combat_state.player.dig
+        {
+            enemy_strikes = enemy_strikes.saturating_add(1).min(MAX_STRIKES);
+        }
 
         if enemy_stats.hp > 0 {
-            let (player_hp, damage) = engine::execute_strikes(
+            combat_state.enemy_acted_this_turn = true;
+            let enemy_status_before_phase = enemy_status;
+            let player_status_before_phase = player_status;
+            let (player_hp, damage) = engine::execute_strikes_with_armor_override(
                 enemy_strikes,
                 &mut enemy_stats,
                 &mut enemy_status,
@@ -374,12 +704,29 @@ fn execute_turn(
                 &mut combat_state.enemy_gold,
                 &mut combat_state.gold_change,
                 log,
+                combat_state.player_temporary_exposed,
             );
             player_stats.hp = player_hp;
             enemy_damage_dealt = damage;
+            combat_state.enemy_preserved_chill = combat_state
+                .enemy_preserved_chill
+                .saturating_add(enemy_status.chill.saturating_sub(enemy_status_before_phase.chill));
+            combat_state.player_preserved_chill = combat_state
+                .player_preserved_chill
+                .saturating_add(player_status.chill.saturating_sub(player_status_before_phase.chill));
+            handle_enemy_reflection_depleted_transition(
+                combat_state,
+                &mut enemy_stats.hp,
+                enemy_status_before_phase.reflection,
+                enemy_status.reflection,
+                log,
+            );
         }
     } else {
-        let (player_hp, damage) = engine::execute_strikes(
+        combat_state.enemy_acted_this_turn = true;
+        let enemy_status_before_phase = enemy_status;
+        let player_status_before_phase = player_status;
+        let (player_hp, damage) = engine::execute_strikes_with_armor_override(
             enemy_strikes,
             &mut enemy_stats,
             &mut enemy_status,
@@ -395,12 +742,29 @@ fn execute_turn(
             &mut combat_state.enemy_gold,
             &mut combat_state.gold_change,
             log,
+            combat_state.player_temporary_exposed,
         );
         player_stats.hp = player_hp;
         enemy_damage_dealt = damage;
+        combat_state.enemy_preserved_chill = combat_state
+            .enemy_preserved_chill
+            .saturating_add(enemy_status.chill.saturating_sub(enemy_status_before_phase.chill));
+        combat_state.player_preserved_chill = combat_state
+            .player_preserved_chill
+            .saturating_add(player_status.chill.saturating_sub(player_status_before_phase.chill));
+        handle_enemy_reflection_depleted_transition(
+            combat_state,
+            &mut enemy_stats.hp,
+            enemy_status_before_phase.reflection,
+            enemy_status.reflection,
+            log,
+        );
 
         if player_stats.hp > 0 {
-            let (enemy_hp, damage) = engine::execute_strikes(
+            combat_state.player_acted_this_turn = true;
+            let player_status_before_phase = player_status;
+            let enemy_status_before_phase = enemy_status;
+            let (enemy_hp, damage) = engine::execute_strikes_with_armor_override(
                 player_strikes,
                 &mut player_stats,
                 &mut player_status,
@@ -416,9 +780,28 @@ fn execute_turn(
                 &mut combat_state.enemy_gold,
                 &mut combat_state.gold_change,
                 log,
+                combat_state.enemy_temporary_exposed,
             );
             enemy_stats.hp = enemy_hp;
             player_damage_dealt = damage;
+            combat_state.player_preserved_chill = combat_state
+                .player_preserved_chill
+                .saturating_add(player_status.chill.saturating_sub(player_status_before_phase.chill));
+            combat_state.enemy_preserved_chill = combat_state
+                .enemy_preserved_chill
+                .saturating_add(enemy_status.chill.saturating_sub(enemy_status_before_phase.chill));
+            handle_enemy_reflection_depleted_transition(
+                combat_state,
+                &mut enemy_stats.hp,
+                enemy_status_before_phase.reflection,
+                enemy_status.reflection,
+                log,
+            );
+            combat_state.enemy.hp = enemy_stats.hp;
+            combat_state.enemy.arm = enemy_stats.arm;
+            apply_threshold_boss_transitions(combat_state, log);
+            enemy_stats.hp = combat_state.enemy.hp;
+            enemy_stats.arm = combat_state.enemy.arm;
         }
     }
 
@@ -455,8 +838,8 @@ fn execute_turn(
 /// (G-BO-07) work correctly.
 fn check_first_time_wounded(
     combat_state: &mut CombatState,
-    player_effects: &mut [ItemEffect],
-    enemy_effects: &mut [ItemEffect],
+    player_effects: &mut [AnnotatedItemEffect],
+    enemy_effects: &mut [AnnotatedItemEffect],
     player_triggered: &mut [bool],
     enemy_triggered: &mut [bool],
     log: &mut Vec<CombatLogEntry>,
@@ -525,6 +908,10 @@ fn check_first_time_wounded(
             log,
         );
 
+        if is_enemy_boss(combat_state, BOSS_POWDER_KEG_BARON) {
+            reduce_all_countdowns(enemy_effects, 1);
+        }
+
         combat_state.enemy.apply_stats(&enemy_stats);
         combat_state.enemy.status = enemy_status;
         combat_state.player.apply_stats(&player_stats);
@@ -536,8 +923,8 @@ fn check_first_time_wounded(
 /// the FirstTimeExposed trigger. Also releases any stored damage on first exposure.
 fn check_first_time_exposed(
     combat_state: &mut CombatState,
-    player_effects: &mut [ItemEffect],
-    enemy_effects: &mut [ItemEffect],
+    player_effects: &mut [AnnotatedItemEffect],
+    enemy_effects: &mut [AnnotatedItemEffect],
     player_triggered: &mut [bool],
     enemy_triggered: &mut [bool],
     log: &mut Vec<CombatLogEntry>,
@@ -609,6 +996,10 @@ fn check_first_time_exposed(
             log,
         );
 
+        if is_enemy_boss(combat_state, BOSS_FROSTBOUND_LEVIATHAN) {
+            enemy_status.chill = 0;
+        }
+
         if enemy_stats.stored_damage > 0 && player_stats.hp > 0 {
             let damage = enemy_stats.stored_damage;
             player_stats.hp = player_stats.hp.saturating_sub(damage);
@@ -652,8 +1043,8 @@ fn apply_sudden_death(combat_state: &mut CombatState, turn: u8) -> Result<()> {
 #[allow(clippy::too_many_arguments)]
 fn apply_end_of_turn_effects(
     combat_state: &mut CombatState,
-    player_effects: &mut [ItemEffect],
-    enemy_effects: &mut [ItemEffect],
+    player_effects: &mut [AnnotatedItemEffect],
+    enemy_effects: &mut [AnnotatedItemEffect],
     player_triggered: &mut [bool],
     enemy_triggered: &mut [bool],
     log: &mut Vec<CombatLogEntry>,
@@ -685,14 +1076,16 @@ fn apply_end_of_turn_effects(
 
     if combat_state.player.status.bleed > 0 {
         let old_hp = combat_state.player.hp;
-        combat_state.player.hp = process_bleed_damage_with_chill(
-            combat_state.player.status.bleed,
-            combat_state.player.status.chill,
-            combat_state.player.hp,
-        );
+        combat_state.player.hp =
+            process_bleed_damage(combat_state.player.status.bleed, combat_state.player.hp);
         let damage = old_hp - combat_state.player.hp;
         if damage > 0 {
-            log.push(CombatLogEntry::status_damage(turn, true, damage));
+            log.push(CombatLogEntry::status_damage(
+                turn,
+                true,
+                damage,
+                STATUS_BLEED,
+            ));
 
             let mut enemy_stats = combat_state.enemy.to_stats();
             let mut enemy_status = combat_state.enemy.status;
@@ -724,14 +1117,16 @@ fn apply_end_of_turn_effects(
     }
     if combat_state.enemy.status.bleed > 0 {
         let old_hp = combat_state.enemy.hp;
-        combat_state.enemy.hp = process_bleed_damage_with_chill(
-            combat_state.enemy.status.bleed,
-            combat_state.enemy.status.chill,
-            combat_state.enemy.hp,
-        );
+        combat_state.enemy.hp =
+            process_bleed_damage(combat_state.enemy.status.bleed, combat_state.enemy.hp);
         let damage = old_hp - combat_state.enemy.hp;
         if damage > 0 {
-            log.push(CombatLogEntry::status_damage(turn, false, damage));
+            log.push(CombatLogEntry::status_damage(
+                turn,
+                false,
+                damage,
+                STATUS_BLEED,
+            ));
 
             let mut player_stats = combat_state.player.to_stats();
             let mut player_status = combat_state.player.status;
@@ -762,8 +1157,14 @@ fn apply_end_of_turn_effects(
         }
     }
 
-    decay_status_effects(&mut combat_state.player.status);
-    decay_status_effects(&mut combat_state.enemy.status);
+    decay_status_effects_preserving_late_chill(
+        &mut combat_state.player.status,
+        &mut combat_state.player_preserved_chill,
+    );
+    decay_status_effects_preserving_late_chill(
+        &mut combat_state.enemy.status,
+        &mut combat_state.enemy_preserved_chill,
+    );
 
     if combat_state.player.preserve_shrapnel_cap > 0 {
         let keep = player_shrapnel_before_decay.min(combat_state.player.preserve_shrapnel_cap);
@@ -773,6 +1174,9 @@ fn apply_end_of_turn_effects(
         let keep = enemy_shrapnel_before_decay.min(combat_state.enemy.preserve_shrapnel_cap);
         combat_state.enemy.status.shrapnel = combat_state.enemy.status.shrapnel.max(keep);
     }
+
+    combat_state.player_temporary_exposed = false;
+    combat_state.enemy_temporary_exposed = false;
 
     Ok(())
 }
@@ -821,17 +1225,14 @@ fn release_stored_damage_on_battle_end(
 }
 
 fn apply_status_effects(
-    player_effects: &mut [ItemEffect],
-    enemy_effects: &mut [ItemEffect],
+    player_effects: &mut [AnnotatedItemEffect],
+    enemy_effects: &mut [AnnotatedItemEffect],
     combat_state: &mut CombatState,
     trigger: TriggerType,
     player_triggered: &mut [bool],
     enemy_triggered: &mut [bool],
     log: &mut Vec<CombatLogEntry>,
 ) {
-    let mut player_applied = StatusEffects::default();
-    let mut enemy_applied = StatusEffects::default();
-
     let (player_acts_first, _) =
         engine::determine_turn_order(combat_state.player.spd, combat_state.enemy.spd);
 
@@ -840,8 +1241,6 @@ fn apply_status_effects(
         combat_state,
         true,
         trigger,
-        &mut player_applied,
-        &mut enemy_applied,
         player_triggered,
         player_acts_first,
         log,
@@ -851,8 +1250,6 @@ fn apply_status_effects(
         combat_state,
         false,
         trigger,
-        &mut player_applied,
-        &mut enemy_applied,
         enemy_triggered,
         !player_acts_first, // Enemy acts first if player doesn't
         log,
@@ -915,12 +1312,10 @@ fn log_status_stacks(combat_state: &CombatState, log: &mut Vec<CombatLogEntry>) 
 
 #[allow(clippy::too_many_arguments)]
 fn process_phase_effects(
-    effects: &mut [ItemEffect],
+    effects: &mut [AnnotatedItemEffect],
     combat_state: &mut CombatState,
     is_player: bool,
     trigger: TriggerType,
-    player_applied: &mut StatusEffects,
-    enemy_applied: &mut StatusEffects,
     triggered_flags: &mut [bool],
     owner_acts_first: bool,
     log: &mut Vec<CombatLogEntry>,
@@ -1050,41 +1445,45 @@ fn process_phase_effects(
         combat_state.enemy.status = working_status;
     }
 
-    update_status_applied(
-        owner_status_before,
-        working_status,
-        player_applied,
-        enemy_applied,
-        is_player,
-    );
-}
-
-fn update_status_applied(
-    before: StatusEffects,
-    after: StatusEffects,
-    player_applied: &mut StatusEffects,
-    enemy_applied: &mut StatusEffects,
-    is_player: bool,
-) {
-    let applied = StatusEffects {
-        chill: after.chill.saturating_sub(before.chill),
-        shrapnel: after.shrapnel.saturating_sub(before.shrapnel),
-        rust: after.rust.saturating_sub(before.rust),
-        bleed: after.bleed.saturating_sub(before.bleed),
-        reflection: after.reflection.saturating_sub(before.reflection),
-    };
-
-    let target = if is_player {
-        player_applied
+    if is_player {
+        if combat_state.player_acted_this_turn {
+            combat_state.player_preserved_chill = combat_state
+                .player_preserved_chill
+                .saturating_add(working_status.chill.saturating_sub(owner_status_before.chill));
+        }
+        if combat_state.enemy_acted_this_turn {
+            combat_state.enemy_preserved_chill = combat_state
+                .enemy_preserved_chill
+                .saturating_add(opponent_status.chill.saturating_sub(opponent_status_before.chill));
+        }
+        handle_enemy_reflection_depleted_transition(
+            combat_state,
+            &mut opponent_stats.hp,
+            opponent_status_before.reflection,
+            opponent_status.reflection,
+            log,
+        );
+        combat_state.enemy.hp = opponent_stats.hp;
     } else {
-        enemy_applied
-    };
-
-    target.chill = target.chill.saturating_add(applied.chill);
-    target.shrapnel = target.shrapnel.saturating_add(applied.shrapnel);
-    target.rust = target.rust.saturating_add(applied.rust);
-    target.bleed = target.bleed.saturating_add(applied.bleed);
-    target.reflection = target.reflection.saturating_add(applied.reflection);
+        if combat_state.enemy_acted_this_turn {
+            combat_state.enemy_preserved_chill = combat_state
+                .enemy_preserved_chill
+                .saturating_add(working_status.chill.saturating_sub(owner_status_before.chill));
+        }
+        if combat_state.player_acted_this_turn {
+            combat_state.player_preserved_chill = combat_state
+                .player_preserved_chill
+                .saturating_add(opponent_status.chill.saturating_sub(opponent_status_before.chill));
+        }
+        handle_enemy_reflection_depleted_transition(
+            combat_state,
+            &mut working_stats.hp,
+            owner_status_before.reflection,
+            working_status.reflection,
+            log,
+        );
+        combat_state.enemy.hp = working_stats.hp;
+    }
 }
 
 #[cfg(test)]
@@ -1105,6 +1504,8 @@ mod tests {
             spd: 1, // Player acts second
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 100, // Enemy won't die quickly
@@ -1114,6 +1515,8 @@ mod tests {
             spd: 2, // Enemy acts first
             dig: 0,
             strikes: 2,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
 
         // Player has a FirstTimeWounded effect that grants 6 armor (simulating Gore Mantle)
@@ -1163,6 +1566,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -1172,6 +1577,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
 
         // Player has a FirstTimeWounded effect that grants 6 armor
@@ -1215,6 +1622,8 @@ mod tests {
             spd: 2, // Player acts first
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 20,
@@ -1224,6 +1633,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
 
         let player_effects = vec![];
@@ -1267,6 +1678,8 @@ mod tests {
             spd: 2, // Player acts first
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -1276,6 +1689,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
 
         // Player has:
@@ -1329,6 +1744,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -1338,6 +1755,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
 
         // Player has:
@@ -1393,6 +1812,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -1402,6 +1823,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
 
         // Player has:
@@ -1450,6 +1873,8 @@ mod tests {
             spd: 2, // Player attacks first
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -1459,6 +1884,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
 
         // Player has:
@@ -1517,6 +1944,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -1526,6 +1955,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
 
         // Stone Sigil: End of turn, if you have Armor, gain +2 Armor
@@ -1567,6 +1998,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -1576,6 +2009,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
 
         // Stone Sigil: End of turn, if you have Armor, gain +2 Armor
@@ -1614,6 +2049,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 100,
@@ -1623,6 +2060,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
 
         let player_effects = vec![ItemEffect {
@@ -1670,6 +2109,8 @@ mod tests {
             spd: 2, // Player attacks first
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -1679,6 +2120,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
 
         // Player has EveryOtherTurnFirstHit heal effect (like Emerald Shard)
@@ -1719,6 +2162,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -1728,6 +2173,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
 
         let player_effects = vec![ItemEffect {
@@ -1768,6 +2215,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 3, // Multiple strikes
+            attack_source: None,
+        atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 100, // High HP to survive multiple turns
@@ -1777,6 +2226,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
 
         let player_effects = vec![ItemEffect {
@@ -1820,6 +2271,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -1829,6 +2282,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
 
         // Ruby Shard: Deal non-weapon damage on first hit every other turn
@@ -1869,6 +2324,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -1878,6 +2335,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
 
         // Sapphire Shard: Gain armor on first hit every other turn
@@ -1919,6 +2378,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 100,
@@ -1928,6 +2389,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
 
         let player_effects = vec![ItemEffect {
@@ -1990,6 +2453,8 @@ mod tests {
             spd: 1, // Player acts second (enemy attacks first)
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -1999,6 +2464,8 @@ mod tests {
             spd: 2, // Enemy acts first
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
 
         // Rime Cloak: OnStruck (once per turn), apply 1 Chill to attacker
@@ -2039,6 +2506,8 @@ mod tests {
             spd: 1, // Player acts second
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 100,
@@ -2048,6 +2517,8 @@ mod tests {
             spd: 2, // Enemy acts first
             dig: 0,
             strikes: 3, // Multiple strikes
+            attack_source: None,
+        atk_contributions: Vec::new(),
         };
 
         // OnStruck once per turn: apply 1 Chill
@@ -2062,9 +2533,15 @@ mod tests {
 
         let outcome = resolve_combat(player, enemy, player_effects, enemy_effects).unwrap();
 
-        // Count Chill applications on turn 1 - should be exactly 1
-        let chill_on_turn_1 = outcome
+        // Count immediate Chill applications before the player's first attack on turn 1.
+        // End-of-turn status stack logging may add another ApplyStatus entry after combat
+        // actions complete, but the OnStruck trigger itself should still fire once.
+        let first_player_attack_index = outcome
             .log
+            .iter()
+            .position(|entry| matches!(entry.action, LogAction::Attack) && entry.is_player)
+            .unwrap_or(outcome.log.len());
+        let chill_on_turn_1 = outcome.log[..first_player_attack_index]
             .iter()
             .filter(|entry| {
                 matches!(entry.action, LogAction::ApplyStatus)
@@ -2092,6 +2569,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -2101,6 +2580,8 @@ mod tests {
             spd: 2, // Enemy acts first
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
 
         let player_effects = vec![ItemEffect {
@@ -2138,6 +2619,8 @@ mod tests {
             spd: 2, // Player acts first
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 100,
@@ -2147,6 +2630,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
 
         // Player: OnStruck apply Chill to attacker
@@ -2207,6 +2692,8 @@ mod tests {
             spd: 1, // Player acts second
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -2216,6 +2703,8 @@ mod tests {
             spd: 2, // Enemy acts first
             dig: 0,
             strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
         };
 
         // Rime Cloak: OnStruck (once per turn), apply 1 Chill to attacker
@@ -2253,5 +2742,364 @@ mod tests {
             "OnStruck SHOULD fire on armor-only damage (turn 1). Log: {:?}",
             outcome.log
         );
+    }
+
+    #[test]
+    fn test_late_applied_chill_reduces_next_turn_strikes() {
+        let player = CombatantInput {
+            hp: 20,
+            max_hp: 20,
+            atk: 1,
+            arm: 0,
+            spd: 1,
+            dig: 0,
+            strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
+        };
+        let enemy = CombatantInput {
+            hp: 20,
+            max_hp: 20,
+            atk: 2,
+            arm: 0,
+            spd: 2,
+            dig: 0,
+            strikes: 2,
+        attack_source: None,
+        atk_contributions: Vec::new(),
+        };
+        let player_effects = vec![ItemEffect {
+            trigger: TriggerType::OnHit,
+            once_per_turn: false,
+            effect_type: EffectType::ApplyChill,
+            value: 1,
+            condition: Condition::None,
+        }];
+
+        let outcome = resolve_combat(player, enemy, player_effects, vec![]).unwrap();
+        let enemy_attacks_turn_2 = outcome
+            .log
+            .iter()
+            .filter(|entry| {
+                entry.turn == 2 && !entry.is_player && matches!(entry.action, LogAction::Attack)
+            })
+            .count();
+
+        assert_eq!(enemy_attacks_turn_2, 1);
+    }
+
+    #[test]
+    fn test_mad_miner_turn_one_exposed_is_temporary_hp_only_damage() {
+        let player = CombatantInput {
+            hp: 20,
+            max_hp: 20,
+            atk: 1,
+            arm: 10,
+            spd: 1,
+            dig: 0,
+            strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
+        };
+        let enemy = CombatantInput {
+            hp: 20,
+            max_hp: 20,
+            atk: 2,
+            arm: 0,
+            spd: 2,
+            dig: 3,
+            strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
+        };
+
+        let outcome = resolve_boss_combat_with_player_gold(
+            player,
+            enemy,
+            vec![],
+            vec![],
+            0,
+            BOSS_MAD_MINER,
+        )
+        .unwrap();
+
+        let enemy_turn_1_attacks = outcome
+            .log
+            .iter()
+            .filter(|entry| {
+                entry.turn == 1 && !entry.is_player && matches!(entry.action, LogAction::Attack)
+            })
+            .count();
+        let player_armor_loss_turn_1 = outcome.log.iter().any(|entry| {
+            entry.turn == 1
+                && entry.is_player
+                && matches!(entry.action, LogAction::ArmorChange)
+                && entry.value < 0
+        });
+
+        assert_eq!(enemy_turn_1_attacks, 2);
+        assert!(!player_armor_loss_turn_1);
+    }
+
+    #[test]
+    fn test_crystal_mimic_glass_heart_triggers_when_reflection_depletes() {
+        let player = CombatantInput {
+            hp: 20,
+            max_hp: 20,
+            atk: 1,
+            arm: 0,
+            spd: 2,
+            dig: 0,
+            strikes: 2,
+        attack_source: None,
+        atk_contributions: Vec::new(),
+        };
+        let enemy = CombatantInput {
+            hp: 20,
+            max_hp: 20,
+            atk: 1,
+            arm: 0,
+            spd: 1,
+            dig: 0,
+            strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
+        };
+        let player_effects = vec![ItemEffect {
+            trigger: TriggerType::OnHit,
+            once_per_turn: false,
+            effect_type: EffectType::ApplyChill,
+            value: 1,
+            condition: Condition::None,
+        }];
+        let enemy_effects = vec![ItemEffect {
+            trigger: TriggerType::BattleStart,
+            once_per_turn: false,
+            effect_type: EffectType::ApplyReflection,
+            value: 2,
+            condition: Condition::None,
+        }];
+
+        let outcome = resolve_boss_combat_with_player_gold(
+            player,
+            enemy,
+            player_effects,
+            enemy_effects,
+            0,
+            BOSS_CRYSTAL_MIMIC,
+        )
+        .unwrap();
+
+        assert!(
+            outcome.log.iter().any(|entry| {
+                !entry.is_player
+                    && matches!(entry.action, LogAction::NonWeaponDamage)
+                    && entry.value == 2
+            }),
+            "Expected Glass Heart damage after reflection depletion. Log: {:?}",
+            outcome.log
+        );
+    }
+
+    #[test]
+    fn test_powder_keg_baron_short_fuse_reduces_countdown_after_wounded() {
+        let player = CombatantInput {
+            hp: 30,
+            max_hp: 30,
+            atk: 11,
+            arm: 0,
+            spd: 2,
+            dig: 0,
+            strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
+        };
+        let enemy = CombatantInput {
+            hp: 20,
+            max_hp: 20,
+            atk: 1,
+            arm: 0,
+            spd: 1,
+            dig: 0,
+            strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
+        };
+        let enemy_effects = vec![
+            ItemEffect {
+                trigger: TriggerType::Countdown { turns: 3 },
+                once_per_turn: false,
+                effect_type: EffectType::DealNonWeaponDamage,
+                value: 8,
+                condition: Condition::None,
+            },
+            ItemEffect {
+                trigger: TriggerType::Countdown { turns: 3 },
+                once_per_turn: false,
+                effect_type: EffectType::DealSelfNonWeaponDamage,
+                value: 8,
+                condition: Condition::None,
+            },
+        ];
+
+        let outcome = resolve_boss_combat_with_player_gold(
+            player,
+            enemy,
+            vec![],
+            enemy_effects,
+            0,
+            BOSS_POWDER_KEG_BARON,
+        )
+        .unwrap();
+
+        assert!(
+            outcome.log.iter().any(|entry| {
+                entry.turn == 2
+                    && matches!(entry.action, LogAction::NonWeaponDamage)
+                    && entry.value == 8
+            }),
+            "Expected Baron countdown to advance to turn 2 after wounded. Log: {:?}",
+            outcome.log
+        );
+    }
+
+    #[test]
+    fn test_eldritch_mole_phase_one_armor_triggers_on_threshold() {
+        let player = CombatantInput {
+            hp: 20,
+            max_hp: 20,
+            atk: 6,
+            arm: 0,
+            spd: 2,
+            dig: 0,
+            strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
+        };
+        let enemy = CombatantInput {
+            hp: 20,
+            max_hp: 20,
+            atk: 1,
+            arm: 0,
+            spd: 1,
+            dig: 0,
+            strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
+        };
+
+        let outcome = resolve_boss_combat_with_player_gold(
+            player,
+            enemy,
+            vec![],
+            vec![],
+            0,
+            BOSS_ELDRITCH_MOLE,
+        )
+        .unwrap();
+
+        assert!(outcome.log.iter().any(|entry| {
+            entry.turn == 1
+                && !entry.is_player
+                && matches!(entry.action, LogAction::ArmorChange)
+                && entry.value == 6
+        }));
+    }
+
+    #[test]
+    fn test_rusted_chronomancer_extra_strike_is_turn_one_only() {
+        let player = CombatantInput {
+            hp: 30,
+            max_hp: 30,
+            atk: 1,
+            arm: 0,
+            spd: 1,
+            dig: 0,
+            strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
+        };
+        let enemy = CombatantInput {
+            hp: 20,
+            max_hp: 20,
+            atk: 2,
+            arm: 0,
+            spd: 2,
+            dig: 0,
+            strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
+        };
+
+        let outcome = resolve_boss_combat_with_player_gold(
+            player,
+            enemy,
+            vec![],
+            vec![],
+            0,
+            BOSS_RUSTED_CHRONOMANCER,
+        )
+        .unwrap();
+
+        let turn_1_attacks = outcome
+            .log
+            .iter()
+            .filter(|entry| {
+                entry.turn == 1 && !entry.is_player && matches!(entry.action, LogAction::Attack)
+            })
+            .count();
+        let turn_2_attacks = outcome
+            .log
+            .iter()
+            .filter(|entry| {
+                entry.turn == 2 && !entry.is_player && matches!(entry.action, LogAction::Attack)
+            })
+            .count();
+
+        assert_eq!(turn_1_attacks, 2);
+        assert_eq!(turn_2_attacks, 1);
+    }
+
+    #[test]
+    fn test_gilded_devourer_uses_player_gold_for_battle_start_armor_cap() {
+        let player = CombatantInput {
+            hp: 20,
+            max_hp: 20,
+            atk: 1,
+            arm: 0,
+            spd: 2,
+            dig: 0,
+            strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
+        };
+        let enemy = CombatantInput {
+            hp: 20,
+            max_hp: 20,
+            atk: 1,
+            arm: 0,
+            spd: 1,
+            dig: 0,
+            strikes: 1,
+        attack_source: None,
+        atk_contributions: Vec::new(),
+        };
+
+        let outcome = resolve_boss_combat_with_player_gold(
+            player,
+            enemy,
+            vec![],
+            vec![],
+            50,
+            BOSS_GILDED_DEVOURER,
+        )
+        .unwrap();
+
+        assert!(outcome.log.iter().any(|entry| {
+            entry.turn == 1
+                && !entry.is_player
+                && matches!(entry.action, LogAction::ArmorChange)
+                && entry.value == 12
+        }));
     }
 }

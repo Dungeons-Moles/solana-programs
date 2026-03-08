@@ -8,12 +8,40 @@ use crate::nft_items::get_nft_item;
 use crate::state::{
     stat_bonus, EffectType, ItemEffect, ItemInstance, PlayerInventory, Tier, ToolOilModification,
 };
+use combat_system::state::{AnnotatedItemEffect, CombatSourceKind, CombatSourceRef};
 
 const GEMFINDER_STAFF_ID: [u8; 8] = *b"T-GR-02\0";
 const EMERALD_SHARD_ID: [u8; 8] = *b"G-GR-05\0";
 const RUBY_SHARD_ID: [u8; 8] = *b"G-GR-06\0";
 const SAPPHIRE_SHARD_ID: [u8; 8] = *b"G-GR-07\0";
 const CITRINE_SHARD_ID: [u8; 8] = *b"G-GR-08\0";
+
+fn item_source(kind: CombatSourceKind, item_id: &[u8; 8]) -> CombatSourceRef {
+    let mut id = [0u8; 16];
+    id[..8].copy_from_slice(item_id);
+    CombatSourceRef { kind, id }
+}
+
+fn itemset_source(itemset_id: &str) -> CombatSourceRef {
+    let mut id = [0u8; 16];
+    let bytes = itemset_id.as_bytes();
+    let len = bytes.len().min(16);
+    id[..len].copy_from_slice(&bytes[..len]);
+    CombatSourceRef {
+        kind: CombatSourceKind::Itemset,
+        id,
+    }
+}
+
+fn annotate_effects(effects: Vec<ItemEffect>, source: CombatSourceRef) -> Vec<AnnotatedItemEffect> {
+    effects
+        .into_iter()
+        .map(|effect| AnnotatedItemEffect {
+            effect,
+            source: Some(source),
+        })
+        .collect()
+}
 
 /// Convert an item's effects to ItemEffect array with tier scaling
 pub fn generate_item_effects(item: &ItemInstance) -> Vec<ItemEffect> {
@@ -151,6 +179,67 @@ pub fn generate_combat_effects(inventory: &PlayerInventory) -> Vec<ItemEffect> {
     // 3. Add itemset bonuses
     effects.extend(generate_itemset_effects(inventory));
 
+    effects
+}
+
+pub fn generate_annotated_tool_effects(tool: &ItemInstance) -> Vec<AnnotatedItemEffect> {
+    annotate_effects(generate_tool_effects(tool), item_source(CombatSourceKind::Tool, &tool.item_id))
+}
+
+pub fn generate_annotated_gear_effects(
+    gear_slots: &[Option<ItemInstance>],
+    gemfinder_shard_amp: bool,
+) -> Vec<AnnotatedItemEffect> {
+    gear_slots
+        .iter()
+        .flatten()
+        .flat_map(|item| {
+            let mut effects = generate_item_effects(item);
+            if gemfinder_shard_amp {
+                apply_gemfinder_shard_bonus(item, &mut effects);
+            }
+            for effect in effects.iter_mut() {
+                if effect.effect_type == EffectType::GainAtk {
+                    effect.effect_type = EffectType::GainGearAtk;
+                }
+            }
+            annotate_effects(effects, item_source(CombatSourceKind::Gear, &item.item_id))
+        })
+        .collect()
+}
+
+pub fn generate_annotated_itemset_effects(inventory: &PlayerInventory) -> Vec<AnnotatedItemEffect> {
+    get_active_itemsets(inventory)
+        .into_iter()
+        .flat_map(|set| {
+            annotate_effects(
+                set.bonus_effect
+                    .iter()
+                    .map(|effect_def| effect_def.to_item_effect(Tier::I))
+                    .collect(),
+                itemset_source(set.id),
+            )
+        })
+        .collect()
+}
+
+pub fn generate_annotated_combat_effects(inventory: &PlayerInventory) -> Vec<AnnotatedItemEffect> {
+    let mut effects = Vec::new();
+    let gemfinder_shard_amp = inventory
+        .tool
+        .as_ref()
+        .map(|tool| tool.item_id == GEMFINDER_STAFF_ID)
+        .unwrap_or(false);
+
+    if let Some(ref tool) = inventory.tool {
+        effects.extend(generate_annotated_tool_effects(tool));
+    }
+
+    effects.extend(generate_annotated_gear_effects(
+        &inventory.gear,
+        gemfinder_shard_amp,
+    ));
+    effects.extend(generate_annotated_itemset_effects(inventory));
     effects
 }
 

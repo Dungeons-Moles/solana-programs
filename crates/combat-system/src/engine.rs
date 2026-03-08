@@ -1,6 +1,9 @@
 use crate::constants::{MAX_TURNS, SUDDEN_DEATH_RAMP_TURN, SUDDEN_DEATH_TURN};
-use crate::effects::{chill_damage_bonus, process_shrapnel_retaliation_with_chill};
-use crate::state::{CombatLogEntry, ItemEffect, StatusEffects, TriggerType};
+use crate::effects::process_shrapnel_retaliation;
+use crate::state::{
+    AnnotatedItemEffect, CombatContribution, CombatLogEntry, CombatSourceKind, CombatSourceRef,
+    StatusEffects, TriggerType,
+};
 use crate::triggers::{process_triggers_for_phase, CombatantStats};
 
 /// Calculate weapon damage. ARM is now a separate HP pool, not damage reduction.
@@ -12,11 +15,6 @@ pub fn calculate_weapon_damage(attacker_atk: i16) -> i16 {
 pub fn determine_turn_order(player_spd: i16, enemy_spd: i16) -> (bool, bool) {
     let player_first = player_spd > enemy_spd;
     (player_first, !player_first)
-}
-
-pub fn spd_advantage_bonus(attacker_spd: i16, defender_spd: i16) -> i16 {
-    let diff = attacker_spd.saturating_sub(defender_spd).max(0);
-    diff / 2
 }
 
 pub fn check_sudden_death(turn: u8) -> i16 {
@@ -64,10 +62,9 @@ pub fn execute_strike(
     attacker_armor_piercing: i16,
     defender_arm: i16,
     defender_hp: i16,
-    defender_chill: u8,
+    _defender_chill: u8,
 ) -> (i16, i16, i16, i16) {
-    let raw_damage =
-        calculate_weapon_damage(attacker_atk).saturating_add(chill_damage_bonus(defender_chill));
+    let raw_damage = calculate_weapon_damage(attacker_atk);
 
     if raw_damage <= 0 {
         return (defender_hp, defender_arm, 0, 0);
@@ -83,6 +80,50 @@ pub fn execute_strike(
     (new_hp, new_arm, hp_damage, arm_damage)
 }
 
+fn shrapnel_source() -> CombatSourceRef {
+    let mut id = [0u8; 16];
+    id[..8].copy_from_slice(b"shrapnel");
+    CombatSourceRef {
+        kind: CombatSourceKind::Status,
+        id,
+    }
+}
+
+fn attack_contributions(attacker_stats: &CombatantStats, strike_value: i16) -> Vec<CombatContribution> {
+    if strike_value <= 0 {
+        return Vec::new();
+    }
+
+    let mut contributions = Vec::new();
+
+    if attacker_stats.attack_base_value > 0 {
+        if let Some(source) = attacker_stats.attack_source {
+            contributions.push(CombatContribution {
+                source,
+                value: attacker_stats.attack_base_value,
+            });
+        }
+    }
+
+    contributions.extend(attacker_stats.atk_contributions.iter().cloned());
+    let total: i16 = contributions.iter().map(|entry| entry.value).sum();
+    if total < strike_value {
+        if let Some(source) = attacker_stats.attack_source {
+            if let Some(existing) = contributions.iter_mut().find(|entry| entry.source == source) {
+                existing.value = existing.value.saturating_add(strike_value - total);
+            } else {
+                contributions.push(CombatContribution {
+                    source,
+                    value: strike_value - total,
+                });
+            }
+        }
+    }
+
+    contributions.retain(|entry| entry.value > 0);
+    contributions
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn execute_strikes(
     strikes: u8,
@@ -90,9 +131,9 @@ pub fn execute_strikes(
     attacker_status: &mut StatusEffects,
     defender_stats: &mut CombatantStats,
     defender_status: &mut StatusEffects,
-    on_hit_effects: &mut [ItemEffect],
+    on_hit_effects: &mut [AnnotatedItemEffect],
     triggered_flags: &mut [bool],
-    defender_effects: &mut [ItemEffect],
+    defender_effects: &mut [AnnotatedItemEffect],
     defender_triggered_flags: &mut [bool],
     turn: u8,
     is_player_attacking: bool,
@@ -100,6 +141,45 @@ pub fn execute_strikes(
     enemy_gold: &mut u16,
     gold_change: &mut i16,
     log: &mut Vec<CombatLogEntry>,
+) -> (i16, i16) {
+    execute_strikes_with_armor_override(
+        strikes,
+        attacker_stats,
+        attacker_status,
+        defender_stats,
+        defender_status,
+        on_hit_effects,
+        triggered_flags,
+        defender_effects,
+        defender_triggered_flags,
+        turn,
+        is_player_attacking,
+        player_gold,
+        enemy_gold,
+        gold_change,
+        log,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn execute_strikes_with_armor_override(
+    strikes: u8,
+    attacker_stats: &mut CombatantStats,
+    attacker_status: &mut StatusEffects,
+    defender_stats: &mut CombatantStats,
+    defender_status: &mut StatusEffects,
+    on_hit_effects: &mut [AnnotatedItemEffect],
+    triggered_flags: &mut [bool],
+    defender_effects: &mut [AnnotatedItemEffect],
+    defender_triggered_flags: &mut [bool],
+    turn: u8,
+    is_player_attacking: bool,
+    player_gold: &mut u16,
+    enemy_gold: &mut u16,
+    gold_change: &mut i16,
+    log: &mut Vec<CombatLogEntry>,
+    ignore_defender_armor: bool,
 ) -> (i16, i16) {
     let mut total_hp_damage: i16 = 0;
 
@@ -111,16 +191,16 @@ pub fn execute_strikes(
             strike_atk = non_gear_atk.saturating_add(gear_bonus / 2);
         }
 
-        let spd_bonus = if strike_index == 0 {
-            spd_advantage_bonus(attacker_stats.spd, defender_stats.spd)
-        } else {
-            0
-        };
+        let contributions = attack_contributions(attacker_stats, strike_atk);
 
         let (new_hp, new_arm, hp_damage, arm_damage) = execute_strike(
-            strike_atk + spd_bonus,
+            strike_atk,
             attacker_stats.armor_piercing,
-            defender_stats.arm,
+            if ignore_defender_armor {
+                0
+            } else {
+                defender_stats.arm
+            },
             defender_stats.hp,
             defender_status.chill,
         );
@@ -130,25 +210,30 @@ pub fn execute_strikes(
 
         // Log armor damage if any
         if arm_damage > 0 {
-            log.push(CombatLogEntry::armor_change(
+            let mut entry = CombatLogEntry::armor_change(
                 turn,
                 !is_player_attacking, // Defender's armor is being reduced
                 -arm_damage,
-            ));
+            );
+            if let Some(source) = attacker_stats.attack_source {
+                entry = entry.with_source(source);
+            }
+            if !contributions.is_empty() {
+                entry = entry.with_contributions(contributions.clone());
+            }
+            log.push(entry);
         }
 
         // Log HP damage if any (this is the "attack" that got through armor)
         if hp_damage > 0 {
-            if spd_bonus > 0 && strike_index == 0 {
-                log.push(CombatLogEntry::attack_with_extra(
-                    turn,
-                    is_player_attacking,
-                    hp_damage,
-                    spd_bonus as u8,
-                ));
-            } else {
-                log.push(CombatLogEntry::attack(turn, is_player_attacking, hp_damage));
+            let mut entry = CombatLogEntry::attack(turn, is_player_attacking, hp_damage);
+            if let Some(source) = attacker_stats.attack_source {
+                entry = entry.with_source(source);
             }
+            if !contributions.is_empty() {
+                entry = entry.with_contributions(contributions.clone());
+            }
+            log.push(entry);
         }
 
         // Trigger OnHit effects if any damage was dealt (armor or HP)
@@ -156,6 +241,7 @@ pub fn execute_strikes(
             // Track status before OnHit effects to detect rust/shrapnel applications
             let attacker_shrapnel_before = attacker_status.shrapnel;
             let defender_rust_before = defender_status.rust;
+            let defender_hp_before_on_hit_effects = defender_stats.hp;
 
             process_triggers_for_phase(
                 on_hit_effects,
@@ -238,6 +324,27 @@ pub fn execute_strikes(
                 );
             }
 
+            let defender_took_non_weapon_damage =
+                defender_stats.hp < defender_hp_before_on_hit_effects;
+            if defender_took_non_weapon_damage {
+                process_triggers_for_phase(
+                    defender_effects,
+                    TriggerType::OnDealNonWeaponDamage,
+                    turn,
+                    defender_stats,
+                    defender_status,
+                    attacker_stats,
+                    attacker_status,
+                    defender_triggered_flags,
+                    !is_player_attacking,
+                    false,
+                    player_gold,
+                    enemy_gold,
+                    gold_change,
+                    log,
+                );
+            }
+
             // Fire OnStruck effects for the defender (e.g., Rime Cloak applies Chill to attacker)
             // Note: defender is the "owner" of OnStruck effects, attacker is the "opponent"
             process_triggers_for_phase(
@@ -260,9 +367,8 @@ pub fn execute_strikes(
 
         // Shrapnel: defender retaliates with damage when struck
         let old_attacker_hp = attacker_stats.hp;
-        attacker_stats.hp = process_shrapnel_retaliation_with_chill(
+        attacker_stats.hp = process_shrapnel_retaliation(
             defender_status.shrapnel,
-            attacker_status.chill,
             attacker_stats.hp,
         );
         let shrapnel_damage = old_attacker_hp - attacker_stats.hp;
@@ -271,7 +377,7 @@ pub fn execute_strikes(
                 turn,
                 is_player_attacking, // The attacker takes the damage
                 shrapnel_damage,
-            ));
+            ).with_source(shrapnel_source()));
         }
 
         if defender_stats.hp <= 0 {
@@ -285,7 +391,7 @@ pub fn execute_strikes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{Condition, EffectType, LogAction};
+    use crate::state::{AnnotatedItemEffect, LogAction};
 
     fn make_combatant(atk: i16, spd: i16, arm: i16) -> CombatantStats {
         CombatantStats {
@@ -319,9 +425,9 @@ mod tests {
     ) -> Vec<CombatLogEntry> {
         let mut attacker_status = StatusEffects::default();
         let mut defender_status = StatusEffects::default();
-        let mut on_hit_effects: Vec<ItemEffect> = Vec::new();
+        let mut on_hit_effects: Vec<AnnotatedItemEffect> = Vec::new();
         let mut triggered_flags: Vec<bool> = Vec::new();
-        let mut defender_effects: Vec<ItemEffect> = Vec::new();
+        let mut defender_effects: Vec<AnnotatedItemEffect> = Vec::new();
         let mut defender_triggered_flags: Vec<bool> = Vec::new();
         let mut player_gold: u16 = 0;
         let mut enemy_gold: u16 = 0;
@@ -431,9 +537,9 @@ mod tests {
         };
         let mut attacker_status = StatusEffects::default();
         let mut defender_status = StatusEffects::default();
-        let mut effects: Vec<ItemEffect> = Vec::new();
+        let mut effects: Vec<AnnotatedItemEffect> = Vec::new();
         let mut flags: Vec<bool> = Vec::new();
-        let mut defender_effects: Vec<ItemEffect> = Vec::new();
+        let mut defender_effects: Vec<AnnotatedItemEffect> = Vec::new();
         let mut defender_flags: Vec<bool> = Vec::new();
         let mut player_gold: u16 = 0;
         let mut enemy_gold: u16 = 0;
@@ -505,9 +611,9 @@ mod tests {
         };
         let mut attacker_status_again = StatusEffects::default();
         let mut defender_status_again = StatusEffects::default();
-        let mut effects_again: Vec<ItemEffect> = Vec::new();
+        let mut effects_again: Vec<AnnotatedItemEffect> = Vec::new();
         let mut flags_again: Vec<bool> = Vec::new();
-        let mut defender_effects_again: Vec<ItemEffect> = Vec::new();
+        let mut defender_effects_again: Vec<AnnotatedItemEffect> = Vec::new();
         let mut defender_flags_again: Vec<bool> = Vec::new();
         let mut player_gold_again: u16 = 0;
         let mut enemy_gold_again: u16 = 0;
@@ -595,9 +701,9 @@ mod tests {
         };
         let mut attacker_status = StatusEffects::default();
         let mut defender_status = StatusEffects::default();
-        let mut effects: Vec<ItemEffect> = Vec::new();
+        let mut effects: Vec<AnnotatedItemEffect> = Vec::new();
         let mut flags: Vec<bool> = Vec::new();
-        let mut defender_effects: Vec<ItemEffect> = Vec::new();
+        let mut defender_effects: Vec<AnnotatedItemEffect> = Vec::new();
         let mut defender_flags: Vec<bool> = Vec::new();
         let mut player_gold: u16 = 0;
         let mut enemy_gold: u16 = 0;
@@ -625,230 +731,6 @@ mod tests {
         // Strike 1: 5, strike 2: 5, strike 3: 1 + floor(4/2) = 3
         assert_eq!(total_hp_damage, 13);
         assert_eq!(defender.hp, 7);
-    }
-
-    #[test]
-    fn test_spd_advantage_bonus_first_strike_only() {
-        let mut attacker = CombatantStats {
-            hp: 10,
-            max_hp: 10,
-            atk: 3,
-            arm: 0,
-            spd: 6,
-            dig: 0,
-            armor_piercing: 0,
-            stored_damage: 0,
-            gear_atk_bonus: 0,
-            half_gear_atk_after_second_strike: false,
-            next_bomb_damage_bonus: 0,
-            next_bomb_self_damage_reduction: 0,
-            active_bomb_self_damage_reduction: 0,
-            non_weapon_damage_bonus: 0,
-            next_non_weapon_damage_bonus: 0,
-            preserve_shrapnel_cap: 0,
-            shards_every_turn: false,
-            ..Default::default()
-        };
-        let mut defender = CombatantStats {
-            hp: 20,
-            max_hp: 20,
-            atk: 0,
-            arm: 0,
-            spd: 1,
-            dig: 0,
-            armor_piercing: 0,
-            stored_damage: 0,
-            gear_atk_bonus: 0,
-            half_gear_atk_after_second_strike: false,
-            next_bomb_damage_bonus: 0,
-            next_bomb_self_damage_reduction: 0,
-            active_bomb_self_damage_reduction: 0,
-            non_weapon_damage_bonus: 0,
-            next_non_weapon_damage_bonus: 0,
-            preserve_shrapnel_cap: 0,
-            shards_every_turn: false,
-            ..Default::default()
-        };
-        let mut attacker_status = StatusEffects::default();
-        let mut defender_status = StatusEffects::default();
-        let mut effects: Vec<ItemEffect> = Vec::new();
-        let mut flags: Vec<bool> = Vec::new();
-        let mut defender_effects: Vec<ItemEffect> = Vec::new();
-        let mut defender_flags: Vec<bool> = Vec::new();
-        let mut player_gold: u16 = 0;
-        let mut enemy_gold: u16 = 0;
-        let mut gold_change: i16 = 0;
-        let mut log: Vec<CombatLogEntry> = Vec::new();
-
-        execute_strikes(
-            2,
-            &mut attacker,
-            &mut attacker_status,
-            &mut defender,
-            &mut defender_status,
-            &mut effects,
-            &mut flags,
-            &mut defender_effects,
-            &mut defender_flags,
-            1,
-            true,
-            &mut player_gold,
-            &mut enemy_gold,
-            &mut gold_change,
-            &mut log,
-        );
-
-        assert!(log
-            .iter()
-            .any(|entry| entry.action == LogAction::Attack && entry.extra > 0));
-        assert!(log
-            .iter()
-            .any(|entry| entry.action == LogAction::Attack && entry.extra == 0));
-    }
-
-    #[test]
-    fn test_spd_bonus_formula() {
-        assert_eq!(spd_advantage_bonus(5, 1), 2);
-        assert_eq!(spd_advantage_bonus(3, 3), 0);
-        assert_eq!(spd_advantage_bonus(2, 5), 0);
-        assert_eq!(spd_advantage_bonus(7, 4), 1);
-    }
-
-    #[test]
-    fn spd_bonus_applies_only_to_first_strike_each_turn() {
-        let mut attacker = make_combatant(5, 6, 0);
-        let mut defender = make_combatant(4, 0, 0);
-
-        let log = run_test_strikes(&mut attacker, &mut defender, 2, 5, true);
-        let attacks: Vec<_> = log
-            .iter()
-            .filter(|entry| entry.action == LogAction::Attack)
-            .collect();
-
-        assert_eq!(attacks.len(), 2);
-        assert_eq!(attacks[0].extra, 3);
-        assert_eq!(attacks[1].extra, 0);
-    }
-
-    #[test]
-    fn spd_bonus_recalculates_each_turn() {
-        let mut attacker = make_combatant(5, 6, 0);
-        let mut defender = make_combatant(4, 1, 0);
-
-        let first_turn = run_test_strikes(&mut attacker, &mut defender, 1, 1, true);
-        let first_attack = first_turn
-            .iter()
-            .find(|entry| entry.action == LogAction::Attack)
-            .unwrap();
-        assert_eq!(first_attack.extra, 2);
-
-        attacker.spd = 1;
-        defender.spd = 6;
-
-        let second_turn = run_test_strikes(&mut attacker, &mut defender, 1, 2, true);
-        let second_attack = second_turn
-            .iter()
-            .find(|entry| entry.action == LogAction::Attack)
-            .unwrap();
-        assert_eq!(second_attack.extra, 0);
-    }
-
-    #[test]
-    fn spd_bonus_applies_to_both_sides() {
-        let mut player = make_combatant(4, 2, 0);
-        let mut enemy = make_combatant(5, 6, 0);
-
-        let log = run_test_strikes(&mut enemy, &mut player, 1, 1, false);
-        let enemy_attack = log
-            .iter()
-            .find(|entry| entry.action == LogAction::Attack && !entry.is_player)
-            .unwrap();
-        assert_eq!(enemy_attack.extra, 2);
-    }
-
-    #[test]
-    fn spd_difference_below_two_gives_no_bonus() {
-        let mut attacker = make_combatant(4, 3, 0);
-        let mut defender = make_combatant(4, 2, 0);
-
-        let log = run_test_strikes(&mut attacker, &mut defender, 1, 3, true);
-        let attack = log
-            .iter()
-            .find(|entry| entry.action == LogAction::Attack)
-            .unwrap();
-        assert_eq!(attack.extra, 0);
-
-        attacker.spd = 4;
-        defender.spd = 4;
-        let log = run_test_strikes(&mut attacker, &mut defender, 1, 4, true);
-        let attack = log
-            .iter()
-            .find(|entry| entry.action == LogAction::Attack)
-            .unwrap();
-        assert_eq!(attack.extra, 0);
-    }
-
-    #[test]
-    fn spd_bonus_accounts_for_battle_start_spd_gain() {
-        let mut attacker = make_combatant(4, 6, 0);
-        let mut defender = make_combatant(4, 5, 0);
-        let mut attacker_status = StatusEffects::default();
-        let mut defender_status = StatusEffects::default();
-        let mut attacker_effects = vec![ItemEffect {
-            trigger: TriggerType::BattleStart,
-            once_per_turn: false,
-            effect_type: EffectType::GainSpd,
-            value: 1,
-            condition: Condition::None,
-        }];
-        let mut attacker_flags = vec![false; attacker_effects.len()];
-        let mut defender_effects: Vec<ItemEffect> = Vec::new();
-        let mut defender_flags: Vec<bool> = Vec::new();
-        let mut player_gold = 0u16;
-        let mut enemy_gold = 0u16;
-        let mut gold_change = 0i16;
-        let mut log = Vec::new();
-
-        process_triggers_for_phase(
-            &mut attacker_effects,
-            TriggerType::BattleStart,
-            1,
-            &mut attacker,
-            &mut attacker_status,
-            &mut defender,
-            &mut defender_status,
-            &mut attacker_flags,
-            true,
-            true,
-            &mut player_gold,
-            &mut enemy_gold,
-            &mut gold_change,
-            &mut log,
-        );
-
-        execute_strikes(
-            1,
-            &mut attacker,
-            &mut attacker_status,
-            &mut defender,
-            &mut defender_status,
-            &mut attacker_effects,
-            &mut attacker_flags,
-            &mut defender_effects,
-            &mut defender_flags,
-            1,
-            true,
-            &mut player_gold,
-            &mut enemy_gold,
-            &mut gold_change,
-            &mut log,
-        );
-
-        let attack = log
-            .iter()
-            .find(|entry| entry.action == LogAction::Attack)
-            .expect("attack log missing");
-        assert_eq!(attack.extra, 1);
     }
 
     #[test]

@@ -13,6 +13,7 @@ pub use traits::*;
 // Re-export combat types from combat-system to avoid duplication
 pub use combat_system::state::CombatantInput;
 pub use combat_system::{EffectType, ItemEffect, TriggerType};
+use combat_system::state::{AnnotatedItemEffect, CombatSourceKind, CombatSourceRef};
 
 /// Biome type for boss categorization
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,6 +130,18 @@ pub fn get_boss_effects(stage: u8, week: Week) -> Result<Vec<ItemEffect>, BossSy
     Ok(get_boss_item_effects(boss))
 }
 
+pub fn get_boss_annotated_effects(
+    stage: u8,
+    week: Week,
+) -> Result<Vec<AnnotatedItemEffect>, BossSystemError> {
+    if !(1..=40).contains(&stage) {
+        return Err(BossSystemError::InvalidStage);
+    }
+
+    let boss = select_boss(stage, week);
+    Ok(get_boss_annotated_item_effects(boss))
+}
+
 /// Returns a complete CombatantInput struct for initializing boss combat.
 /// Includes scaled stats ready for combat system.
 pub fn get_boss_combat_input(stage: u8, week: Week) -> Result<CombatantInput, BossSystemError> {
@@ -138,5 +151,12 @@ pub fn get_boss_combat_input(stage: u8, week: Week) -> Result<CombatantInput, Bo
 
     let boss = select_boss(stage, week);
     let scaled = scale_boss(boss, stage, week);
-    Ok(to_combatant_input(&scaled))
+    let mut combatant = to_combatant_input(&scaled);
+    let mut source_id = [0u8; 16];
+    source_id[..12].copy_from_slice(&boss.id);
+    combatant.attack_source = Some(CombatSourceRef {
+        kind: CombatSourceKind::Boss,
+        id: source_id,
+    });
+    Ok(combatant)
 }

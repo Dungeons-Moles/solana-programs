@@ -1,5 +1,5 @@
 use crate::state::EnemyStats;
-use combat_system::state::CombatantInput;
+use combat_system::state::{CombatSourceKind, CombatSourceRef, CombatantInput};
 
 /// Number of enemy archetypes (12 field enemies per GDD)
 pub const ARCHETYPE_COUNT: usize = 12;
@@ -410,6 +410,24 @@ pub fn get_enemy_stats(archetype_id: u8, tier: u8) -> Option<&'static EnemyStats
 /// Get combatant input for combat system
 pub fn get_enemy_combatant_input(archetype_id: u8, tier: u8) -> Option<CombatantInput> {
     let stats = get_enemy_stats(archetype_id, tier)?;
+    let label: &[u8] = match archetype_id {
+        ids::TUNNEL_RAT => b"TUNNEL_RAT",
+        ids::CAVE_BAT => b"CAVE_BAT",
+        ids::SPORE_SLIME => b"SPORE_SLIME",
+        ids::RUST_MITE_SWARM => b"RUST_MITE_SWARM",
+        ids::COLLAPSED_MINER => b"COLLAPSED_MINER",
+        ids::SHARD_BEETLE => b"SHARD_BEETLE",
+        ids::TUNNEL_WARDEN => b"TUNNEL_WARDEN",
+        ids::BURROW_AMBUSHER => b"BURROW_AMBUSHER",
+        ids::FROST_WISP => b"FROST_WISP",
+        ids::POWDER_TICK => b"POWDER_TICK",
+        ids::COIN_SLUG => b"COIN_SLUG",
+        ids::BLOOD_MOSQUITO => b"BLOOD_MOSQUITO",
+        _ => return None,
+    };
+    let mut source_id = [0u8; 16];
+    let len = label.len().min(16);
+    source_id[..len].copy_from_slice(&label[..len]);
     Some(CombatantInput {
         hp: stats.hp as i16,
         max_hp: stats.hp,
@@ -418,6 +436,11 @@ pub fn get_enemy_combatant_input(archetype_id: u8, tier: u8) -> Option<Combatant
         spd: stats.spd as i16,
         dig: stats.dig as i16,
         strikes: 1,
+        attack_source: Some(CombatSourceRef {
+            kind: CombatSourceKind::Enemy,
+            id: source_id,
+        }),
+        atk_contributions: Vec::new(),
     })
 }
 

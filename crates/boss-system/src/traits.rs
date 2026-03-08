@@ -55,12 +55,29 @@ impl BossTrait {
 
     /// Convert to ItemEffect for combat system
     pub fn to_item_effect(&self) -> ItemEffect {
+        let (effect_type, value) = match self.special {
+            SpecialMechanic::Reflection { stacks } => {
+                (EffectType::ApplyReflection, i16::from(stacks))
+            }
+            _ => (self.effect_type, self.value),
+        };
+
+        let condition = match self.special {
+            SpecialMechanic::Conditional {
+                condition: Condition::PlayerDigLessThan,
+            } => CombatCondition::DigGreaterThanEnemyDig,
+            SpecialMechanic::Conditional {
+                condition: Condition::PlayerExposed,
+            } => CombatCondition::EnemyHasNoArmor,
+            _ => CombatCondition::None,
+        };
+
         ItemEffect {
             trigger: self.trigger,
             once_per_turn: self.once_per_turn,
-            effect_type: self.effect_type,
-            value: self.value,
-            condition: CombatCondition::None, // TODO: Map SpecialMechanic::Conditional to CombatCondition
+            effect_type,
+            value,
+            condition,
         }
     }
 }
@@ -81,11 +98,11 @@ pub static BROODMOTHER_TRAITS: &[BossTrait] = &[
 pub static OBSIDIAN_GOLEM_TRAITS: &[BossTrait] = &[
     // Hardened Core: +2 ARM at Turn Start
     BossTrait::new(TriggerType::TurnStart, EffectType::GainArmor, 2),
-    // Cracked Shell: Non-weapon damage removes 2 ARM (tracked externally)
-    BossTrait::new(TriggerType::OnHit, EffectType::RemoveArmor, 2).with_special(
-        SpecialMechanic::Conditional {
-            condition: Condition::PlayerExposed,
-        },
+    // Cracked Shell: Taking non-weapon damage removes 2 of its own Armor
+    BossTrait::new(
+        TriggerType::OnDealNonWeaponDamage,
+        EffectType::RemoveOwnArmor,
+        2,
     ),
 ];
 
@@ -138,14 +155,8 @@ pub static DRILL_SERGEANT_TRAITS: &[BossTrait] = &[
 /// Crystal Mimic: 2 reflection stacks, +2 non-weapon taken when depleted
 pub static CRYSTAL_MIMIC_TRAITS: &[BossTrait] = &[
     // Prismatic Reflection: 2 stacks, reflects status effects
-    BossTrait::new(TriggerType::BattleStart, EffectType::GainArmor, 0)
+    BossTrait::new(TriggerType::BattleStart, EffectType::ApplyReflection, 2)
         .with_special(SpecialMechanic::Reflection { stacks: 2 }),
-    // Glass Heart: +2 non-weapon damage taken when reflection depleted
-    BossTrait::new(TriggerType::TurnStart, EffectType::DealNonWeaponDamage, 0).with_special(
-        SpecialMechanic::Conditional {
-            condition: Condition::ReflectionDepleted,
-        },
-    ),
 ];
 
 /// Rust Regent: 1 Rust/hit, 2 dmg if Exposed at turn start
@@ -162,10 +173,17 @@ pub static RUST_REGENT_TRAITS: &[BossTrait] = &[
 
 /// Powder Keg Baron: 3-turn countdown for 10 dmg both, -1 countdown when Wounded
 pub static POWDER_KEG_BARON_TRAITS: &[BossTrait] = &[
-    // Volatile Countdown: 10 damage to both after 3 turns
+    // Volatile Countdown: 8 non-weapon damage to enemy after 3 turns
     BossTrait::new(
         TriggerType::Countdown { turns: 3 },
-        EffectType::DealDamage,
+        EffectType::DealNonWeaponDamage,
+        8,
+    )
+    .with_special(SpecialMechanic::Countdown { turns: 3 }),
+    // Volatile Countdown: 8 non-weapon damage to self after 3 turns
+    BossTrait::new(
+        TriggerType::Countdown { turns: 3 },
+        EffectType::DealSelfNonWeaponDamage,
         8,
     )
     .with_special(SpecialMechanic::Countdown { turns: 3 }),
@@ -180,12 +198,12 @@ pub static POWDER_KEG_BARON_TRAITS: &[BossTrait] = &[
 
 /// Greedkeeper: Steal 10 Gold, ARM = stolen/5 (cap 6)
 pub static GREEDKEEPER_TRAITS: &[BossTrait] = &[
-    // Toll Collector: Steal 8 Gold at Battle Start
-    BossTrait::new(TriggerType::BattleStart, EffectType::StealGold, 8),
+    // Toll Collector: Steal 16 Gold at Battle Start
+    BossTrait::new(TriggerType::BattleStart, EffectType::StealGold, 16),
     // Gilded Barrier: ARM = stolen gold / 4 (cap 4)
     BossTrait::new(TriggerType::BattleStart, EffectType::GoldToArmor, 4).with_special(
         SpecialMechanic::GoldInteraction {
-            steal_amount: 8,
+            steal_amount: 16,
             armor_ratio: 4,
         },
     ),
@@ -212,10 +230,10 @@ pub static ELDRITCH_MOLE_TRAITS: &[BossTrait] = &[
 /// The Gilded Devourer: Gold→ARM (+1/5 cap 10), Wounded: 3 Bleed
 pub static GILDED_DEVOURER_TRAITS: &[BossTrait] = &[
     // Tax Feast: Gold to ARM conversion at Battle Start
-    BossTrait::new(TriggerType::BattleStart, EffectType::GoldToArmor, 6).with_special(
+    BossTrait::new(TriggerType::BattleStart, EffectType::GoldToArmor, 3).with_special(
         SpecialMechanic::GoldInteraction {
             steal_amount: 0,
-            armor_ratio: 6,
+            armor_ratio: 3,
         },
     ),
     // Hunger: Apply 2 Bleed when Wounded
@@ -232,8 +250,8 @@ pub static FROSTBOUND_LEVIATHAN_TRAITS: &[BossTrait] = &[
     BossTrait::new(TriggerType::BattleStart, EffectType::ApplyChill, 2),
     // Glacial Bulk: +3 ARM every 2 turns
     BossTrait::new(TriggerType::EveryOtherTurn, EffectType::GainArmor, 3),
-    // Crack Ice: When Exposed, clear Chill and +2 SPD
-    BossTrait::new(TriggerType::Exposed, EffectType::GainSpd, 2),
+    // Crack Ice: First time Exposed, clear Chill and +2 SPD
+    BossTrait::new(TriggerType::FirstTimeExposed, EffectType::GainSpd, 2),
 ];
 
 /// The Rusted Chronomancer: 2 strikes T1, 1 Rust/turn, Wounded: 4 Bleed
@@ -256,6 +274,34 @@ pub struct PhaseState {
     pub phase_1_triggered: bool,
     pub phase_2_triggered: bool,
     pub phase_3_triggered: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use combat_system::state::{Condition as CombatCondition, TriggerType as CombatTriggerType};
+
+    #[test]
+    fn test_player_dig_less_than_maps_to_owner_dig_greater_than_enemy_dig() {
+        let effect = MAD_MINER_TRAITS[0].to_item_effect();
+        assert_eq!(effect.condition, CombatCondition::DigGreaterThanEnemyDig);
+    }
+
+    #[test]
+    fn test_reflection_special_maps_to_apply_reflection() {
+        let effect = CRYSTAL_MIMIC_TRAITS[0].to_item_effect();
+        assert_eq!(effect.effect_type, EffectType::ApplyReflection);
+        assert_eq!(effect.value, 2);
+        assert_eq!(effect.trigger, CombatTriggerType::BattleStart);
+    }
+
+    #[test]
+    fn test_obsidian_golem_uses_non_weapon_trigger_and_removes_own_armor() {
+        let effect = OBSIDIAN_GOLEM_TRAITS[1].to_item_effect();
+        assert_eq!(effect.trigger, CombatTriggerType::OnDealNonWeaponDamage);
+        assert_eq!(effect.effect_type, EffectType::RemoveOwnArmor);
+        assert_eq!(effect.value, 2);
+    }
 }
 
 /// Phase levels for Week 3 finals

@@ -3,27 +3,33 @@
 //! Stats are calculated at runtime from equipped items rather than stored in GameState.
 //! This ensures stats always reflect current equipment and prevents desync issues.
 //!
-//! IMPORTANT: Only max_hp and dig are pre-calculated here. ATK/ARM/SPD are applied
-//! during combat's BattleStart phase to avoid double-counting. Combat stats start
-//! at base values (0) and get their bonuses from BattleStart effects in the combat system.
+//! IMPORTANT: unconditional Tool/Gear combat stats are pre-calculated here so on-chain combat
+//! starts from the same baseline as local replay. Conditional battle-start effects and itemset
+//! battle-start stat bonuses remain dynamic combat effects.
 
 use crate::constants::{base_hp, BASE_DIG, PVP_BASE_HP};
 use crate::state::RunMode;
-use combat_system::{EffectType, TriggerType};
-use player_inventory::effects::generate_combat_effects;
-use player_inventory::state::PlayerInventory;
+use combat_system::{CombatSourceKind, EffectType, TriggerType};
+use player_inventory::effects::generate_annotated_combat_effects;
+use player_inventory::state::{Condition, PlayerInventory};
 
 /// Derived player stats from inventory.
 /// Used for combat and movement calculations.
 ///
-/// NOTE: Only `max_hp`, `dig`, and `strikes` are derived here. Combat stats (ATK/ARM/SPD)
-/// are applied during combat's BattleStart phase to prevent double-counting.
+/// NOTE: `atk`, `arm`, and `spd` only include unconditional Tool/Gear bonuses. Conditional
+/// battle-start effects and itemset stat bonuses are still resolved inside combat.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PlayerStats {
     /// Maximum HP (base + permanent item bonuses like Work Vest's +HP)
     pub max_hp: i16,
     /// Dig stat (affects wall movement cost and combat comparators)
     pub dig: i16,
+    /// Starting ATK for combat
+    pub atk: i16,
+    /// Starting ARM for combat
+    pub arm: i16,
+    /// Starting SPD for combat
+    pub spd: i16,
     /// Number of strikes per turn (base 1 + GainStrikes bonuses)
     pub strikes: u8,
 }
@@ -38,14 +44,14 @@ const BASE_STRIKES: u8 = 1;
 /// - dig: For movement cost calculation
 /// - strikes: For multi-strike tools (Twin Picks, Pneumatic Drill)
 ///
-/// Combat stats (ATK/ARM/SPD) are NOT calculated here - they start at base (0)
-/// and are applied during combat's BattleStart phase via item effects.
+/// Combat stats from unconditional Tool/Gear battle-start bonuses are calculated here so
+/// on-chain combat begins with the same sidebar values as local combat.
 pub fn calculate_stats(
     inventory: &PlayerInventory,
     campaign_level: u8,
     run_mode: RunMode,
 ) -> PlayerStats {
-    let effects = generate_combat_effects(inventory);
+    let effects = generate_annotated_combat_effects(inventory);
 
     let base_hp_value = match run_mode {
         RunMode::Campaign => base_hp(campaign_level),
@@ -55,28 +61,53 @@ pub fn calculate_stats(
     let mut stats = PlayerStats {
         max_hp: base_hp_value,
         dig: BASE_DIG,
+        atk: 0,
+        arm: 0,
+        spd: 0,
         strikes: BASE_STRIKES,
     };
 
-    // Only process effects that are needed outside of combat
+    // Only process unconditional Tool/Gear battle-start effects that define the
+    // combatant's starting stats.
     for effect in effects.iter() {
-        if effect.trigger != TriggerType::BattleStart {
+        if effect.effect.trigger != TriggerType::BattleStart {
             continue;
         }
 
-        match effect.effect_type {
+        if effect.effect.condition != Condition::None {
+            continue;
+        }
+
+        let Some(source) = effect.source else {
+            continue;
+        };
+
+        if !matches!(source.kind, CombatSourceKind::Tool | CombatSourceKind::Gear) {
+            continue;
+        }
+
+        match effect.effect.effect_type {
             EffectType::MaxHp => {
                 // Permanent max HP bonus (e.g., Work Vest's +HP)
-                stats.max_hp = stats.max_hp.saturating_add(effect.value);
+                stats.max_hp = stats.max_hp.saturating_add(effect.effect.value);
             }
             EffectType::GainDig => {
                 // DIG is used for movement cost and combat comparators
-                stats.dig = stats.dig.saturating_add(effect.value);
+                stats.dig = stats.dig.saturating_add(effect.effect.value);
             }
             EffectType::GainStrikes => {
                 // Additional strikes per turn (e.g., Twin Picks gives +1 strike)
-                let bonus = effect.value.max(0) as u8;
+                let bonus = effect.effect.value.max(0) as u8;
                 stats.strikes = stats.strikes.saturating_add(bonus);
+            }
+            EffectType::GainAtk | EffectType::GainGearAtk => {
+                stats.atk = stats.atk.saturating_add(effect.effect.value);
+            }
+            EffectType::GainArmor => {
+                stats.arm = stats.arm.saturating_add(effect.effect.value);
+            }
+            EffectType::GainSpd => {
+                stats.spd = stats.spd.saturating_add(effect.effect.value);
             }
             _ => {}
         }
@@ -109,6 +140,9 @@ mod tests {
 
         assert_eq!(stats.max_hp, 15);
         assert_eq!(stats.dig, BASE_DIG);
+        assert_eq!(stats.atk, 0);
+        assert_eq!(stats.arm, 0);
+        assert_eq!(stats.spd, 0);
     }
 
     #[test]
@@ -127,7 +161,7 @@ mod tests {
 
     #[test]
     fn test_stats_with_max_hp_item() {
-        let mut inventory = make_inventory();
+        let inventory = make_inventory();
         let stats = calculate_stats(&inventory, 20, RunMode::Campaign);
         assert_eq!(stats.max_hp, 15);
     }
@@ -143,15 +177,34 @@ mod tests {
     }
 
     #[test]
-    fn test_stats_only_calculates_permanent_bonuses() {
+    fn test_stats_include_unconditional_tool_and_gear_combat_bonuses() {
         let mut inventory = make_inventory();
-        inventory.tool = Some(ItemInstance::new(*b"T-FR-01\0", Tier::II));
-        inventory.gear[0] = Some(ItemInstance::new(*b"G-ST-01\0", Tier::I));
+        inventory.tool = Some(ItemInstance::new(*b"T-RU-01\0", Tier::I)); // Corrosive Pick (+1 ATK)
+        inventory.gear[0] = Some(ItemInstance::new(*b"G-SC-02\0", Tier::I)); // Leather Gloves (+1 ATK, +1 DIG)
+        inventory.gear[1] = Some(ItemInstance::new(*b"G-FR-02\0", Tier::I)); // Frostguard Buckler (+8 ARM)
 
         let stats = calculate_stats(&inventory, 20, RunMode::Campaign);
 
         assert_eq!(stats.max_hp, 15);
-        assert_eq!(stats.dig, BASE_DIG);
+        assert_eq!(stats.dig, BASE_DIG + 1);
+        assert_eq!(stats.atk, 2);
+        assert_eq!(stats.arm, 8);
+        assert_eq!(stats.spd, 0);
+    }
+
+    #[test]
+    fn test_itemset_battle_start_stats_are_not_baked() {
+        let mut inventory = make_inventory();
+        inventory.gear[0] = Some(ItemInstance::new(*b"G-ST-01\0", Tier::I));
+        inventory.gear[1] = Some(ItemInstance::new(*b"G-ST-02\0", Tier::I));
+        inventory.gear[2] = Some(ItemInstance::new(*b"G-SC-01\0", Tier::I));
+
+        let stats = calculate_stats(&inventory, 20, RunMode::Campaign);
+
+        // Stone helmet contributes +3 ARM, scout boots contribute +1 SPD and the itemset
+        // bonus remains dynamic rather than baked into the starting combatant.
+        assert_eq!(stats.arm, 3);
+        assert_eq!(stats.spd, 1);
     }
 
     #[test]

@@ -21,7 +21,7 @@ use combat_system::state::{
 };
 use combat_system::{
     resolve_boss_combat_annotated_with_player_gold, resolve_combat_annotated_with_both_gold,
-    resolve_combat_with_player_gold, CombatLogEntry, EffectType, ItemEffect, TriggerType,
+    resolve_combat_with_player_gold, EffectType, ItemEffect, TriggerType,
 };
 use constants::{
     base_hp, BASE_ARM, BASE_ATK, BASE_SPD, COMPANY_TREASURY_ADDRESS, DAY_MOVES,
@@ -179,8 +179,6 @@ pub const POI_SYSTEM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
 pub const NIGHT_VISION_RADIUS: u8 = 2;
 pub const DAY_VISION_RADIUS: u8 = 4;
 pub const PIT_DRAFT_MAX_START_GOLD: u16 = 30;
-/// Hard cap for combat log entries emitted in PvP visual events to avoid oversized event payloads.
-pub const MAX_PVP_VISUAL_LOG_ENTRIES: usize = 512;
 pub const DISCOVER_VISIBLE_WAYPOINTS_DISCRIMINATOR: [u8; 8] =
     [0x3b, 0x26, 0x6a, 0x00, 0x3a, 0xb1, 0x50, 0xfc];
 /// Player inventory program ID for authorized HP modifications via CPI
@@ -1092,8 +1090,6 @@ pub mod gameplay_state {
                     duel_entry.loadout.gold_at_battle_start,
                 )?;
 
-                let (duel_log, duel_log_truncated, duel_total_log_entries) =
-                    cap_pvp_visual_log(&combat_outcome.log);
                 emit!(DuelCombatVisual {
                     seed,
                     player_a: creator.player,
@@ -1102,9 +1098,6 @@ pub mod gameplay_state {
                     player_a_gear: creator_inventory.gear,
                     player_b_tool: opponent_inventory.tool,
                     player_b_gear: opponent_inventory.gear,
-                    combat_log: duel_log,
-                    combat_log_truncated: duel_log_truncated,
-                    combat_log_total_entries: duel_total_log_entries,
                     player_a_won: combat_outcome.player_won,
                     final_player_a_hp: combat_outcome.final_player_hp,
                     final_player_b_hp: combat_outcome.final_enemy_hp,
@@ -1434,8 +1427,6 @@ pub mod gameplay_state {
             entrant_start_gold,
         )?;
 
-        let (pit_log, pit_log_truncated, pit_total_log_entries) =
-            cap_pvp_visual_log(&combat_outcome.log);
         emit!(PitDraftCombatVisual {
             player_a: waiting_player,
             player_b: player_key,
@@ -1443,9 +1434,6 @@ pub mod gameplay_state {
             player_a_gear: waiting_inventory.gear,
             player_b_tool: entrant_inventory.tool,
             player_b_gear: entrant_inventory.gear,
-            combat_log: pit_log,
-            combat_log_truncated: pit_log_truncated,
-            combat_log_total_entries: pit_total_log_entries,
             player_a_won: combat_outcome.player_won,
             final_player_a_hp: combat_outcome.final_player_hp,
             final_player_b_hp: combat_outcome.final_enemy_hp,
@@ -2871,17 +2859,6 @@ fn maybe_insert_player_echo_vrf(
     Ok(())
 }
 
-fn cap_pvp_visual_log(log: &[CombatLogEntry]) -> (Vec<CombatLogEntry>, bool, u16) {
-    let total_entries = core::cmp::min(log.len(), u16::MAX as usize) as u16;
-    let truncated = log.len() > MAX_PVP_VISUAL_LOG_ENTRIES;
-    let capped = if truncated {
-        log[..MAX_PVP_VISUAL_LOG_ENTRIES].to_vec()
-    } else {
-        log.to_vec()
-    };
-    (capped, truncated, total_entries)
-}
-
 /// Read echoes from week pool accounts passed as remaining_accounts.
 /// Uses raw byte reads + Borsh cursor to avoid heap-allocating 5 full Vec<GauntletEchoSnapshot>.
 fn draw_gauntlet_echoes_from_remaining(
@@ -3289,11 +3266,6 @@ fn resolve_enemy_combat(
         turns_taken: result.turns_taken,
     });
 
-    emit!(CombatLog {
-        player: game_state.player,
-        entries: result.log,
-    });
-
     // HP capped at max_hp (discarding temp combat bonuses)
     game_state.hp = result.final_player_hp.min(player_stats.max_hp);
 
@@ -3386,11 +3358,6 @@ fn resolve_boss_fight<'info>(
         final_enemy_hp: result.final_enemy_hp,
         gold_earned: 0,
         turns_taken: result.turns_taken,
-    });
-
-    emit!(CombatLog {
-        player: game_state.player,
-        entries: result.log,
     });
 
     // HP capped at max_hp (discarding temp combat bonuses)
@@ -3513,8 +3480,6 @@ fn resolve_gauntlet_echo_inline<'info>(
             GauntletEchoSource::Player(p) => Some(p),
         },
     });
-    let (gauntlet_log, gauntlet_log_truncated, gauntlet_total_log_entries) =
-        cap_pvp_visual_log(&outcome.log);
     emit!(GauntletCombatVisual {
         player: game_state.player,
         week,
@@ -3522,9 +3487,6 @@ fn resolve_gauntlet_echo_inline<'info>(
         player_gear: inventory.gear,
         echo_tool: echo.loadout.tool,
         echo_gear: echo.loadout.gear,
-        combat_log: gauntlet_log,
-        combat_log_truncated: gauntlet_log_truncated,
-        combat_log_total_entries: gauntlet_total_log_entries,
         player_won: outcome.player_won,
         final_player_hp: outcome.final_player_hp,
         final_echo_hp: outcome.final_enemy_hp,
@@ -5306,16 +5268,6 @@ pub struct CombatEnded {
     pub turns_taken: u8,
 }
 
-/// Detailed combat log for turn-by-turn visualization.
-/// Contains a serialized vector of CombatLogEntry for replay.
-/// Note: Solana logs have ~30KB limit; this compact format allows ~300-400 actions per battle.
-#[event]
-pub struct CombatLog {
-    pub player: Pubkey,
-    /// Serialized Vec<CombatLogEntry> - each entry is ~5 bytes
-    pub entries: Vec<CombatLogEntry>,
-}
-
 /// Emitted when an enemy moves during night phase
 #[event]
 pub struct EnemyMoved {
@@ -5395,12 +5347,6 @@ pub struct PitDraftCombatVisual {
     pub player_b_tool: Option<ItemInstance>,
     /// Drafted gear for player B (7 slots populated, one empty)
     pub player_b_gear: [Option<ItemInstance>; 12],
-    /// Combat trace (same semantics as PvE CombatLog entries), truncated when very large.
-    pub combat_log: Vec<CombatLogEntry>,
-    /// True when `combat_log` is truncated to `MAX_PVP_VISUAL_LOG_ENTRIES`.
-    pub combat_log_truncated: bool,
-    /// Total number of log entries before truncation.
-    pub combat_log_total_entries: u16,
     /// True when player A wins (player B wins when false)
     pub player_a_won: bool,
     pub final_player_a_hp: i16,
@@ -5443,9 +5389,6 @@ pub struct DuelCombatVisual {
     pub player_a_gear: [Option<ItemInstance>; 12],
     pub player_b_tool: Option<ItemInstance>,
     pub player_b_gear: [Option<ItemInstance>; 12],
-    pub combat_log: Vec<CombatLogEntry>,
-    pub combat_log_truncated: bool,
-    pub combat_log_total_entries: u16,
     pub player_a_won: bool,
     pub final_player_a_hp: i16,
     pub final_player_b_hp: i16,
@@ -5490,9 +5433,6 @@ pub struct GauntletCombatVisual {
     pub player_gear: [Option<ItemInstance>; 12],
     pub echo_tool: Option<ItemInstance>,
     pub echo_gear: [Option<ItemInstance>; 12],
-    pub combat_log: Vec<CombatLogEntry>,
-    pub combat_log_truncated: bool,
-    pub combat_log_total_entries: u16,
     pub player_won: bool,
     pub final_player_hp: i16,
     pub final_echo_hp: i16,
@@ -5789,31 +5729,6 @@ mod hp_logic_tests {
 
         let idx = find_matching_creator_index(&queue, entrant, seed);
         assert_eq!(idx, None);
-    }
-
-    #[test]
-    fn test_cap_pvp_visual_log_no_truncation() {
-        let log = vec![
-            CombatLogEntry::attack(1, true, 3),
-            CombatLogEntry::heal(1, false, 2),
-        ];
-        let (capped, truncated, total_entries) = cap_pvp_visual_log(&log);
-        assert!(!truncated);
-        assert_eq!(total_entries, 2);
-        assert_eq!(capped.len(), 2);
-    }
-
-    #[test]
-    fn test_cap_pvp_visual_log_truncates_at_limit() {
-        let mut log = Vec::with_capacity(MAX_PVP_VISUAL_LOG_ENTRIES + 10);
-        for turn in 0..(MAX_PVP_VISUAL_LOG_ENTRIES + 10) {
-            log.push(CombatLogEntry::attack((turn % 50) as u8 + 1, true, 1));
-        }
-
-        let (capped, truncated, total_entries) = cap_pvp_visual_log(&log);
-        assert!(truncated);
-        assert_eq!(total_entries as usize, MAX_PVP_VISUAL_LOG_ENTRIES + 10);
-        assert_eq!(capped.len(), MAX_PVP_VISUAL_LOG_ENTRIES);
     }
 
     #[test]

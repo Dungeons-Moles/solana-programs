@@ -919,6 +919,83 @@ fn test_rime_pike_frost_lantern_buckler_vs_blood_mosquito_t2_finishes_at_21_hp()
 }
 
 #[test]
+fn test_rime_pike_frost_lantern_rust_engine_vs_coin_slug_t1_finishes_at_25_hp() {
+    let mut inventory = make_inventory();
+    inventory.tool = Some(ItemInstance::new(*b"T-FR-01\0", Tier::I)); // Rime Pike
+    inventory.gear[0] = Some(ItemInstance::new(*b"G-FR-01\0", Tier::I)); // Frost Lantern
+    inventory.gear[1] = Some(ItemInstance::new(*b"G-RU-06\0", Tier::I)); // Rust Engine
+
+    let player_stats = calculate_stats(&inventory, 1, RunMode::Campaign);
+    let all_player_effects = generate_annotated_combat_effects(&inventory);
+    let player_effects = strip_baked_battle_start_stat_effects(all_player_effects.clone());
+    let player_input = build_player_combatant(25, &player_stats, &all_player_effects);
+
+    let enemy_input = get_enemy_combatant_input(ids::COIN_SLUG, 0).expect("coin slug input");
+    let enemy_effects = preprocess_enemy_effects(ids::COIN_SLUG, 10);
+
+    let outcome = resolve_combat_annotated_with_both_gold(
+        player_input,
+        enemy_input,
+        player_effects,
+        enemy_effects,
+        10,
+        0,
+    )
+    .expect("combat resolution failed");
+
+    assert!(outcome.player_won, "player should beat Coin Slug T1");
+    assert_eq!(
+        outcome.final_player_hp, 25,
+        "Rime Pike + Frost Lantern + Rust Engine vs Coin Slug T1 should end at 25 HP"
+    );
+}
+
+#[test]
+fn test_rime_pike_frost_lantern_rust_engine_vs_powder_tick_t3_finishes_at_20_hp() {
+    let mut inventory = make_inventory();
+    inventory.tool = Some(ItemInstance::new(*b"T-FR-01\0", Tier::I)); // Rime Pike
+    inventory.gear[0] = Some(ItemInstance::new(*b"G-FR-01\0", Tier::I)); // Frost Lantern
+    inventory.gear[1] = Some(ItemInstance::new(*b"G-RU-06\0", Tier::I)); // Rust Engine
+
+    let player_stats = calculate_stats(&inventory, 1, RunMode::Campaign);
+    let all_player_effects = generate_annotated_combat_effects(&inventory);
+    let player_effects = strip_baked_battle_start_stat_effects(all_player_effects.clone());
+    let player_input = build_player_combatant(25, &player_stats, &all_player_effects);
+
+    let enemy_input = get_enemy_combatant_input(ids::POWDER_TICK, 2).expect("powder tick input");
+    let enemy_effects = preprocess_enemy_effects(ids::POWDER_TICK, 10);
+
+    let outcome = resolve_combat_annotated_with_both_gold(
+        player_input,
+        enemy_input,
+        player_effects,
+        enemy_effects,
+        10,
+        0,
+    )
+    .expect("combat resolution failed");
+    assert!(outcome.player_won, "player should beat Powder Tick T3");
+    assert_eq!(
+        outcome.final_player_hp, 20,
+        "Rime Pike + Frost Lantern + Rust Engine vs Powder Tick T3 should end at 20 HP"
+    );
+    let self_countdown_index = outcome
+        .log
+        .iter()
+        .position(|entry| !entry.is_player && entry.action == LogAction::NonWeaponDamage && entry.value == 3)
+        .expect("powder tick should damage itself on countdown");
+    let enemy_attack_after_countdown = outcome
+        .log
+        .iter()
+        .enumerate()
+        .find(|(index, entry)| *index > self_countdown_index && !entry.is_player && entry.action == LogAction::Attack);
+    assert!(
+        enemy_attack_after_countdown.is_none(),
+        "Powder Tick should not attack after dying to its own countdown"
+    );
+}
+
+#[test]
 fn test_obsidian_golem_fuse_pick_non_weapon_removes_boss_armor() {
     let outcome = run_boss_combat(
         15,

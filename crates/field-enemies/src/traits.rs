@@ -86,15 +86,24 @@ pub static FROST_WISP_TRAITS: [ItemEffect; 1] = [ItemEffect {
     condition: Condition::None,
 }];
 
-/// Powder Tick: Countdown(3): deal 3 damage to player (non-weapon)
+/// Powder Tick: Countdown(3): deal 3 damage to player and itself (non-weapon)
 /// Fires every 3 turns (turn 3, 6, 9, etc.)
-pub static POWDER_TICK_TRAITS: [ItemEffect; 1] = [ItemEffect {
-    trigger: TriggerType::Countdown { turns: 3 },
-    once_per_turn: false,
-    effect_type: EffectType::DealNonWeaponDamage,
-    value: 3,
-    condition: Condition::None,
-}];
+pub static POWDER_TICK_TRAITS: [ItemEffect; 2] = [
+    ItemEffect {
+        trigger: TriggerType::Countdown { turns: 3 },
+        once_per_turn: false,
+        effect_type: EffectType::DealNonWeaponDamage,
+        value: 3,
+        condition: Condition::None,
+    },
+    ItemEffect {
+        trigger: TriggerType::Countdown { turns: 3 },
+        once_per_turn: false,
+        effect_type: EffectType::DealSelfNonWeaponDamage,
+        value: 3,
+        condition: Condition::None,
+    },
+];
 
 /// Coin Slug: Battle Start: gain Armor equal to floor(player Gold/10) (cap 3)
 /// Note: value=0 is a placeholder; actual armor is calculated in

@@ -385,52 +385,31 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
     );
 
     loop {
-        let is_first_turn = turn == 1;
         combat_state.player_acted_this_turn = false;
         combat_state.enemy_acted_this_turn = false;
         combat_state.player_temporary_exposed = false;
         combat_state.enemy_temporary_exposed = false;
 
         apply_boss_turn_start_overrides(&mut combat_state, &mut log);
-        if is_first_turn {
-            apply_status_effects(
-                &mut player_effects,
-                &mut enemy_effects,
-                &mut combat_state,
-                TriggerType::FirstTurn,
-                &mut player_triggered,
-                &mut enemy_triggered,
-                &mut log,
-            );
-        }
-        apply_status_effects(
-            &mut player_effects,
-            &mut enemy_effects,
-            &mut combat_state,
-            TriggerType::TurnStart,
-            &mut player_triggered,
-            &mut enemy_triggered,
-            &mut log,
-        );
-        if (turn & 1) == 0 {
-            apply_status_effects(
-                &mut player_effects,
-                &mut enemy_effects,
-                &mut combat_state,
-                TriggerType::EveryOtherTurn,
-                &mut player_triggered,
-                &mut enemy_triggered,
-                &mut log,
-            );
-        }
-        apply_countdown_effects(
+        if let Some((player_won, resolution_type)) = apply_ordered_start_of_turn_effects(
             &mut player_effects,
             &mut enemy_effects,
             &mut combat_state,
             &mut player_triggered,
             &mut enemy_triggered,
             &mut log,
-        );
+        ) {
+            release_stored_damage_on_battle_end(&mut combat_state, &mut log);
+            return Ok(CombatOutcome {
+                player_won,
+                final_player_hp: combat_state.player.hp,
+                final_enemy_hp: combat_state.enemy.hp,
+                turns_taken: turn,
+                resolution_type,
+                log,
+                gold_change: combat_state.gold_change,
+            });
+        }
 
         execute_turn(
             &mut combat_state,
@@ -1254,6 +1233,138 @@ fn apply_status_effects(
         !player_acts_first, // Enemy acts first if player doesn't
         log,
     );
+}
+
+fn countdown_turns_for_effects(effects: &[AnnotatedItemEffect]) -> Vec<u8> {
+    let mut countdown_turns = Vec::new();
+    for effect in effects {
+        if let TriggerType::Countdown { turns } = effect.effect.trigger {
+            if turns > 0 && !countdown_turns.contains(&turns) {
+                countdown_turns.push(turns);
+            }
+        }
+    }
+    countdown_turns.sort_unstable();
+    countdown_turns
+}
+
+fn apply_start_of_turn_effects_for_side(
+    effects: &mut [AnnotatedItemEffect],
+    combat_state: &mut CombatState,
+    is_player: bool,
+    is_first_turn: bool,
+    owner_acts_first: bool,
+    triggered_flags: &mut [bool],
+    log: &mut Vec<CombatLogEntry>,
+) {
+    if is_first_turn {
+        process_phase_effects(
+            effects,
+            combat_state,
+            is_player,
+            TriggerType::FirstTurn,
+            triggered_flags,
+            owner_acts_first,
+            log,
+        );
+    }
+
+    process_phase_effects(
+        effects,
+        combat_state,
+        is_player,
+        TriggerType::TurnStart,
+        triggered_flags,
+        owner_acts_first,
+        log,
+    );
+
+    if (combat_state.turn & 1) == 0 {
+        process_phase_effects(
+            effects,
+            combat_state,
+            is_player,
+            TriggerType::EveryOtherTurn,
+            triggered_flags,
+            owner_acts_first,
+            log,
+        );
+    }
+
+    for turns in countdown_turns_for_effects(effects) {
+        process_phase_effects(
+            effects,
+            combat_state,
+            is_player,
+            TriggerType::Countdown { turns },
+            triggered_flags,
+            owner_acts_first,
+            log,
+        );
+    }
+}
+
+fn apply_ordered_start_of_turn_effects(
+    player_effects: &mut [AnnotatedItemEffect],
+    enemy_effects: &mut [AnnotatedItemEffect],
+    combat_state: &mut CombatState,
+    player_triggered: &mut [bool],
+    enemy_triggered: &mut [bool],
+    log: &mut Vec<CombatLogEntry>,
+) -> Option<(bool, ResolutionType)> {
+    let (player_acts_first, _) =
+        engine::determine_turn_order(combat_state.player.spd, combat_state.enemy.spd);
+    let is_first_turn = combat_state.turn == 1;
+
+    if player_acts_first {
+        apply_start_of_turn_effects_for_side(
+            player_effects,
+            combat_state,
+            true,
+            is_first_turn,
+            true,
+            player_triggered,
+            log,
+        );
+        if let Some(resolution) = resolve_if_ended(combat_state, combat_state.turn) {
+            return Some(resolution);
+        }
+
+        apply_start_of_turn_effects_for_side(
+            enemy_effects,
+            combat_state,
+            false,
+            is_first_turn,
+            false,
+            enemy_triggered,
+            log,
+        );
+        resolve_if_ended(combat_state, combat_state.turn)
+    } else {
+        apply_start_of_turn_effects_for_side(
+            enemy_effects,
+            combat_state,
+            false,
+            is_first_turn,
+            true,
+            enemy_triggered,
+            log,
+        );
+        if let Some(resolution) = resolve_if_ended(combat_state, combat_state.turn) {
+            return Some(resolution);
+        }
+
+        apply_start_of_turn_effects_for_side(
+            player_effects,
+            combat_state,
+            true,
+            is_first_turn,
+            false,
+            player_triggered,
+            log,
+        );
+        resolve_if_ended(combat_state, combat_state.turn)
+    }
 }
 
 fn log_status_stacks(combat_state: &CombatState, log: &mut Vec<CombatLogEntry>) {

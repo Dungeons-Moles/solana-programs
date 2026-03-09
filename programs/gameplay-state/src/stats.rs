@@ -201,9 +201,11 @@ mod tests {
 
         let stats = calculate_stats(&inventory, 20, RunMode::Campaign);
 
-        // Stone helmet contributes +3 ARM, scout boots contribute +1 SPD and the itemset
-        // bonus remains dynamic rather than baked into the starting combatant.
-        assert_eq!(stats.arm, 3);
+        // Miner Helmet contributes +3 ARM, Work Vest contributes +1 ARM and +4 max HP,
+        // Miner Boots contributes +1 SPD, and the Union Standard itemset bonus remains
+        // dynamic rather than baked into the starting combatant.
+        assert_eq!(stats.max_hp, 19);
+        assert_eq!(stats.arm, 4);
         assert_eq!(stats.spd, 1);
     }
 

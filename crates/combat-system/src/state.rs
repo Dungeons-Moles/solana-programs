@@ -232,6 +232,7 @@ pub enum TriggerType {
     FirstTurnIfSlower,
     TurnStart,
     EveryOtherTurn,
+    BeforeStrike,
     OnHit,
     Exposed,
     Wounded,
@@ -361,10 +362,12 @@ pub struct AnnotatedItemEffect {
     pub source: Option<CombatSourceRef>,
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace)]
 pub enum ResolutionType {
     PlayerDefeated,
     EnemyDefeated,
+    PvpTiePlayerWin,
+    PvpTieEnemyWin,
     SuddenDeathPlayerWin,
     SuddenDeathEnemyWin,
     FailsafePlayerWin,
@@ -395,6 +398,8 @@ pub(crate) struct Combatant {
     pub non_weapon_hits_this_turn: u8,
     pub double_detonation_first: i16,
     pub double_detonation_second: i16,
+    pub double_bomb_trigger: bool,
+    pub pending_self_non_weapon_bonus: i16,
     pub preserve_shrapnel_cap: u8,
     pub shards_every_turn: bool,
     pub attack_source: Option<CombatSourceRef>,
@@ -443,6 +448,8 @@ impl Combatant {
             non_weapon_hits_this_turn: self.non_weapon_hits_this_turn,
             double_detonation_first: self.double_detonation_first,
             double_detonation_second: self.double_detonation_second,
+            double_bomb_trigger: self.double_bomb_trigger,
+            pending_self_non_weapon_bonus: self.pending_self_non_weapon_bonus,
             preserve_shrapnel_cap: self.preserve_shrapnel_cap,
             shards_every_turn: self.shards_every_turn,
             attack_source: self.attack_source,
@@ -471,6 +478,8 @@ impl Combatant {
         self.non_weapon_hits_this_turn = stats.non_weapon_hits_this_turn;
         self.double_detonation_first = stats.double_detonation_first;
         self.double_detonation_second = stats.double_detonation_second;
+        self.double_bomb_trigger = stats.double_bomb_trigger;
+        self.pending_self_non_weapon_bonus = stats.pending_self_non_weapon_bonus;
         self.preserve_shrapnel_cap = stats.preserve_shrapnel_cap;
         self.shards_every_turn = stats.shards_every_turn;
         self.attack_source = stats.attack_source;
@@ -532,6 +541,8 @@ mod tests {
             first_time_flags: 0,
             double_detonation_first: 0,
             double_detonation_second: 0,
+            double_bomb_trigger: false,
+            pending_self_non_weapon_bonus: 0,
         };
         let updated_stats = CombatantStats {
             hp: 12,

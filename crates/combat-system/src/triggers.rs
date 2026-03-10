@@ -25,6 +25,8 @@ pub struct CombatantStats {
     pub non_weapon_hits_this_turn: u8,
     pub double_detonation_first: i16,
     pub double_detonation_second: i16,
+    pub double_bomb_trigger: bool,
+    pub pending_self_non_weapon_bonus: i16,
     pub preserve_shrapnel_cap: u8,
     pub shards_every_turn: bool,
     pub attack_source: Option<CombatSourceRef>,
@@ -51,6 +53,7 @@ pub fn should_trigger(
         TriggerType::FirstTurnIfSlower => is_first_turn && !acts_first,
         TriggerType::TurnStart => true,
         TriggerType::EveryOtherTurn => turn % 2 == 0,
+        TriggerType::BeforeStrike => true,
         TriggerType::OnHit => true,
         TriggerType::Exposed | TriggerType::Wounded => true,
         // Countdown fires every N turns (turn 2, 4, 6... for turns=2)
@@ -488,6 +491,10 @@ pub fn apply_effect(
         EffectType::DealSelfNonWeaponDamage => {
             // Deal non-weapon damage to self (for bomb self-damage)
             let mut damage = value;
+            if matches!(phase, TriggerType::Countdown { .. }) {
+                damage = damage.saturating_add(stats.pending_self_non_weapon_bonus.max(0));
+            }
+            stats.pending_self_non_weapon_bonus = 0;
 
             if matches!(phase, TriggerType::Countdown { .. }) {
                 let reduction = stats.active_bomb_self_damage_reduction.max(0);
@@ -594,12 +601,27 @@ pub fn apply_effect(
                 }
             }
         }
+        EffectType::GoldToArmorScaled => {
+            let owner_gold = if is_target_player {
+                *player_gold
+            } else {
+                *enemy_gold
+            };
+            let armor_gain = (i16::try_from(owner_gold / 6).unwrap_or(i16::MAX)).min(value.max(0));
+            if armor_gain > 0 {
+                stats.arm = stats.arm.saturating_add(armor_gain);
+                push_log_entry(
+                    log,
+                    CombatLogEntry::armor_change(turn, is_target_player, armor_gain),
+                    source,
+                );
+            }
+        }
         // These effects are processed outside the combat system or need special handling
         EffectType::GainStrikes
         | EffectType::GainDig
         | EffectType::ApplyBomb
         | EffectType::MaxHp
-        | EffectType::GoldToArmorScaled
         | EffectType::PreventDeath
         | EffectType::ReduceAllCountdowns
         | EffectType::BlastImmunity
@@ -639,6 +661,7 @@ pub fn process_triggers_for_phase(
 ) {
     if phase == TriggerType::TurnStart {
         owner_stats.non_weapon_hits_this_turn = 0;
+        owner_stats.pending_self_non_weapon_bonus = 0;
     }
 
     // Two-pass processing to ensure status effects are applied before conditional effects
@@ -648,41 +671,49 @@ pub fn process_triggers_for_phase(
     // Pass 1: Unconditional status-applying effects (apply status to opponent)
     // Pass 2: All other effects (including conditional ones that may check status)
 
-    process_effects_pass(
-        effects,
-        phase,
-        turn,
-        owner_stats,
-        owner_status,
-        opponent_stats,
-        opponent_status,
-        triggered_flags,
-        is_owner_player,
-        owner_acts_first,
-        player_gold,
-        enemy_gold,
-        gold_change,
-        log,
-        true, // first pass: only unconditional status effects
-    );
+    let pass_count = if matches!(phase, TriggerType::Countdown { .. }) && owner_stats.double_bomb_trigger {
+        2
+    } else {
+        1
+    };
 
-    process_effects_pass(
-        effects,
-        phase,
-        turn,
-        owner_stats,
-        owner_status,
-        opponent_stats,
-        opponent_status,
-        triggered_flags,
-        is_owner_player,
-        owner_acts_first,
-        player_gold,
-        enemy_gold,
-        gold_change,
-        log,
-        false, // second pass: everything else
-    );
+    for _ in 0..pass_count {
+        process_effects_pass(
+            effects,
+            phase,
+            turn,
+            owner_stats,
+            owner_status,
+            opponent_stats,
+            opponent_status,
+            triggered_flags,
+            is_owner_player,
+            owner_acts_first,
+            player_gold,
+            enemy_gold,
+            gold_change,
+            log,
+            true, // first pass: only unconditional status effects
+        );
+
+        process_effects_pass(
+            effects,
+            phase,
+            turn,
+            owner_stats,
+            owner_status,
+            opponent_stats,
+            opponent_status,
+            triggered_flags,
+            is_owner_player,
+            owner_acts_first,
+            player_gold,
+            enemy_gold,
+            gold_change,
+            log,
+            false, // second pass: everything else
+        );
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -770,6 +801,9 @@ fn process_effects_pass(
             EffectType::DoubleDetonationSecond => {
                 owner_stats.double_detonation_second = effect.value.max(0);
             }
+            EffectType::DoubleBombTrigger => {
+                owner_stats.double_bomb_trigger = true;
+            }
             _ => {}
         }
 
@@ -785,6 +819,9 @@ fn process_effects_pass(
             }
             owner_stats.non_weapon_hits_this_turn =
                 owner_stats.non_weapon_hits_this_turn.saturating_add(1);
+            if matches!(phase, TriggerType::Countdown { .. }) {
+                owner_stats.pending_self_non_weapon_bonus = extra;
+            }
             effect_value = effect_value
                 .saturating_add(extra)
                 .saturating_add(owner_stats.non_weapon_damage_bonus.max(0));
@@ -1633,6 +1670,121 @@ mod tests {
         assert_eq!(log.len(), 1);
         assert_eq!(log[0].action, LogAction::ArmorChange);
         assert_eq!(log[0].value, 4);
+    }
+
+    #[test]
+    fn test_gold_to_armor_scaled_uses_gold_divided_by_six_with_cap() {
+        let mut owner_stats = CombatantStats::default();
+        let mut owner_status = StatusEffects::default();
+        let mut opponent_stats = CombatantStats::default();
+        let mut opponent_status = StatusEffects::default();
+        let mut player_gold = 100u16;
+        let mut enemy_gold = 0u16;
+        let mut gold_change = 0i16;
+        let mut log = Vec::new();
+
+        let mut common_effects = vec![annotate(ItemEffect {
+            trigger: TriggerType::BattleStart,
+            once_per_turn: false,
+            effect_type: EffectType::GoldToArmorScaled,
+            value: 6,
+            condition: Condition::None,
+        })];
+        let mut common_flags = vec![false; common_effects.len()];
+
+        process_triggers_for_phase(
+            &mut common_effects,
+            TriggerType::BattleStart,
+            1,
+            &mut owner_stats,
+            &mut owner_status,
+            &mut opponent_stats,
+            &mut opponent_status,
+            &mut common_flags,
+            true,
+            true,
+            &mut player_gold,
+            &mut enemy_gold,
+            &mut gold_change,
+            &mut log,
+        );
+
+        assert_eq!(owner_stats.arm, 6);
+
+        owner_stats.arm = 0;
+        log.clear();
+
+        let mut rare_effects = vec![annotate(ItemEffect {
+            trigger: TriggerType::BattleStart,
+            once_per_turn: false,
+            effect_type: EffectType::GoldToArmorScaled,
+            value: 12,
+            condition: Condition::None,
+        })];
+        let mut rare_flags = vec![false; rare_effects.len()];
+
+        process_triggers_for_phase(
+            &mut rare_effects,
+            TriggerType::BattleStart,
+            1,
+            &mut owner_stats,
+            &mut owner_status,
+            &mut opponent_stats,
+            &mut opponent_status,
+            &mut rare_flags,
+            true,
+            true,
+            &mut player_gold,
+            &mut enemy_gold,
+            &mut gold_change,
+            &mut log,
+        );
+
+        assert_eq!(owner_stats.arm, 12);
+    }
+
+    #[test]
+    fn test_every_other_turn_first_hit_fires_on_turn_one_when_shards_every_turn_is_active() {
+        let mut owner_stats = CombatantStats {
+            hp: 8,
+            max_hp: 10,
+            shards_every_turn: true,
+            ..Default::default()
+        };
+        let mut owner_status = StatusEffects::default();
+        let mut opponent_stats = CombatantStats::default();
+        let mut opponent_status = StatusEffects::default();
+        let mut effects = vec![annotate(ItemEffect {
+            trigger: TriggerType::EveryOtherTurnFirstHit,
+            once_per_turn: true,
+            effect_type: EffectType::Heal,
+            value: 2,
+            condition: Condition::None,
+        })];
+        let mut flags = vec![false; effects.len()];
+        let mut player_gold = 0u16;
+        let mut enemy_gold = 0u16;
+        let mut gold_change = 0i16;
+        let mut log = Vec::new();
+
+        process_triggers_for_phase(
+            &mut effects,
+            TriggerType::EveryOtherTurnFirstHit,
+            1,
+            &mut owner_stats,
+            &mut owner_status,
+            &mut opponent_stats,
+            &mut opponent_status,
+            &mut flags,
+            true,
+            true,
+            &mut player_gold,
+            &mut enemy_gold,
+            &mut gold_change,
+            &mut log,
+        );
+
+        assert_eq!(owner_stats.hp, 10);
     }
 
     // ========================================================================

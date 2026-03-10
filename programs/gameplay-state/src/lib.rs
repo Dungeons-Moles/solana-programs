@@ -21,7 +21,8 @@ use combat_system::state::{
 };
 use combat_system::{
     resolve_boss_combat_annotated_with_player_gold, resolve_combat_annotated_with_both_gold,
-    resolve_combat_with_player_gold, EffectType, ItemEffect, TriggerType,
+    resolve_combat_with_player_gold, resolve_pvp_combat_annotated_with_both_gold, EffectType,
+    ItemEffect, TriggerType,
 };
 use constants::{
     base_hp, BASE_ARM, BASE_ATK, BASE_SPD, COMPANY_TREASURY_ADDRESS, DAY_MOVES,
@@ -1081,13 +1082,14 @@ pub mod gameplay_state {
                 let all_opponent_effects = generate_annotated_combat_effects(&opponent_inventory);
                 let opponent_effects =
                     strip_baked_battle_start_stat_effects(all_opponent_effects.clone());
-                let combat_outcome = resolve_combat_annotated_with_both_gold(
+                let combat_outcome = resolve_pvp_combat_annotated_with_both_gold(
                     build_full_hp_combatant(&creator_stats, &all_creator_effects),
                     build_full_hp_combatant(&opponent_stats, &all_opponent_effects),
                     creator_effects,
                     opponent_effects,
                     creator.loadout.gold_at_battle_start,
                     duel_entry.loadout.gold_at_battle_start,
+                    duel_final_tie_player_a_wins(seed),
                 )?;
 
                 emit!(DuelCombatVisual {
@@ -1418,13 +1420,19 @@ pub mod gameplay_state {
         let all_entrant_effects = generate_annotated_combat_effects(&entrant_inventory);
         let entrant_effects = strip_baked_battle_start_stat_effects(all_entrant_effects.clone());
 
-        let combat_outcome = resolve_combat_annotated_with_both_gold(
+        let combat_outcome = resolve_pvp_combat_annotated_with_both_gold(
             build_full_hp_combatant(&waiting_stats, &all_waiting_effects),
             build_full_hp_combatant(&entrant_stats, &all_entrant_effects),
             waiting_effects,
             entrant_effects,
             waiting_start_gold,
             entrant_start_gold,
+            pit_draft_final_tie_player_a_wins(
+                waiting_player,
+                player_key,
+                clock.slot,
+                vrf_data.as_ref().map(|(r, n)| (r, *n)),
+            ),
         )?;
 
         emit!(PitDraftCombatVisual {
@@ -1644,6 +1652,7 @@ pub mod gameplay_state {
                     &ctx.accounts.gameplay_authority,
                     player_inventory_program,
                     ctx.bumps.gameplay_authority,
+                    ctx.accounts.generated_map.seed,
                 )?;
                 if !player_won {
                     return Ok(());
@@ -2118,6 +2127,7 @@ pub mod gameplay_state {
                         &ctx.accounts.gameplay_authority,
                         player_inventory_program,
                         ctx.bumps.gameplay_authority,
+                        ctx.accounts.generated_map.seed,
                     )?;
                     if !player_won {
                         return Ok(());
@@ -2718,6 +2728,41 @@ fn extract_gameplay_vrf(
         GameplayStateError::VrfNotFulfilled
     );
     Ok(Some((vrf.randomness, vrf.nonce)))
+}
+
+fn pit_draft_final_tie_player_a_wins(
+    waiting_player: Pubkey,
+    entrant_player: Pubkey,
+    slot: u64,
+    vrf: Option<(&[u8; 32], u64)>,
+) -> bool {
+    match vrf {
+        Some((randomness, nonce)) => {
+            let mut rng = vrf_rng::GameRng::from_vrf(
+                randomness,
+                nonce,
+                vrf_rng::domains::PIT_DRAFT_TIEBREAKER,
+            );
+            rng.next_bounded(2) == 0
+        }
+        None => {
+            derive_u64_random(&[
+                b"pit_draft_tie_breaker",
+                waiting_player.as_ref(),
+                entrant_player.as_ref(),
+                &slot.to_le_bytes(),
+            ]) % 2
+                == 0
+        }
+    }
+}
+
+fn duel_final_tie_player_a_wins(seed: u64) -> bool {
+    seed % 2 == 0
+}
+
+fn gauntlet_final_tie_player_wins(map_seed: u64) -> bool {
+    map_seed % 2 == 0
 }
 
 /// VRF-aware gauntlet echo draw.
@@ -3439,6 +3484,7 @@ fn resolve_gauntlet_echo_inline<'info>(
     gameplay_authority: &AccountInfo<'info>,
     player_inventory_program: &AccountInfo<'info>,
     gameplay_authority_bump: u8,
+    map_seed: u64,
 ) -> Result<bool> {
     let week = game_state.week;
     require!(
@@ -3463,13 +3509,14 @@ fn resolve_gauntlet_echo_inline<'info>(
     let all_echo_effects = generate_annotated_combat_effects(&echo_inventory);
     let echo_effects = strip_baked_battle_start_stat_effects(all_echo_effects.clone());
 
-    let outcome = resolve_combat_annotated_with_both_gold(
+    let outcome = resolve_pvp_combat_annotated_with_both_gold(
         build_player_combatant(game_state.hp, &player_stats, &all_player_effects),
         build_full_hp_combatant(&echo_stats, &all_echo_effects),
         player_effects,
         echo_effects,
         game_state.gold,
         echo.loadout.gold_at_battle_start,
+        gauntlet_final_tie_player_wins(map_seed),
     )?;
 
     emit!(GauntletWeekEchoSelected {

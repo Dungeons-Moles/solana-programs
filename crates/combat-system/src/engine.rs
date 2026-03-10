@@ -2,9 +2,11 @@ use crate::constants::{MAX_TURNS, SUDDEN_DEATH_RAMP_TURN, SUDDEN_DEATH_TURN};
 use crate::effects::process_shrapnel_retaliation;
 use crate::state::{
     AnnotatedItemEffect, CombatContribution, CombatLogEntry, CombatSourceKind, CombatSourceRef,
-    StatusEffects, TriggerType,
+    EffectType, StatusEffects, TriggerType,
 };
 use crate::triggers::{process_triggers_for_phase, CombatantStats};
+
+const EXECUTION_EMBLEM_ID: [u8; 8] = *b"G-BO-06\0";
 
 /// Calculate weapon damage. ARM is now a separate HP pool, not damage reduction.
 /// This function returns raw ATK as damage (minimum 0).
@@ -51,6 +53,53 @@ pub fn check_failsafe(
         .unwrap_or(0);
 
     Some(player_pct > enemy_pct)
+}
+
+fn is_execution_emblem_effect(annotated: &AnnotatedItemEffect) -> bool {
+    matches!(
+        annotated.source,
+        Some(CombatSourceRef {
+            kind: CombatSourceKind::Gear,
+            id,
+        }) if id[..8] == EXECUTION_EMBLEM_ID
+    )
+}
+
+fn suppress_execution_emblem_on_non_first_strike(
+    effects: &[AnnotatedItemEffect],
+    triggered_flags: &mut [bool],
+    strike_index: u8,
+) -> Vec<(usize, bool)> {
+    if strike_index == 0 {
+        return Vec::new();
+    }
+
+    let mut suppressed = Vec::new();
+    for (index, annotated) in effects.iter().enumerate() {
+        if annotated.effect.trigger == TriggerType::OnHit && is_execution_emblem_effect(annotated) {
+            let previous = triggered_flags.get(index).copied().unwrap_or(false);
+            if let Some(flag) = triggered_flags.get_mut(index) {
+                *flag = true;
+            }
+            suppressed.push((index, previous));
+        }
+    }
+
+    suppressed
+}
+
+fn restore_suppressed_flags(triggered_flags: &mut [bool], suppressed: Vec<(usize, bool)>) {
+    for (index, previous) in suppressed {
+        if let Some(flag) = triggered_flags.get_mut(index) {
+            *flag = previous;
+        }
+    }
+}
+
+fn has_double_on_hit_effects(effects: &[AnnotatedItemEffect]) -> bool {
+    effects
+        .iter()
+        .any(|annotated| annotated.effect.effect_type == EffectType::DoubleOnHitEffects)
 }
 
 /// Execute a single strike. ARM is "HP before HP" - damage depletes ARM first,
@@ -184,6 +233,23 @@ pub fn execute_strikes_with_armor_override(
     let mut total_hp_damage: i16 = 0;
 
     for strike_index in 0..strikes {
+        process_triggers_for_phase(
+            on_hit_effects,
+            TriggerType::BeforeStrike,
+            turn,
+            attacker_stats,
+            attacker_status,
+            defender_stats,
+            defender_status,
+            triggered_flags,
+            is_player_attacking,
+            false,
+            player_gold,
+            enemy_gold,
+            gold_change,
+            log,
+        );
+
         let mut strike_atk = attacker_stats.atk;
         if attacker_stats.half_gear_atk_after_second_strike && strike_index >= 2 {
             let gear_bonus = attacker_stats.gear_atk_bonus.max(0);
@@ -242,6 +308,13 @@ pub fn execute_strikes_with_armor_override(
             let attacker_shrapnel_before = attacker_status.shrapnel;
             let defender_rust_before = defender_status.rust;
             let defender_hp_before_on_hit_effects = defender_stats.hp;
+            let had_double_on_hit = has_double_on_hit_effects(on_hit_effects);
+            let triggered_before_on_hit = triggered_flags.to_vec();
+            let suppressed_execution_emblem = suppress_execution_emblem_on_non_first_strike(
+                on_hit_effects,
+                triggered_flags,
+                strike_index,
+            );
 
             process_triggers_for_phase(
                 on_hit_effects,
@@ -259,6 +332,56 @@ pub fn execute_strikes_with_armor_override(
                 gold_change,
                 log,
             );
+            restore_suppressed_flags(triggered_flags, suppressed_execution_emblem);
+
+            if had_double_on_hit {
+                let mut repeated_effect_indexes: Vec<usize> = Vec::new();
+                for (index, annotated) in on_hit_effects.iter().enumerate() {
+                    if annotated.effect.trigger == TriggerType::OnHit
+                        && annotated.effect.once_per_turn
+                        && !triggered_before_on_hit.get(index).copied().unwrap_or(false)
+                        && triggered_flags.get(index).copied().unwrap_or(false)
+                    {
+                        repeated_effect_indexes.push(index);
+                    }
+                }
+
+                for index in &repeated_effect_indexes {
+                    if let Some(flag) = triggered_flags.get_mut(*index) {
+                        *flag = false;
+                    }
+                }
+
+                let suppressed_execution_emblem = suppress_execution_emblem_on_non_first_strike(
+                    on_hit_effects,
+                    triggered_flags,
+                    strike_index,
+                );
+
+                process_triggers_for_phase(
+                    on_hit_effects,
+                    TriggerType::OnHit,
+                    turn,
+                    attacker_stats,
+                    attacker_status,
+                    defender_stats,
+                    defender_status,
+                    triggered_flags,
+                    is_player_attacking,
+                    false,
+                    player_gold,
+                    enemy_gold,
+                    gold_change,
+                    log,
+                );
+                restore_suppressed_flags(triggered_flags, suppressed_execution_emblem);
+
+                for index in repeated_effect_indexes {
+                    if let Some(flag) = triggered_flags.get_mut(index) {
+                        *flag = true;
+                    }
+                }
+            }
 
             // Process EveryOtherTurnFirstHit triggers (fires on even turns, first hit only)
             // The once_per_turn flag ensures only the first hit triggers the effect
@@ -391,7 +514,7 @@ pub fn execute_strikes_with_armor_override(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{AnnotatedItemEffect, LogAction};
+    use crate::state::{AnnotatedItemEffect, ItemEffect, LogAction};
 
     fn make_combatant(atk: i16, spd: i16, arm: i16) -> CombatantStats {
         CombatantStats {
@@ -783,6 +906,126 @@ mod tests {
         let (player_first, enemy_first) = determine_turn_order(2, 2);
         assert!(!player_first);
         assert!(enemy_first);
+    }
+
+    #[test]
+    fn test_double_on_hit_effects_repeat_once_per_turn_on_same_hit() {
+        let mut attacker = make_combatant(1, 5, 0);
+        let mut defender = make_combatant(0, 0, 0);
+        defender.hp = 10;
+        defender.max_hp = 10;
+
+        let mut attacker_status = StatusEffects::default();
+        let mut defender_status = StatusEffects::default();
+        let mut on_hit_effects = vec![
+            AnnotatedItemEffect {
+                effect: ItemEffect {
+                    trigger: TriggerType::BattleStart,
+                    once_per_turn: false,
+                    effect_type: EffectType::DoubleOnHitEffects,
+                    value: 1,
+                    condition: crate::state::Condition::None,
+                },
+                source: None,
+            },
+            AnnotatedItemEffect {
+                effect: ItemEffect {
+                    trigger: TriggerType::OnHit,
+                    once_per_turn: true,
+                    effect_type: EffectType::ApplyBleed,
+                    value: 1,
+                    condition: crate::state::Condition::None,
+                },
+                source: None,
+            },
+        ];
+        let mut triggered_flags = vec![false; on_hit_effects.len()];
+        let mut defender_effects: Vec<AnnotatedItemEffect> = Vec::new();
+        let mut defender_triggered_flags: Vec<bool> = Vec::new();
+        let mut player_gold = 0u16;
+        let mut enemy_gold = 0u16;
+        let mut gold_change = 0i16;
+        let mut log = Vec::new();
+
+        execute_strikes(
+            1,
+            &mut attacker,
+            &mut attacker_status,
+            &mut defender,
+            &mut defender_status,
+            &mut on_hit_effects,
+            &mut triggered_flags,
+            &mut defender_effects,
+            &mut defender_triggered_flags,
+            1,
+            true,
+            &mut player_gold,
+            &mut enemy_gold,
+            &mut gold_change,
+            &mut log,
+        );
+
+        assert_eq!(defender_status.bleed, 2);
+
+        let bleed_logs = log
+            .iter()
+            .filter(|entry| {
+                entry.action == LogAction::ApplyStatus
+                    && entry.value == 1
+                    && entry.extra == crate::state::STATUS_BLEED
+            })
+            .count();
+        assert_eq!(bleed_logs, 2);
+    }
+
+    #[test]
+    fn test_before_strike_remove_armor_applies_before_damage() {
+        let mut attacker = make_combatant(2, 5, 0);
+        let mut defender = make_combatant(0, 0, 1);
+        defender.hp = 10;
+        defender.max_hp = 10;
+
+        let mut attacker_status = StatusEffects::default();
+        let mut defender_status = StatusEffects::default();
+        let mut on_hit_effects = vec![AnnotatedItemEffect {
+            effect: ItemEffect {
+                trigger: TriggerType::BeforeStrike,
+                once_per_turn: true,
+                effect_type: EffectType::RemoveArmor,
+                value: 1,
+                condition: crate::state::Condition::None,
+            },
+            source: None,
+        }];
+        let mut triggered_flags = vec![false; on_hit_effects.len()];
+        let mut defender_effects: Vec<AnnotatedItemEffect> = Vec::new();
+        let mut defender_triggered_flags: Vec<bool> = Vec::new();
+        let mut player_gold = 0u16;
+        let mut enemy_gold = 0u16;
+        let mut gold_change = 0i16;
+        let mut log = Vec::new();
+
+        let (_, total_hp_damage) = execute_strikes(
+            1,
+            &mut attacker,
+            &mut attacker_status,
+            &mut defender,
+            &mut defender_status,
+            &mut on_hit_effects,
+            &mut triggered_flags,
+            &mut defender_effects,
+            &mut defender_triggered_flags,
+            1,
+            true,
+            &mut player_gold,
+            &mut enemy_gold,
+            &mut gold_change,
+            &mut log,
+        );
+
+        assert_eq!(defender.arm, 0);
+        assert_eq!(defender.hp, 8);
+        assert_eq!(total_hp_damage, 2);
     }
 
     #[test]

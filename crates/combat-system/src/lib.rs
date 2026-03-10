@@ -38,6 +38,20 @@ pub struct CombatOutcome {
     pub gold_change: i16,
 }
 
+#[derive(Clone, Copy)]
+struct PvpTieSnapshot {
+    player_hp_arm: i32,
+    enemy_hp_arm: i32,
+    player_spd: i16,
+    enemy_spd: i16,
+    player_dig: i16,
+    enemy_dig: i16,
+    player_atk: i16,
+    enemy_atk: i16,
+    player_max_hp: u16,
+    enemy_max_hp: u16,
+}
+
 const fn boss_id_from_str(s: &str) -> [u8; 12] {
     let bytes = s.as_bytes();
     let mut id = [0u8; 12];
@@ -148,6 +162,61 @@ fn handle_enemy_reflection_depleted_transition(
     log.push(CombatLogEntry::non_weapon_damage(combat_state.turn, false, 2));
 }
 
+fn capture_pvp_tie_snapshot(combat_state: &CombatState) -> PvpTieSnapshot {
+    PvpTieSnapshot {
+        player_hp_arm: i32::from(combat_state.player.hp.max(0))
+            + i32::from((combat_state.player.arm).max(0)),
+        enemy_hp_arm: i32::from(combat_state.enemy.hp.max(0))
+            + i32::from((combat_state.enemy.arm).max(0)),
+        player_spd: combat_state.player.spd,
+        enemy_spd: combat_state.enemy.spd,
+        player_dig: combat_state.player.dig,
+        enemy_dig: combat_state.enemy.dig,
+        player_atk: combat_state.player.atk,
+        enemy_atk: combat_state.enemy.atk,
+        player_max_hp: combat_state.player.max_hp,
+        enemy_max_hp: combat_state.enemy.max_hp,
+    }
+}
+
+fn update_pvp_tie_snapshot(
+    snapshot: &mut Option<PvpTieSnapshot>,
+    combat_state: &CombatState,
+    pvp_final_tie_player_wins: Option<bool>,
+) {
+    if pvp_final_tie_player_wins.is_some() {
+        *snapshot = Some(capture_pvp_tie_snapshot(combat_state));
+    }
+}
+
+fn resolve_pvp_mutual_kill(
+    snapshot: PvpTieSnapshot,
+    final_tie_player_wins: bool,
+) -> (bool, ResolutionType) {
+    let comparisons = [
+        (snapshot.player_hp_arm, snapshot.enemy_hp_arm),
+        (i32::from(snapshot.player_spd), i32::from(snapshot.enemy_spd)),
+        (i32::from(snapshot.player_dig), i32::from(snapshot.enemy_dig)),
+        (i32::from(snapshot.player_atk), i32::from(snapshot.enemy_atk)),
+        (i32::from(snapshot.player_max_hp), i32::from(snapshot.enemy_max_hp)),
+    ];
+
+    for (player_value, enemy_value) in comparisons {
+        if player_value > enemy_value {
+            return (true, ResolutionType::PvpTiePlayerWin);
+        }
+        if enemy_value > player_value {
+            return (false, ResolutionType::PvpTieEnemyWin);
+        }
+    }
+
+    if final_tie_player_wins {
+        (true, ResolutionType::PvpTiePlayerWin)
+    } else {
+        (false, ResolutionType::PvpTieEnemyWin)
+    }
+}
+
 #[allow(clippy::manual_is_multiple_of)]
 pub fn resolve_combat(
     player_stats: CombatantInput,
@@ -198,6 +267,7 @@ pub fn resolve_boss_combat_with_player_gold(
         player_start_gold,
         0,
         Some(boss_id),
+        None,
     )
 }
 
@@ -216,6 +286,7 @@ pub fn resolve_combat_with_both_gold(
         annotate_effects(enemy_effects),
         player_start_gold,
         enemy_start_gold,
+        None,
         None,
     )
 }
@@ -236,6 +307,28 @@ pub fn resolve_combat_annotated_with_both_gold(
         player_start_gold,
         enemy_start_gold,
         None,
+        None,
+    )
+}
+
+pub fn resolve_pvp_combat_annotated_with_both_gold(
+    player_stats: CombatantInput,
+    enemy_stats: CombatantInput,
+    player_effects: Vec<AnnotatedItemEffect>,
+    enemy_effects: Vec<AnnotatedItemEffect>,
+    player_start_gold: u16,
+    enemy_start_gold: u16,
+    final_tie_player_wins: bool,
+) -> Result<CombatOutcome> {
+    resolve_combat_annotated_with_both_gold_and_boss(
+        player_stats,
+        enemy_stats,
+        player_effects,
+        enemy_effects,
+        player_start_gold,
+        enemy_start_gold,
+        None,
+        Some(final_tie_player_wins),
     )
 }
 
@@ -255,6 +348,7 @@ pub fn resolve_boss_combat_annotated_with_player_gold(
         player_start_gold,
         0,
         Some(boss_id),
+        None,
     )
 }
 
@@ -266,6 +360,7 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
     player_start_gold: u16,
     enemy_start_gold: u16,
     enemy_boss_id: Option<[u8; 12]>,
+    pvp_final_tie_player_wins: Option<bool>,
 ) -> Result<CombatOutcome> {
     validate_combatant(&player_stats)?;
     validate_combatant(&enemy_stats)?;
@@ -307,6 +402,8 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
             non_weapon_hits_this_turn: 0,
             double_detonation_first: 0,
             double_detonation_second: 0,
+            double_bomb_trigger: false,
+            pending_self_non_weapon_bonus: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
             attack_source: player_stats.attack_source,
@@ -339,6 +436,8 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
             non_weapon_hits_this_turn: 0,
             double_detonation_first: 0,
             double_detonation_second: 0,
+            double_bomb_trigger: false,
+            pending_self_non_weapon_bonus: 0,
             preserve_shrapnel_cap: 0,
             shards_every_turn: false,
             attack_source: enemy_stats.attack_source,
@@ -365,6 +464,7 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
 
     let mut player_triggered = vec![false; player_effects.len()];
     let mut enemy_triggered = vec![false; enemy_effects.len()];
+    let mut pvp_tie_snapshot = pvp_final_tie_player_wins.map(|_| capture_pvp_tie_snapshot(&combat_state));
 
     apply_boss_special_battle_start(&mut combat_state, &mut log);
 
@@ -398,6 +498,8 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
             &mut player_triggered,
             &mut enemy_triggered,
             &mut log,
+            pvp_final_tie_player_wins,
+            &mut pvp_tie_snapshot,
         ) {
             release_stored_damage_on_battle_end(&mut combat_state, &mut log);
             return Ok(CombatOutcome {
@@ -419,6 +521,8 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
             &mut player_triggered,
             &mut enemy_triggered,
             &mut log,
+            pvp_final_tie_player_wins,
+            &mut pvp_tie_snapshot,
         )?;
 
         apply_status_effects(
@@ -440,7 +544,9 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
             &mut log,
         );
 
-        if let Some((player_won, resolution_type)) = resolve_if_ended(&combat_state, turn) {
+        if let Some((player_won, resolution_type)) =
+            resolve_if_ended(&combat_state, turn, pvp_final_tie_player_wins, pvp_tie_snapshot)
+        {
             release_stored_damage_on_battle_end(&mut combat_state, &mut log);
             return Ok(CombatOutcome {
                 player_won,
@@ -460,6 +566,8 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
             &mut player_triggered,
             &mut enemy_triggered,
             &mut log,
+            pvp_final_tie_player_wins,
+            &mut pvp_tie_snapshot,
         )?;
 
         apply_status_effects(
@@ -474,7 +582,9 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
 
         log_status_stacks(&combat_state, &mut log);
 
-        if let Some((player_won, resolution_type)) = resolve_if_ended(&combat_state, turn) {
+        if let Some((player_won, resolution_type)) =
+            resolve_if_ended(&combat_state, turn, pvp_final_tie_player_wins, pvp_tie_snapshot)
+        {
             release_stored_damage_on_battle_end(&mut combat_state, &mut log);
             return Ok(CombatOutcome {
                 player_won,
@@ -573,6 +683,8 @@ fn execute_turn(
     player_triggered: &mut [bool],
     enemy_triggered: &mut [bool],
     log: &mut Vec<CombatLogEntry>,
+    pvp_final_tie_player_wins: Option<bool>,
+    pvp_tie_snapshot: &mut Option<PvpTieSnapshot>,
 ) -> Result<(i16, i16)> {
     apply_sudden_death(combat_state, turn)?;
 
@@ -607,6 +719,7 @@ fn execute_turn(
 
     if player_first {
         combat_state.player_acted_this_turn = true;
+        update_pvp_tie_snapshot(pvp_tie_snapshot, combat_state, pvp_final_tie_player_wins);
         let player_status_before_phase = player_status;
         let enemy_status_before_phase = enemy_status;
         let (enemy_hp, damage) = engine::execute_strikes_with_armor_override(
@@ -665,6 +778,11 @@ fn execute_turn(
 
         if enemy_stats.hp > 0 {
             combat_state.enemy_acted_this_turn = true;
+            combat_state.player.hp = player_stats.hp;
+            combat_state.enemy.hp = enemy_stats.hp;
+            combat_state.player.arm = player_stats.arm;
+            combat_state.enemy.arm = enemy_stats.arm;
+            update_pvp_tie_snapshot(pvp_tie_snapshot, combat_state, pvp_final_tie_player_wins);
             let enemy_status_before_phase = enemy_status;
             let player_status_before_phase = player_status;
             let (player_hp, damage) = engine::execute_strikes_with_armor_override(
@@ -703,6 +821,7 @@ fn execute_turn(
         }
     } else {
         combat_state.enemy_acted_this_turn = true;
+        update_pvp_tie_snapshot(pvp_tie_snapshot, combat_state, pvp_final_tie_player_wins);
         let enemy_status_before_phase = enemy_status;
         let player_status_before_phase = player_status;
         let (player_hp, damage) = engine::execute_strikes_with_armor_override(
@@ -741,6 +860,11 @@ fn execute_turn(
 
         if player_stats.hp > 0 {
             combat_state.player_acted_this_turn = true;
+            combat_state.player.hp = player_stats.hp;
+            combat_state.enemy.hp = enemy_stats.hp;
+            combat_state.player.arm = player_stats.arm;
+            combat_state.enemy.arm = enemy_stats.arm;
+            update_pvp_tie_snapshot(pvp_tie_snapshot, combat_state, pvp_final_tie_player_wins);
             let player_status_before_phase = player_status;
             let enemy_status_before_phase = enemy_status;
             let (enemy_hp, damage) = engine::execute_strikes_with_armor_override(
@@ -799,6 +923,8 @@ fn execute_turn(
         player_triggered,
         enemy_triggered,
         log,
+        pvp_final_tie_player_wins,
+        pvp_tie_snapshot,
     );
     check_first_time_exposed(
         combat_state,
@@ -807,6 +933,8 @@ fn execute_turn(
         player_triggered,
         enemy_triggered,
         log,
+        pvp_final_tie_player_wins,
+        pvp_tie_snapshot,
     );
 
     Ok((player_damage_dealt, enemy_damage_dealt))
@@ -822,6 +950,8 @@ fn check_first_time_wounded(
     player_triggered: &mut [bool],
     enemy_triggered: &mut [bool],
     log: &mut Vec<CombatLogEntry>,
+    pvp_final_tie_player_wins: Option<bool>,
+    pvp_tie_snapshot: &mut Option<PvpTieSnapshot>,
 ) {
     let turn = combat_state.turn;
     let (player_acts_first, _) =
@@ -831,6 +961,7 @@ fn check_first_time_wounded(
         && check_wounded(combat_state.player.hp, combat_state.player.max_hp)
     {
         combat_state.player.set_flag(Combatant::WOUNDED);
+        update_pvp_tie_snapshot(pvp_tie_snapshot, combat_state, pvp_final_tie_player_wins);
 
         let mut player_stats = combat_state.player.to_stats();
         let mut player_status = combat_state.player.status;
@@ -864,6 +995,7 @@ fn check_first_time_wounded(
         && check_wounded(combat_state.enemy.hp, combat_state.enemy.max_hp)
     {
         combat_state.enemy.set_flag(Combatant::WOUNDED);
+        update_pvp_tie_snapshot(pvp_tie_snapshot, combat_state, pvp_final_tie_player_wins);
 
         let mut enemy_stats = combat_state.enemy.to_stats();
         let mut enemy_status = combat_state.enemy.status;
@@ -907,6 +1039,8 @@ fn check_first_time_exposed(
     player_triggered: &mut [bool],
     enemy_triggered: &mut [bool],
     log: &mut Vec<CombatLogEntry>,
+    pvp_final_tie_player_wins: Option<bool>,
+    pvp_tie_snapshot: &mut Option<PvpTieSnapshot>,
 ) {
     let turn = combat_state.turn;
     let (player_acts_first, _) =
@@ -914,6 +1048,7 @@ fn check_first_time_exposed(
 
     if !combat_state.player.has_flag(Combatant::EXPOSED) && combat_state.player.arm <= 0 {
         combat_state.player.set_flag(Combatant::EXPOSED);
+        update_pvp_tie_snapshot(pvp_tie_snapshot, combat_state, pvp_final_tie_player_wins);
 
         let mut player_stats = combat_state.player.to_stats();
         let mut player_status = combat_state.player.status;
@@ -952,6 +1087,7 @@ fn check_first_time_exposed(
 
     if !combat_state.enemy.has_flag(Combatant::EXPOSED) && combat_state.enemy.arm <= 0 {
         combat_state.enemy.set_flag(Combatant::EXPOSED);
+        update_pvp_tie_snapshot(pvp_tie_snapshot, combat_state, pvp_final_tie_player_wins);
 
         let mut enemy_stats = combat_state.enemy.to_stats();
         let mut enemy_status = combat_state.enemy.status;
@@ -1027,6 +1163,8 @@ fn apply_end_of_turn_effects(
     player_triggered: &mut [bool],
     enemy_triggered: &mut [bool],
     log: &mut Vec<CombatLogEntry>,
+    pvp_final_tie_player_wins: Option<bool>,
+    pvp_tie_snapshot: &mut Option<PvpTieSnapshot>,
 ) -> Result<()> {
     let turn = combat_state.turn;
     let player_shrapnel_before_decay = combat_state.player.status.shrapnel;
@@ -1054,6 +1192,7 @@ fn apply_end_of_turn_effects(
     }
 
     if combat_state.player.status.bleed > 0 {
+        update_pvp_tie_snapshot(pvp_tie_snapshot, combat_state, pvp_final_tie_player_wins);
         let old_hp = combat_state.player.hp;
         combat_state.player.hp =
             process_bleed_damage(combat_state.player.status.bleed, combat_state.player.hp);
@@ -1095,6 +1234,7 @@ fn apply_end_of_turn_effects(
         }
     }
     if combat_state.enemy.status.bleed > 0 {
+        update_pvp_tie_snapshot(pvp_tie_snapshot, combat_state, pvp_final_tie_player_wins);
         let old_hp = combat_state.enemy.hp;
         combat_state.enemy.hp =
             process_bleed_damage(combat_state.enemy.status.bleed, combat_state.enemy.hp);
@@ -1160,8 +1300,23 @@ fn apply_end_of_turn_effects(
     Ok(())
 }
 
-fn resolve_if_ended(combat_state: &CombatState, turn: u8) -> Option<(bool, ResolutionType)> {
-    if combat_state.player.hp <= 0 {
+fn resolve_if_ended(
+    combat_state: &CombatState,
+    turn: u8,
+    pvp_final_tie_player_wins: Option<bool>,
+    pvp_tie_snapshot: Option<PvpTieSnapshot>,
+) -> Option<(bool, ResolutionType)> {
+    let player_dead = combat_state.player.hp <= 0;
+    let enemy_dead = combat_state.enemy.hp <= 0;
+
+    if player_dead && enemy_dead {
+        if let Some(final_tie_player_wins) = pvp_final_tie_player_wins {
+            return Some(resolve_pvp_mutual_kill(
+                pvp_tie_snapshot.unwrap_or_else(|| capture_pvp_tie_snapshot(combat_state)),
+                final_tie_player_wins,
+            ));
+        }
+
         let resolution_type = if turn >= SUDDEN_DEATH_TURN {
             ResolutionType::SuddenDeathEnemyWin
         } else {
@@ -1170,7 +1325,16 @@ fn resolve_if_ended(combat_state: &CombatState, turn: u8) -> Option<(bool, Resol
         return Some((false, resolution_type));
     }
 
-    if combat_state.enemy.hp <= 0 {
+    if player_dead {
+        let resolution_type = if turn >= SUDDEN_DEATH_TURN {
+            ResolutionType::SuddenDeathEnemyWin
+        } else {
+            ResolutionType::PlayerDefeated
+        };
+        return Some((false, resolution_type));
+    }
+
+    if enemy_dead {
         let resolution_type = if turn >= SUDDEN_DEATH_TURN {
             ResolutionType::SuddenDeathPlayerWin
         } else {
@@ -1279,6 +1443,22 @@ fn apply_start_of_turn_effects_for_side(
         log,
     );
 
+    if combat_state.turn >= 5 {
+        if is_player {
+            if combat_state.player.stored_damage > 0 && combat_state.enemy.hp > 0 {
+                let damage = combat_state.player.stored_damage;
+                combat_state.enemy.hp = combat_state.enemy.hp.saturating_sub(damage);
+                combat_state.player.stored_damage = 0;
+                log.push(CombatLogEntry::non_weapon_damage(combat_state.turn, false, damage));
+            }
+        } else if combat_state.enemy.stored_damage > 0 && combat_state.player.hp > 0 {
+            let damage = combat_state.enemy.stored_damage;
+            combat_state.player.hp = combat_state.player.hp.saturating_sub(damage);
+            combat_state.enemy.stored_damage = 0;
+            log.push(CombatLogEntry::non_weapon_damage(combat_state.turn, true, damage));
+        }
+    }
+
     if (combat_state.turn & 1) == 0 {
         process_phase_effects(
             effects,
@@ -1311,12 +1491,15 @@ fn apply_ordered_start_of_turn_effects(
     player_triggered: &mut [bool],
     enemy_triggered: &mut [bool],
     log: &mut Vec<CombatLogEntry>,
+    pvp_final_tie_player_wins: Option<bool>,
+    pvp_tie_snapshot: &mut Option<PvpTieSnapshot>,
 ) -> Option<(bool, ResolutionType)> {
     let (player_acts_first, _) =
         engine::determine_turn_order(combat_state.player.spd, combat_state.enemy.spd);
     let is_first_turn = combat_state.turn == 1;
 
     if player_acts_first {
+        update_pvp_tie_snapshot(pvp_tie_snapshot, combat_state, pvp_final_tie_player_wins);
         apply_start_of_turn_effects_for_side(
             player_effects,
             combat_state,
@@ -1326,10 +1509,16 @@ fn apply_ordered_start_of_turn_effects(
             player_triggered,
             log,
         );
-        if let Some(resolution) = resolve_if_ended(combat_state, combat_state.turn) {
+        if let Some(resolution) = resolve_if_ended(
+            combat_state,
+            combat_state.turn,
+            pvp_final_tie_player_wins,
+            *pvp_tie_snapshot,
+        ) {
             return Some(resolution);
         }
 
+        update_pvp_tie_snapshot(pvp_tie_snapshot, combat_state, pvp_final_tie_player_wins);
         apply_start_of_turn_effects_for_side(
             enemy_effects,
             combat_state,
@@ -1339,8 +1528,14 @@ fn apply_ordered_start_of_turn_effects(
             enemy_triggered,
             log,
         );
-        resolve_if_ended(combat_state, combat_state.turn)
+        resolve_if_ended(
+            combat_state,
+            combat_state.turn,
+            pvp_final_tie_player_wins,
+            *pvp_tie_snapshot,
+        )
     } else {
+        update_pvp_tie_snapshot(pvp_tie_snapshot, combat_state, pvp_final_tie_player_wins);
         apply_start_of_turn_effects_for_side(
             enemy_effects,
             combat_state,
@@ -1350,10 +1545,16 @@ fn apply_ordered_start_of_turn_effects(
             enemy_triggered,
             log,
         );
-        if let Some(resolution) = resolve_if_ended(combat_state, combat_state.turn) {
+        if let Some(resolution) = resolve_if_ended(
+            combat_state,
+            combat_state.turn,
+            pvp_final_tie_player_wins,
+            *pvp_tie_snapshot,
+        ) {
             return Some(resolution);
         }
 
+        update_pvp_tie_snapshot(pvp_tie_snapshot, combat_state, pvp_final_tie_player_wins);
         apply_start_of_turn_effects_for_side(
             player_effects,
             combat_state,
@@ -1363,7 +1564,12 @@ fn apply_ordered_start_of_turn_effects(
             player_triggered,
             log,
         );
-        resolve_if_ended(combat_state, combat_state.turn)
+        resolve_if_ended(
+            combat_state,
+            combat_state.turn,
+            pvp_final_tie_player_wins,
+            *pvp_tie_snapshot,
+        )
     }
 }
 
@@ -3013,6 +3219,139 @@ mod tests {
     }
 
     #[test]
+    fn test_execution_emblem_only_applies_on_actual_first_strike() {
+        let player = CombatantInput {
+            hp: 25,
+            max_hp: 25,
+            atk: 3,
+            arm: 0,
+            spd: 5,
+            dig: 0,
+            strikes: 2,
+            attack_source: None,
+            atk_contributions: Vec::new(),
+        };
+        let enemy = CombatantInput {
+            hp: 10,
+            max_hp: 10,
+            atk: 0,
+            arm: 0,
+            spd: 0,
+            dig: 0,
+            strikes: 1,
+            attack_source: None,
+            atk_contributions: Vec::new(),
+        };
+
+        let mut execution_emblem_id = [0u8; 16];
+        execution_emblem_id[..8].copy_from_slice(b"G-BO-06\0");
+        let player_effects = vec![AnnotatedItemEffect {
+            effect: ItemEffect {
+                trigger: TriggerType::OnHit,
+                once_per_turn: true,
+                effect_type: EffectType::DealDamage,
+                value: 3,
+                condition: Condition::EnemyWounded,
+            },
+            source: Some(CombatSourceRef {
+                kind: CombatSourceKind::Gear,
+                id: execution_emblem_id,
+            }),
+        }];
+
+        let outcome =
+            resolve_combat_annotated_with_both_gold(player, enemy, player_effects, vec![], 0, 0)
+                .unwrap();
+
+        let turn_one_player_attacks: Vec<_> = outcome
+            .log
+            .iter()
+            .filter(|entry| {
+                entry.turn == 1 && entry.is_player && matches!(entry.action, LogAction::Attack)
+            })
+            .collect();
+
+        assert_eq!(turn_one_player_attacks.len(), 2, "Log: {:?}", outcome.log);
+        assert!(
+            !outcome.log.iter().any(|entry| {
+                entry.turn == 1
+                    && entry.is_player
+                    && matches!(entry.action, LogAction::Attack | LogAction::NonWeaponDamage)
+                    && entry.source
+                        == Some(CombatSourceRef {
+                            kind: CombatSourceKind::Gear,
+                            id: execution_emblem_id,
+                        })
+            }),
+            "Execution Emblem should not trigger on strike 2. Log: {:?}",
+            outcome.log
+        );
+    }
+
+    #[test]
+    fn test_execution_emblem_still_applies_on_first_strike_when_enemy_starts_wounded() {
+        let player = CombatantInput {
+            hp: 25,
+            max_hp: 25,
+            atk: 3,
+            arm: 0,
+            spd: 5,
+            dig: 0,
+            strikes: 2,
+            attack_source: None,
+            atk_contributions: Vec::new(),
+        };
+        let enemy = CombatantInput {
+            hp: 4,
+            max_hp: 10,
+            atk: 0,
+            arm: 0,
+            spd: 0,
+            dig: 0,
+            strikes: 1,
+            attack_source: None,
+            atk_contributions: Vec::new(),
+        };
+
+        let mut execution_emblem_id = [0u8; 16];
+        execution_emblem_id[..8].copy_from_slice(b"G-BO-06\0");
+        let player_effects = vec![AnnotatedItemEffect {
+            effect: ItemEffect {
+                trigger: TriggerType::OnHit,
+                once_per_turn: true,
+                effect_type: EffectType::DealDamage,
+                value: 3,
+                condition: Condition::EnemyWounded,
+            },
+            source: Some(CombatSourceRef {
+                kind: CombatSourceKind::Gear,
+                id: execution_emblem_id,
+            }),
+        }];
+
+        let outcome =
+            resolve_combat_annotated_with_both_gold(player, enemy, player_effects, vec![], 0, 0)
+                .unwrap();
+
+        assert_eq!(outcome.final_enemy_hp, -2, "Log: {:?}", outcome.log);
+        assert!(
+            outcome.log.iter().any(|entry| {
+                entry.turn == 1
+                    && entry.is_player
+                    && matches!(entry.action, LogAction::Attack)
+                    && entry.value == 3
+                    && entry.source
+                        == Some(CombatSourceRef {
+                            kind: CombatSourceKind::Gear,
+                            id: execution_emblem_id,
+                        })
+            }),
+            "Execution Emblem should trigger on strike 1 when enemy starts wounded. Log: {:?}",
+            outcome.log
+        );
+    }
+
+    #[test]
     fn test_powder_keg_baron_short_fuse_reduces_countdown_after_wounded() {
         let player = CombatantInput {
             hp: 30,
@@ -3212,5 +3551,400 @@ mod tests {
                 && matches!(entry.action, LogAction::ArmorChange)
                 && entry.value == 12
         }));
+    }
+
+    #[test]
+    fn test_double_detonation_buffs_enemy_and_self_on_first_two_bomb_detonations() {
+        let player = CombatantInput {
+            hp: 25,
+            max_hp: 25,
+            atk: 0,
+            arm: 0,
+            spd: 2,
+            dig: 0,
+            strikes: 1,
+            attack_source: None,
+            atk_contributions: Vec::new(),
+        };
+        let enemy = CombatantInput {
+            hp: 40,
+            max_hp: 40,
+            atk: 0,
+            arm: 0,
+            spd: 1,
+            dig: 0,
+            strikes: 1,
+            attack_source: None,
+            atk_contributions: Vec::new(),
+        };
+        let player_effects = vec![
+            ItemEffect {
+                trigger: TriggerType::BattleStart,
+                once_per_turn: false,
+                effect_type: EffectType::DoubleDetonationFirst,
+                value: 1,
+                condition: Condition::None,
+            },
+            ItemEffect {
+                trigger: TriggerType::BattleStart,
+                once_per_turn: false,
+                effect_type: EffectType::DoubleDetonationSecond,
+                value: 3,
+                condition: Condition::None,
+            },
+            ItemEffect {
+                trigger: TriggerType::Countdown { turns: 2 },
+                once_per_turn: false,
+                effect_type: EffectType::DealNonWeaponDamage,
+                value: 10,
+                condition: Condition::None,
+            },
+            ItemEffect {
+                trigger: TriggerType::Countdown { turns: 2 },
+                once_per_turn: false,
+                effect_type: EffectType::DealSelfNonWeaponDamage,
+                value: 4,
+                condition: Condition::None,
+            },
+            ItemEffect {
+                trigger: TriggerType::Countdown { turns: 2 },
+                once_per_turn: false,
+                effect_type: EffectType::DealNonWeaponDamage,
+                value: 10,
+                condition: Condition::None,
+            },
+            ItemEffect {
+                trigger: TriggerType::Countdown { turns: 2 },
+                once_per_turn: false,
+                effect_type: EffectType::DealSelfNonWeaponDamage,
+                value: 4,
+                condition: Condition::None,
+            },
+        ];
+
+        let outcome = resolve_combat(player, enemy, player_effects, vec![]).unwrap();
+        let turn_two_non_weapon: Vec<i16> = outcome
+            .log
+            .iter()
+            .filter(|entry| entry.turn == 2 && matches!(entry.action, LogAction::NonWeaponDamage))
+            .map(|entry| entry.value)
+            .collect();
+
+        assert_eq!(
+            turn_two_non_weapon,
+            vec![11, 5, 13, 7],
+            "Expected Double Detonation to buff both halves of the first two bomb detonations. Log: {:?}",
+            outcome.log
+        );
+    }
+
+    #[test]
+    fn test_twin_fuse_knot_triggers_countdown_bombs_twice() {
+        let player = CombatantInput {
+            hp: 25,
+            max_hp: 25,
+            atk: 0,
+            arm: 0,
+            spd: 2,
+            dig: 0,
+            strikes: 1,
+            attack_source: None,
+            atk_contributions: Vec::new(),
+        };
+        let enemy = CombatantInput {
+            hp: 40,
+            max_hp: 40,
+            atk: 0,
+            arm: 0,
+            spd: 1,
+            dig: 0,
+            strikes: 1,
+            attack_source: None,
+            atk_contributions: Vec::new(),
+        };
+        let player_effects = vec![
+            ItemEffect {
+                trigger: TriggerType::BattleStart,
+                once_per_turn: false,
+                effect_type: EffectType::DoubleBombTrigger,
+                value: 1,
+                condition: Condition::None,
+            },
+            ItemEffect {
+                trigger: TriggerType::BattleStart,
+                once_per_turn: false,
+                effect_type: EffectType::ReduceNextBombSelfDamage,
+                value: 1,
+                condition: Condition::None,
+            },
+            ItemEffect {
+                trigger: TriggerType::Countdown { turns: 2 },
+                once_per_turn: false,
+                effect_type: EffectType::DealNonWeaponDamage,
+                value: 10,
+                condition: Condition::None,
+            },
+            ItemEffect {
+                trigger: TriggerType::Countdown { turns: 2 },
+                once_per_turn: false,
+                effect_type: EffectType::DealSelfNonWeaponDamage,
+                value: 4,
+                condition: Condition::None,
+            },
+        ];
+
+        let outcome = resolve_combat(player, enemy, player_effects, vec![]).unwrap();
+        let turn_two_non_weapon: Vec<i16> = outcome
+            .log
+            .iter()
+            .filter(|entry| entry.turn == 2 && matches!(entry.action, LogAction::NonWeaponDamage))
+            .map(|entry| entry.value)
+            .collect();
+
+        assert_eq!(
+            turn_two_non_weapon,
+            vec![10, 3, 10, 4],
+            "Expected Twin-Fuse Knot to duplicate the bomb trigger once. Log: {:?}",
+            outcome.log
+        );
+    }
+
+    #[test]
+    fn test_time_charge_releases_stored_damage_on_turn_five() {
+        let player = CombatantInput {
+            hp: 25,
+            max_hp: 25,
+            atk: 0,
+            arm: 0,
+            spd: 2,
+            dig: 0,
+            strikes: 1,
+            attack_source: None,
+            atk_contributions: Vec::new(),
+        };
+        let enemy = CombatantInput {
+            hp: 50,
+            max_hp: 50,
+            atk: 0,
+            arm: 0,
+            spd: 1,
+            dig: 0,
+            strikes: 1,
+            attack_source: None,
+            atk_contributions: Vec::new(),
+        };
+        let player_effects = vec![
+            ItemEffect {
+                trigger: TriggerType::BattleStart,
+                once_per_turn: false,
+                effect_type: EffectType::GainArmor,
+                value: 2,
+                condition: Condition::None,
+            },
+            ItemEffect {
+                trigger: TriggerType::TurnStart,
+                once_per_turn: false,
+                effect_type: EffectType::StoreDamage,
+                value: 2,
+                condition: Condition::None,
+            },
+        ];
+
+        let outcome = resolve_combat(player, enemy, player_effects, vec![]).unwrap();
+
+        assert!(
+            outcome.log.iter().any(|entry| {
+                entry.turn == 5
+                    && !entry.is_player
+                    && matches!(entry.action, LogAction::NonWeaponDamage)
+                    && entry.value == 10
+            }),
+            "Expected Time Charge stored damage to release on turn 5. Log: {:?}",
+            outcome.log
+        );
+    }
+
+    #[test]
+    fn test_pvp_mutual_kill_uses_stat_tiebreakers_before_final_fallback() {
+        let player = CombatantInput {
+            hp: 10,
+            max_hp: 25,
+            atk: 0,
+            arm: 0,
+            spd: 6,
+            dig: 0,
+            strikes: 1,
+            attack_source: None,
+            atk_contributions: Vec::new(),
+        };
+        let enemy = CombatantInput {
+            hp: 10,
+            max_hp: 10,
+            atk: 0,
+            arm: 0,
+            spd: 3,
+            dig: 0,
+            strikes: 1,
+            attack_source: None,
+            atk_contributions: Vec::new(),
+        };
+        let player_effects = vec![
+            ItemEffect {
+                trigger: TriggerType::Countdown { turns: 2 },
+                once_per_turn: false,
+                effect_type: EffectType::DealNonWeaponDamage,
+                value: 10,
+                condition: Condition::None,
+            },
+            ItemEffect {
+                trigger: TriggerType::Countdown { turns: 2 },
+                once_per_turn: false,
+                effect_type: EffectType::DealSelfNonWeaponDamage,
+                value: 10,
+                condition: Condition::None,
+            },
+        ];
+
+        let outcome = resolve_pvp_combat_annotated_with_both_gold(
+            player,
+            enemy,
+            annotate_effects(player_effects),
+            vec![],
+            0,
+            0,
+            false,
+        )
+        .unwrap();
+
+        assert!(outcome.player_won, "Higher SPD should win PvP mutual kill");
+        assert_eq!(outcome.final_player_hp, 0);
+        assert_eq!(outcome.final_enemy_hp, 0);
+        assert_eq!(outcome.resolution_type, ResolutionType::PvpTiePlayerWin);
+    }
+
+    #[test]
+    fn test_pvp_mutual_kill_prioritizes_pre_exchange_hp_arm_before_speed() {
+        let player = CombatantInput {
+            hp: 4,
+            max_hp: 25,
+            atk: 0,
+            arm: 0,
+            spd: 6,
+            dig: 0,
+            strikes: 1,
+            attack_source: None,
+            atk_contributions: Vec::new(),
+        };
+        let enemy = CombatantInput {
+            hp: 10,
+            max_hp: 10,
+            atk: 0,
+            arm: 0,
+            spd: 3,
+            dig: 0,
+            strikes: 1,
+            attack_source: None,
+            atk_contributions: Vec::new(),
+        };
+        let player_effects = vec![
+            ItemEffect {
+                trigger: TriggerType::Countdown { turns: 2 },
+                once_per_turn: false,
+                effect_type: EffectType::DealNonWeaponDamage,
+                value: 10,
+                condition: Condition::None,
+            },
+            ItemEffect {
+                trigger: TriggerType::Countdown { turns: 2 },
+                once_per_turn: false,
+                effect_type: EffectType::DealSelfNonWeaponDamage,
+                value: 4,
+                condition: Condition::None,
+            },
+        ];
+
+        let outcome = resolve_pvp_combat_annotated_with_both_gold(
+            player,
+            enemy,
+            annotate_effects(player_effects),
+            vec![],
+            0,
+            0,
+            true,
+        )
+        .unwrap();
+
+        assert!(!outcome.player_won, "Higher pre-exchange HP+ARM should win before SPD");
+        assert_eq!(outcome.final_player_hp, 0);
+        assert_eq!(outcome.final_enemy_hp, 0);
+        assert_eq!(outcome.resolution_type, ResolutionType::PvpTieEnemyWin);
+    }
+
+    #[test]
+    fn test_pvp_mutual_kill_uses_final_fallback_when_stats_are_identical() {
+        let player = CombatantInput {
+            hp: 10,
+            max_hp: 10,
+            atk: 0,
+            arm: 0,
+            spd: 3,
+            dig: 0,
+            strikes: 1,
+            attack_source: None,
+            atk_contributions: Vec::new(),
+        };
+        let enemy = CombatantInput {
+            hp: 10,
+            max_hp: 10,
+            atk: 0,
+            arm: 0,
+            spd: 3,
+            dig: 0,
+            strikes: 1,
+            attack_source: None,
+            atk_contributions: Vec::new(),
+        };
+        let player_effects = vec![
+            ItemEffect {
+                trigger: TriggerType::Countdown { turns: 2 },
+                once_per_turn: false,
+                effect_type: EffectType::DealNonWeaponDamage,
+                value: 10,
+                condition: Condition::None,
+            },
+            ItemEffect {
+                trigger: TriggerType::Countdown { turns: 2 },
+                once_per_turn: false,
+                effect_type: EffectType::DealSelfNonWeaponDamage,
+                value: 10,
+                condition: Condition::None,
+            },
+        ];
+
+        let player_wins = resolve_pvp_combat_annotated_with_both_gold(
+            player.clone(),
+            enemy.clone(),
+            annotate_effects(player_effects.clone()),
+            vec![],
+            0,
+            0,
+            true,
+        )
+        .unwrap();
+        let enemy_wins = resolve_pvp_combat_annotated_with_both_gold(
+            player,
+            enemy,
+            annotate_effects(player_effects),
+            vec![],
+            0,
+            0,
+            false,
+        )
+        .unwrap();
+
+        assert!(player_wins.player_won);
+        assert_eq!(player_wins.resolution_type, ResolutionType::PvpTiePlayerWin);
+        assert!(!enemy_wins.player_won);
+        assert_eq!(enemy_wins.resolution_type, ResolutionType::PvpTieEnemyWin);
     }
 }

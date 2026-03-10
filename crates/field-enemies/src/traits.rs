@@ -61,7 +61,7 @@ pub static SHARD_BEETLE_TRAITS: [ItemEffect; 1] = [ItemEffect {
 
 /// Tunnel Warden: First strike each turn: remove 1 Armor from player before damage
 pub static TUNNEL_WARDEN_TRAITS: [ItemEffect; 1] = [ItemEffect {
-    trigger: TriggerType::TurnStart,
+    trigger: TriggerType::BeforeStrike,
     once_per_turn: true,
     effect_type: EffectType::RemoveArmor,
     value: 1,
@@ -214,6 +214,16 @@ mod tests {
         assert_eq!(traits.len(), 1);
         assert!(matches!(traits[0].trigger, TriggerType::BattleStart));
         assert!(matches!(traits[0].effect_type, EffectType::ApplyChill));
+        assert_eq!(traits[0].value, 1);
+    }
+
+    #[test]
+    fn test_tunnel_warden_trait_uses_before_strike() {
+        let traits = get_enemy_traits(ids::TUNNEL_WARDEN);
+        assert_eq!(traits.len(), 1);
+        assert!(matches!(traits[0].trigger, TriggerType::BeforeStrike));
+        assert!(traits[0].once_per_turn);
+        assert!(matches!(traits[0].effect_type, EffectType::RemoveArmor));
         assert_eq!(traits[0].value, 1);
     }
 

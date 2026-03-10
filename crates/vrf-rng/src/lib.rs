@@ -50,6 +50,7 @@ pub mod domains {
     pub const DUEL_BOSS: u64 = 0x0020;
     pub const PIT_DRAFT_INVENTORY: u64 = 0x0030;
     pub const PIT_DRAFT_GOLD: u64 = 0x0031;
+    pub const PIT_DRAFT_TIEBREAKER: u64 = 0x0032;
     pub const GAUNTLET_ECHO_DRAW: u64 = 0x0040;
     pub const GAUNTLET_RESERVOIR: u64 = 0x0041;
 }

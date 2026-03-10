@@ -95,7 +95,7 @@ pub const T_ST_02: ItemDefinition = ItemDefinition {
             [3, 5, 7],
         ),
         // First strike each turn removes 1/2/3 enemy Armor before damage
-        EffectDefinition::new(TriggerType::OnHit, EffectType::RemoveArmor, true, [1, 2, 3]),
+        EffectDefinition::new(TriggerType::BeforeStrike, EffectType::RemoveArmor, true, [1, 2, 3]),
     ],
 };
 
@@ -607,12 +607,12 @@ pub const T_GR_02: ItemDefinition = ItemDefinition {
             false,
             [1, 2, 2],
         ),
-        // First hit each turn triggers all your Shard effects
+        // Shard effects trigger every turn (instead of every other turn)
         EffectDefinition::new(
-            TriggerType::OnHit,
-            EffectType::TriggerAllShards,
-            true,      // once per turn (first hit only)
-            [1, 1, 1], // Toggle flag, stays flat
+            TriggerType::BattleStart,
+            EffectType::ShardsEveryTurn,
+            false,
+            [1, 1, 1],
         ),
     ],
 };
@@ -931,14 +931,14 @@ pub const G_BL_04: ItemDefinition = ItemDefinition {
     tag: ItemTag::Blast,
     rarity: Rarity::Rare,
     effects: &[
-        // First non-weapon damage each turn: +1/2/4
+        // First bomb detonation each turn: +1/2/4 to enemy and self
         EffectDefinition::new(
             TriggerType::TurnStart,
             EffectType::DoubleDetonationFirst,
             true,
             [1, 2, 4],
         ),
-        // Second non-weapon damage each turn: +3/6/12
+        // Second bomb detonation each turn: +3/6/12 to enemy and self
         EffectDefinition::new(
             TriggerType::TurnStart,
             EffectType::DoubleDetonationSecond,
@@ -1362,12 +1362,13 @@ pub const G_FR_08: ItemDefinition = ItemDefinition {
             true,
             [1, 2, 4],
         ),
-        // Approximation of "enemy takes +1/2/4 while chilled": amplify non-weapon damage.
-        EffectDefinition::new(
+        // While enemy is chilled, your non-weapon damage gets +1/2/4.
+        EffectDefinition::with_condition(
             TriggerType::Wounded,
             EffectType::AmplifyNonWeaponDamage,
             true,
             [1, 2, 4],
+            Condition::EnemyHasStatus(StatusType::Chill),
         ),
     ],
 };
@@ -1416,6 +1417,14 @@ pub const T_RU_02: ItemDefinition = ItemDefinition {
             EffectType::GainSpd,
             false,
             [2, 3, 4],
+        ),
+        // If enemy has >=4 Rust at battle start, ignore all Armor immediately.
+        EffectDefinition::with_condition(
+            TriggerType::BattleStart,
+            EffectType::SetArmorPiercing,
+            false,
+            [32767, 32767, 32767],
+            Condition::EnemyHasStatusAtLeast(StatusType::Rust, 4),
         ),
         // If enemy has Rust, your strikes ignore 2/3/4 Armor
         EffectDefinition::with_condition(
@@ -1932,16 +1941,16 @@ pub const G_TE_01: ItemDefinition = ItemDefinition {
     tag: ItemTag::Tempo,
     rarity: Rarity::Common,
     effects: &[
-        // Turn 1: gain +1/2/4 SPD (this battle)
+        // +1/2/4 SPD
         EffectDefinition::new(
-            TriggerType::FirstTurn,
+            TriggerType::BattleStart,
             EffectType::GainSpd,
             false,
             [1, 2, 4],
         ),
-        // Turn 1: gain +2/4/8 ATK (this battle)
+        // +2/4/8 ATK
         EffectDefinition::new(
-            TriggerType::FirstTurn,
+            TriggerType::BattleStart,
             EffectType::GainAtk,
             false,
             [2, 4, 8],
@@ -2341,6 +2350,24 @@ mod tests {
         let gear = get_items_by_type(ItemType::Gear);
         assert_eq!(tools.len(), 16, "Should have 16 tool items");
         assert_eq!(gear.len(), 64, "Should have 64 gear items");
+    }
+
+    #[test]
+    fn test_etched_burrowblade_has_battle_start_full_pierce_at_four_rust() {
+        let burrowblade = get_item(b"T-RU-02\0").expect("Etched Burrowblade should exist");
+
+        assert_eq!(burrowblade.effects.len(), 5);
+        assert_eq!(burrowblade.effects[2].trigger, TriggerType::BattleStart);
+        assert_eq!(burrowblade.effects[2].effect_type, EffectType::SetArmorPiercing);
+        assert_eq!(burrowblade.effects[2].values, [32767, 32767, 32767]);
+        assert_eq!(
+            burrowblade.effects[2].condition,
+            Condition::EnemyHasStatusAtLeast(StatusType::Rust, 4)
+        );
+        assert_eq!(burrowblade.effects[3].trigger, TriggerType::BattleStart);
+        assert_eq!(burrowblade.effects[3].effect_type, EffectType::SetArmorPiercing);
+        assert_eq!(burrowblade.effects[4].trigger, TriggerType::OnHit);
+        assert_eq!(burrowblade.effects[4].effect_type, EffectType::SetArmorPiercing);
     }
 
     #[test]

@@ -28,4 +28,5 @@ player-inventory = { path = "../player-inventory", features = ["cpi"] }
 boss-system = { path = "../../crates/boss-system" }
 gameplay-state = { path = "../gameplay-state", features = ["cpi"] }
 session-manager = { path = "../session-manager", features = ["cpi"] }
+map-generator = { path = "../map-generator", features = ["cpi"] }
 vrf-rng = { path = "../../crates/vrf-rng", features = ["anchor"] }

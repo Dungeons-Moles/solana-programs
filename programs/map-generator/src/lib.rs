@@ -76,6 +76,10 @@ pub mod map_generator {
         // Generate the maze with biome-weighted enemy spawning
         let success = maze::generate_map(generated_map, seed, campaign_level);
         require!(success, MapGeneratorError::MapGenerationFailed);
+        generated_map.clear_discovery();
+        let spawn_x = generated_map.spawn_x;
+        let spawn_y = generated_map.spawn_y;
+        generated_map.reveal_radius(spawn_x, spawn_y, 6);
 
         Ok(())
     }
@@ -98,6 +102,10 @@ pub mod map_generator {
 
         let success = maze::generate_map(generated_map, seed, campaign_level);
         require!(success, MapGeneratorError::MapGenerationFailed);
+        generated_map.clear_discovery();
+        let spawn_x = generated_map.spawn_x;
+        let spawn_y = generated_map.spawn_y;
+        generated_map.reveal_radius(spawn_x, spawn_y, 6);
 
         Ok(())
     }
@@ -115,6 +123,7 @@ pub mod map_generator {
         let generated_map = &mut ctx.accounts.generated_map;
         generated_map.session = ctx.accounts.session.key();
         generated_map.bump = ctx.bumps.generated_map;
+        generated_map.clear_discovery();
         // All other fields (tiles, enemies, pois) remain zeroed by Anchor account init.
         // Width/height/spawn will be set by fill_map_with_seed or generate_map_with_vrf on ER.
 
@@ -136,6 +145,10 @@ pub mod map_generator {
         let generated_map = &mut ctx.accounts.generated_map;
         let success = maze::generate_map(generated_map, seed, campaign_level);
         require!(success, MapGeneratorError::MapGenerationFailed);
+        generated_map.clear_discovery();
+        let spawn_x = generated_map.spawn_x;
+        let spawn_y = generated_map.spawn_y;
+        generated_map.reveal_radius(spawn_x, spawn_y, 6);
 
         Ok(())
     }
@@ -177,6 +190,84 @@ pub mod map_generator {
         );
 
         generated_map.set_floor(x, y);
+
+        Ok(())
+    }
+
+    /// Persists map discovery around the provided position.
+    ///
+    /// Authorization: session_signer must match the owning session signer.
+    pub fn reveal_radius(
+        ctx: Context<RevealRadius>,
+        center_x: u8,
+        center_y: u8,
+        radius: u8,
+    ) -> Result<()> {
+        const SESSION_SESSION_SIGNER_OFFSET: usize = 77;
+
+        let session_data = ctx.accounts.session.try_borrow_data()?;
+        require!(
+            session_data.len() >= SESSION_SESSION_SIGNER_OFFSET + 32,
+            MapGeneratorError::InvalidSession
+        );
+        let stored_session_signer = Pubkey::from(
+            <[u8; 32]>::try_from(
+                &session_data[SESSION_SESSION_SIGNER_OFFSET..SESSION_SESSION_SIGNER_OFFSET + 32],
+            )
+            .unwrap(),
+        );
+        require!(
+            stored_session_signer == ctx.accounts.session_signer.key(),
+            MapGeneratorError::Unauthorized
+        );
+        drop(session_data);
+
+        let generated_map = &mut ctx.accounts.generated_map;
+
+        require!(
+            center_x < generated_map.width && center_y < generated_map.height,
+            MapGeneratorError::TileOutOfBounds
+        );
+
+        generated_map.reveal_radius(center_x, center_y, radius);
+
+        Ok(())
+    }
+
+    /// Persists discovery using a Manhattan-distance diamond.
+    pub fn reveal_manhattan_radius(
+        ctx: Context<RevealRadius>,
+        center_x: u8,
+        center_y: u8,
+        radius: u8,
+    ) -> Result<()> {
+        const SESSION_SESSION_SIGNER_OFFSET: usize = 77;
+
+        let session_data = ctx.accounts.session.try_borrow_data()?;
+        require!(
+            session_data.len() >= SESSION_SESSION_SIGNER_OFFSET + 32,
+            MapGeneratorError::InvalidSession
+        );
+        let stored_session_signer = Pubkey::from(
+            <[u8; 32]>::try_from(
+                &session_data[SESSION_SESSION_SIGNER_OFFSET..SESSION_SESSION_SIGNER_OFFSET + 32],
+            )
+            .unwrap(),
+        );
+        require!(
+            stored_session_signer == ctx.accounts.session_signer.key(),
+            MapGeneratorError::Unauthorized
+        );
+        drop(session_data);
+
+        let generated_map = &mut ctx.accounts.generated_map;
+
+        require!(
+            center_x < generated_map.width && center_y < generated_map.height,
+            MapGeneratorError::TileOutOfBounds
+        );
+
+        generated_map.reveal_manhattan_radius(center_x, center_y, radius);
 
         Ok(())
     }
@@ -378,6 +469,10 @@ pub mod map_generator {
         let generated_map = &mut ctx.accounts.generated_map;
         let success = maze::generate_map(generated_map, vrf_seed, campaign_level);
         require!(success, MapGeneratorError::MapGenerationFailed);
+        generated_map.clear_discovery();
+        let spawn_x = generated_map.spawn_x;
+        let spawn_y = generated_map.spawn_y;
+        generated_map.reveal_radius(spawn_x, spawn_y, 6);
 
         vrf_state.status = VrfStatus::Consumed;
         Ok(())
@@ -630,6 +725,23 @@ pub struct SetTileFloor<'info> {
         seeds::program = GAMEPLAY_STATE_PROGRAM_ID,
     )]
     pub gameplay_authority: Signer<'info>,
+}
+
+/// Context for persisting discovered tiles via session key signer.
+#[derive(Accounts)]
+pub struct RevealRadius<'info> {
+    #[account(
+        mut,
+        seeds = [GeneratedMap::SEED_PREFIX, session.key().as_ref()],
+        bump = generated_map.bump,
+        has_one = session,
+    )]
+    pub generated_map: Account<'info, GeneratedMap>,
+
+    /// CHECK: Session account is validated manually against the stored session signer.
+    pub session: UncheckedAccount<'info>,
+
+    pub session_signer: Signer<'info>,
 }
 
 /// Context for closing GeneratedMap account via session key signer.

@@ -132,6 +132,8 @@ pub struct GeneratedMap {
     pub walkable_count: u16, // 2 bytes
     /// Bit-packed tiles (0=floor, 1=wall), 313 bytes for 2500 tiles
     pub packed_tiles: [u8; PACKED_TILES_SIZE], // 313 bytes
+    /// Bit-packed discovered tiles (1 = discovered/revealed)
+    pub discovered_tiles: [u8; PACKED_TILES_SIZE], // 313 bytes
     /// Number of enemies placed
     pub enemy_count: u8, // 1 byte
     /// Enemy spawn positions (max 48)
@@ -159,6 +161,7 @@ impl GeneratedMap {
         + 1
         + 1
         + 2
+        + PACKED_TILES_SIZE
         + PACKED_TILES_SIZE
         + 1
         + (MAX_ENEMIES * 4)
@@ -202,10 +205,104 @@ impl GeneratedMap {
         self.packed_tiles[byte_index] |= 1 << bit_index;
     }
 
+    /// Check if a tile at (x, y) has been discovered.
+    pub fn is_discovered(&self, x: u8, y: u8) -> bool {
+        if x >= self.width || y >= self.height {
+            return false;
+        }
+        let index = (y as usize) * (self.width as usize) + (x as usize);
+        let byte_index = index / 8;
+        let bit_index = index % 8;
+        (self.discovered_tiles[byte_index] >> bit_index) & 1 == 1
+    }
+
+    /// Mark a tile at (x, y) as discovered.
+    pub fn reveal_tile(&mut self, x: u8, y: u8) -> bool {
+        if x >= self.width || y >= self.height {
+            return false;
+        }
+        let index = (y as usize) * (self.width as usize) + (x as usize);
+        let byte_index = index / 8;
+        let bit_index = index % 8;
+        let was_discovered = (self.discovered_tiles[byte_index] >> bit_index) & 1 == 1;
+        self.discovered_tiles[byte_index] |= 1 << bit_index;
+        !was_discovered
+    }
+
+    /// Reveal all tiles in the gameplay visibility radius shape.
+    pub fn reveal_radius(&mut self, center_x: u8, center_y: u8, radius: u8) -> u16 {
+        let mut revealed = 0u16;
+        let radius_i = radius as i16;
+        let center_x_i = center_x as i16;
+        let center_y_i = center_y as i16;
+
+        for dy in -radius_i..=radius_i {
+            for dx in -radius_i..=radius_i {
+                let x = center_x_i + dx;
+                let y = center_y_i + dy;
+                if x < 0 || y < 0 {
+                    continue;
+                }
+                let x = x as u8;
+                let y = y as u8;
+                if x >= self.width || y >= self.height {
+                    continue;
+                }
+
+                let distance_sq = dx * dx + dy * dy;
+                if distance_sq <= radius_i * (radius_i + 1) && self.reveal_tile(x, y) {
+                    revealed = revealed.saturating_add(1);
+                }
+            }
+        }
+
+        revealed
+    }
+
+    /// Reveal all tiles within a Manhattan-distance diamond.
+    pub fn reveal_manhattan_radius(&mut self, center_x: u8, center_y: u8, radius: u8) -> u16 {
+        let mut revealed = 0u16;
+        let radius_i = radius as i16;
+        let center_x_i = center_x as i16;
+        let center_y_i = center_y as i16;
+
+        for dy in -radius_i..=radius_i {
+            for dx in -radius_i..=radius_i {
+                if dx.abs() + dy.abs() > radius_i {
+                    continue;
+                }
+
+                let x = center_x_i + dx;
+                let y = center_y_i + dy;
+                if x < 0 || y < 0 {
+                    continue;
+                }
+                let x = x as u8;
+                let y = y as u8;
+                if x >= self.width || y >= self.height {
+                    continue;
+                }
+
+                if self.reveal_tile(x, y) {
+                    revealed = revealed.saturating_add(1);
+                }
+            }
+        }
+
+        revealed
+    }
+
     /// Initialize all tiles as walls (all bits set to 1)
     pub fn init_all_walls(&mut self) {
         for byte in self.packed_tiles.iter_mut() {
             *byte = 0xFF;
+        }
+    }
+
+    /// Reset discovered-state to fully hidden.
+    pub fn clear_discovery(&mut self) {
+        for byte in self.discovered_tiles.iter_mut() {
+            *byte = 0;
         }
     }
 }

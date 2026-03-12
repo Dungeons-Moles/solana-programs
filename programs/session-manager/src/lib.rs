@@ -225,15 +225,6 @@ pub mod session_manager {
             poi_seed,
         )?;
 
-        // Apply spawn-time waypoint discovery using radius 6 around initial position.
-        discover_visible_waypoints_cpi(
-            &ctx.accounts.poi_system_program,
-            &ctx.accounts.map_pois,
-            &ctx.accounts.game_state.to_account_info(),
-            &ctx.accounts.session_signer.to_account_info(),
-            6,
-        )?;
-
         // TODO(VRF): When ephemeral-vrf-sdk is available, optionally CPI into
         // map_generator::request_map_vrf and poi_system::request_poi_vrf if the
         // frontend passes VRF oracle accounts via remaining_accounts.
@@ -402,14 +393,6 @@ pub mod session_manager {
             week,
             poi_seed,
         )?;
-        discover_visible_waypoints_cpi(
-            &ctx.accounts.poi_system_program,
-            &ctx.accounts.map_pois,
-            &ctx.accounts.game_state.to_account_info(),
-            &ctx.accounts.session_signer.to_account_info(),
-            6,
-        )?;
-
         // CPI to consume_map_vrf to mark VRF as consumed (if VRF was used)
         if vrf_data.is_some() {
             if let Some(ref vrf_account) = ctx.accounts.map_vrf_state {
@@ -581,14 +564,6 @@ pub mod session_manager {
             week,
             poi_seed,
         )?;
-        discover_visible_waypoints_cpi(
-            &ctx.accounts.poi_system_program,
-            &ctx.accounts.map_pois,
-            &ctx.accounts.game_state.to_account_info(),
-            &ctx.accounts.session_signer.to_account_info(),
-            6,
-        )?;
-
         // CPI to consume_map_vrf to mark VRF as consumed (if VRF was used)
         if vrf_data.is_some() {
             if let Some(ref vrf_account) = ctx.accounts.map_vrf_state {

@@ -312,6 +312,14 @@ pub mod gameplay_state {
         }
         map_enemies.count = map_enemies.enemies.len() as u8;
 
+        discover_visible_waypoints_cpi(
+            &ctx.accounts.map_pois,
+            &game_state.to_account_info(),
+            &ctx.accounts.session_signer.to_account_info(),
+            &ctx.accounts.poi_system_program.to_account_info(),
+            6,
+        )?;
+
         Ok(())
     }
 
@@ -2017,6 +2025,15 @@ pub mod gameplay_state {
 
         game_state.position_x = target_x;
         game_state.position_y = target_y;
+        reveal_radius_cpi(
+            &ctx.accounts.generated_map.to_account_info(),
+            &ctx.accounts.game_session,
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.map_generator_program.to_account_info(),
+            target_x,
+            target_y,
+            visibility_radius,
+        )?;
         discover_visible_waypoints_cpi(
             &ctx.accounts.map_pois,
             &game_state.to_account_info(),
@@ -3615,6 +3632,32 @@ fn set_tile_floor_cpi<'info>(
     Ok(())
 }
 
+fn reveal_radius_cpi<'info>(
+    generated_map: &AccountInfo<'info>,
+    session: &AccountInfo<'info>,
+    session_signer: &AccountInfo<'info>,
+    map_generator_program: &AccountInfo<'info>,
+    center_x: u8,
+    center_y: u8,
+    radius: u8,
+) -> Result<()> {
+    map_generator::cpi::reveal_radius(
+        CpiContext::new(
+            map_generator_program.clone(),
+            map_generator::cpi::accounts::RevealRadius {
+                generated_map: generated_map.clone(),
+                session: session.clone(),
+                session_signer: session_signer.clone(),
+            },
+        ),
+        center_x,
+        center_y,
+        radius,
+    )?;
+
+    Ok(())
+}
+
 fn discover_visible_waypoints_cpi<'info>(
     map_pois: &AccountInfo<'info>,
     game_state: &AccountInfo<'info>,
@@ -4016,6 +4059,14 @@ pub struct SyncMapEnemies<'info> {
         has_one = session_signer @ GameplayStateError::Unauthorized,
     )]
     pub game_state: Box<Account<'info, GameState>>,
+
+    /// CHECK: Validated by POI system during CPI discovery.
+    #[account(mut)]
+    pub map_pois: AccountInfo<'info>,
+
+    /// CHECK: Must be the poi-system program.
+    #[account(address = POI_SYSTEM_PROGRAM_ID)]
+    pub poi_system_program: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]

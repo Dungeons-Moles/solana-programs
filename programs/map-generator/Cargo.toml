@@ -16,7 +16,6 @@ no-idl = []
 no-log-ix-name = []
 idl-build = ["anchor-lang/idl-build"]
 mock-vrf = ["vrf-rng/mock-vrf"]
-local-rng = []
 
 [dependencies]
 anchor-lang = { version = "0.32.0", features = ["init-if-needed"] }

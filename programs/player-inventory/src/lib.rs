@@ -126,11 +126,7 @@ pub mod player_inventory {
             InventoryError::Unauthorized
         );
         let inventory = read_inventory(&ctx.accounts.inventory)?;
-        require_keys_eq!(
-            inventory.session,
-            session_key,
-            InventoryError::Unauthorized
-        );
+        require_keys_eq!(inventory.session, session_key, InventoryError::Unauthorized);
         require_keys_eq!(
             inventory.player,
             ctx.accounts.session_signer.key(),

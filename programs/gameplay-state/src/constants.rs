@@ -9,12 +9,12 @@ pub const NIGHT_MOVES: u8 = 30;
 // =============================================================================
 
 /// Base HP before item bonuses, scaled by campaign level (campaign only).
-/// Levels 1-9: 25 HP, 10-19: 20 HP, 20+: 15 HP.
+/// Levels 1-9: 25 HP, 10-19: 22 HP, 20+: 18 HP.
 pub fn base_hp(campaign_level: u8) -> i16 {
     match campaign_level {
         1..=9 => 25,
-        10..=19 => 20,
-        _ => 15,
+        10..=19 => 22,
+        _ => 18,
     }
 }
 

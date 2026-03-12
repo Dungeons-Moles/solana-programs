@@ -9,12 +9,11 @@ pub mod triggers;
 
 use constants::{MAX_STRIKES, MAX_TURNS, MIN_STRIKES, SUDDEN_DEATH_TURN};
 use effects::{
-    apply_chill_to_strikes, decay_status_effects_preserving_late_chill,
-    process_bleed_damage,
+    apply_chill_to_strikes, decay_status_effects_preserving_late_chill, process_bleed_damage,
     process_rust_decay,
 };
 use errors::CombatSystemError;
-use state::{AnnotatedItemEffect, CombatState, Combatant, CombatantInput, StatusEffects};
+use state::{AnnotatedItemEffect, CombatState, Combatant, CombatantInput};
 use triggers::{
     check_wounded, process_triggers_for_phase, reduce_all_countdowns, reset_once_per_turn_flags,
 };
@@ -87,10 +86,15 @@ fn is_enemy_boss(combat_state: &CombatState, boss_id: [u8; 12]) -> bool {
 
 fn apply_boss_special_battle_start(combat_state: &mut CombatState, log: &mut Vec<CombatLogEntry>) {
     if is_enemy_boss(combat_state, BOSS_GILDED_DEVOURER) {
-        let gained_armor = i16::try_from((combat_state.player_gold / 3).min(12)).unwrap_or(i16::MAX);
+        let gained_armor =
+            i16::try_from((combat_state.player_gold / 3).min(12)).unwrap_or(i16::MAX);
         if gained_armor > 0 {
             combat_state.enemy.arm = combat_state.enemy.arm.saturating_add(gained_armor);
-            log.push(CombatLogEntry::armor_change(combat_state.turn, false, gained_armor));
+            log.push(CombatLogEntry::armor_change(
+                combat_state.turn,
+                false,
+                gained_armor,
+            ));
         }
     }
 }
@@ -104,7 +108,9 @@ fn apply_boss_turn_start_overrides(combat_state: &mut CombatState, log: &mut Vec
     }
 
     if is_enemy_boss(combat_state, BOSS_ELDRITCH_MOLE)
-        && combat_state.enemy.has_flag(Combatant::PHASE_THREE_TRIGGERED)
+        && combat_state
+            .enemy
+            .has_flag(Combatant::PHASE_THREE_TRIGGERED)
         && combat_state.player.hp > 0
     {
         combat_state.player.status.bleed = combat_state.player.status.bleed.saturating_add(2);
@@ -134,11 +140,21 @@ fn apply_threshold_boss_transitions(combat_state: &mut CombatState, log: &mut Ve
 
     if !combat_state.enemy.has_flag(Combatant::PHASE_TWO_TRIGGERED) && hp_pct <= 50 {
         combat_state.enemy.set_flag(Combatant::PHASE_TWO_TRIGGERED);
-        combat_state.enemy.strikes = combat_state.enemy.strikes.saturating_add(1).min(MAX_STRIKES);
+        combat_state.enemy.strikes = combat_state
+            .enemy
+            .strikes
+            .saturating_add(1)
+            .min(MAX_STRIKES);
     }
 
-    if !combat_state.enemy.has_flag(Combatant::PHASE_THREE_TRIGGERED) && hp_pct <= 25 {
-        combat_state.enemy.set_flag(Combatant::PHASE_THREE_TRIGGERED);
+    if !combat_state
+        .enemy
+        .has_flag(Combatant::PHASE_THREE_TRIGGERED)
+        && hp_pct <= 25
+    {
+        combat_state
+            .enemy
+            .set_flag(Combatant::PHASE_THREE_TRIGGERED);
     }
 }
 
@@ -159,7 +175,11 @@ fn handle_enemy_reflection_depleted_transition(
 
     combat_state.enemy.set_flag(Combatant::REFLECTION_DEPLETED);
     *enemy_hp = enemy_hp.saturating_sub(2);
-    log.push(CombatLogEntry::non_weapon_damage(combat_state.turn, false, 2));
+    log.push(CombatLogEntry::non_weapon_damage(
+        combat_state.turn,
+        false,
+        2,
+    ));
 }
 
 fn capture_pvp_tie_snapshot(combat_state: &CombatState) -> PvpTieSnapshot {
@@ -195,10 +215,22 @@ fn resolve_pvp_mutual_kill(
 ) -> (bool, ResolutionType) {
     let comparisons = [
         (snapshot.player_hp_arm, snapshot.enemy_hp_arm),
-        (i32::from(snapshot.player_spd), i32::from(snapshot.enemy_spd)),
-        (i32::from(snapshot.player_dig), i32::from(snapshot.enemy_dig)),
-        (i32::from(snapshot.player_atk), i32::from(snapshot.enemy_atk)),
-        (i32::from(snapshot.player_max_hp), i32::from(snapshot.enemy_max_hp)),
+        (
+            i32::from(snapshot.player_spd),
+            i32::from(snapshot.enemy_spd),
+        ),
+        (
+            i32::from(snapshot.player_dig),
+            i32::from(snapshot.enemy_dig),
+        ),
+        (
+            i32::from(snapshot.player_atk),
+            i32::from(snapshot.enemy_atk),
+        ),
+        (
+            i32::from(snapshot.player_max_hp),
+            i32::from(snapshot.enemy_max_hp),
+        ),
     ];
 
     for (player_value, enemy_value) in comparisons {
@@ -412,8 +444,7 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
                 .saturating_sub(player_baked_attack_total)
                 .max(0),
             atk_contributions: player_stats.atk_contributions.clone(),
-            status: StatusEffects::default(),
-            first_time_flags: 0,
+            ..Combatant::default()
         },
         enemy: Combatant {
             hp: enemy_stats.hp,
@@ -446,8 +477,7 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
                 .saturating_sub(enemy_baked_attack_total)
                 .max(0),
             atk_contributions: enemy_stats.atk_contributions.clone(),
-            status: StatusEffects::default(),
-            first_time_flags: 0,
+            ..Combatant::default()
         },
         sudden_death_bonus: 0,
         player_gold: player_start_gold,
@@ -464,7 +494,8 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
 
     let mut player_triggered = vec![false; player_effects.len()];
     let mut enemy_triggered = vec![false; enemy_effects.len()];
-    let mut pvp_tie_snapshot = pvp_final_tie_player_wins.map(|_| capture_pvp_tie_snapshot(&combat_state));
+    let mut pvp_tie_snapshot =
+        pvp_final_tie_player_wins.map(|_| capture_pvp_tie_snapshot(&combat_state));
 
     apply_boss_special_battle_start(&mut combat_state, &mut log);
 
@@ -544,9 +575,12 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
             &mut log,
         );
 
-        if let Some((player_won, resolution_type)) =
-            resolve_if_ended(&combat_state, turn, pvp_final_tie_player_wins, pvp_tie_snapshot)
-        {
+        if let Some((player_won, resolution_type)) = resolve_if_ended(
+            &combat_state,
+            turn,
+            pvp_final_tie_player_wins,
+            pvp_tie_snapshot,
+        ) {
             release_stored_damage_on_battle_end(&mut combat_state, &mut log);
             return Ok(CombatOutcome {
                 player_won,
@@ -582,9 +616,12 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
 
         log_status_stacks(&combat_state, &mut log);
 
-        if let Some((player_won, resolution_type)) =
-            resolve_if_ended(&combat_state, turn, pvp_final_tie_player_wins, pvp_tie_snapshot)
-        {
+        if let Some((player_won, resolution_type)) = resolve_if_ended(
+            &combat_state,
+            turn,
+            pvp_final_tie_player_wins,
+            pvp_tie_snapshot,
+        ) {
             release_stored_damage_on_battle_end(&mut combat_state, &mut log);
             return Ok(CombatOutcome {
                 player_won,
@@ -644,37 +681,6 @@ fn validate_combatant(stats: &CombatantInput) -> Result<()> {
     Ok(())
 }
 
-fn apply_countdown_effects(
-    player_effects: &mut [AnnotatedItemEffect],
-    enemy_effects: &mut [AnnotatedItemEffect],
-    combat_state: &mut CombatState,
-    player_triggered: &mut [bool],
-    enemy_triggered: &mut [bool],
-    log: &mut Vec<CombatLogEntry>,
-) {
-    let mut countdown_turns = Vec::new();
-    for effect in player_effects.iter().chain(enemy_effects.iter()) {
-        if let TriggerType::Countdown { turns } = effect.effect.trigger {
-            if turns > 0 && !countdown_turns.contains(&turns) {
-                countdown_turns.push(turns);
-            }
-        }
-    }
-    countdown_turns.sort_unstable();
-
-    for turns in countdown_turns {
-        apply_status_effects(
-            player_effects,
-            enemy_effects,
-            combat_state,
-            TriggerType::Countdown { turns },
-            player_triggered,
-            enemy_triggered,
-            log,
-        );
-    }
-}
-
 fn execute_turn(
     combat_state: &mut CombatState,
     turn: u8,
@@ -690,13 +696,23 @@ fn execute_turn(
 
     let (player_first, _) =
         engine::determine_turn_order(combat_state.player.spd, combat_state.enemy.spd);
+    let player_extra_strike = combat_state.player.spd >= combat_state.enemy.spd.saturating_add(5);
+    let enemy_extra_strike = combat_state.enemy.spd >= combat_state.player.spd.saturating_add(5);
 
     let player_strikes = apply_chill_to_strikes(
-        combat_state.player.strikes.min(MAX_STRIKES),
+        combat_state
+            .player
+            .strikes
+            .saturating_add(if player_extra_strike { 1 } else { 0 })
+            .min(MAX_STRIKES),
         combat_state.player.status.chill,
     );
     let mut enemy_strikes = apply_chill_to_strikes(
-        combat_state.enemy.strikes.min(MAX_STRIKES),
+        combat_state
+            .enemy
+            .strikes
+            .saturating_add(if enemy_extra_strike { 1 } else { 0 })
+            .min(MAX_STRIKES),
         combat_state.enemy.status.chill,
     );
     if turn == 1 && is_enemy_boss(combat_state, BOSS_RUSTED_CHRONOMANCER) {
@@ -742,13 +758,17 @@ fn execute_turn(
         );
         enemy_stats.hp = enemy_hp;
         player_damage_dealt = damage;
-        combat_state.player_preserved_chill = combat_state
-            .player_preserved_chill
-            .saturating_add(player_status.chill.saturating_sub(player_status_before_phase.chill));
+        combat_state.player_preserved_chill = combat_state.player_preserved_chill.saturating_add(
+            player_status
+                .chill
+                .saturating_sub(player_status_before_phase.chill),
+        );
         if combat_state.enemy_acted_this_turn {
-            combat_state.enemy_preserved_chill = combat_state
-                .enemy_preserved_chill
-                .saturating_add(enemy_status.chill.saturating_sub(enemy_status_before_phase.chill));
+            combat_state.enemy_preserved_chill = combat_state.enemy_preserved_chill.saturating_add(
+                enemy_status
+                    .chill
+                    .saturating_sub(enemy_status_before_phase.chill),
+            );
         }
         handle_enemy_reflection_depleted_transition(
             combat_state,
@@ -805,12 +825,17 @@ fn execute_turn(
             );
             player_stats.hp = player_hp;
             enemy_damage_dealt = damage;
-            combat_state.enemy_preserved_chill = combat_state
-                .enemy_preserved_chill
-                .saturating_add(enemy_status.chill.saturating_sub(enemy_status_before_phase.chill));
-            combat_state.player_preserved_chill = combat_state
-                .player_preserved_chill
-                .saturating_add(player_status.chill.saturating_sub(player_status_before_phase.chill));
+            combat_state.enemy_preserved_chill = combat_state.enemy_preserved_chill.saturating_add(
+                enemy_status
+                    .chill
+                    .saturating_sub(enemy_status_before_phase.chill),
+            );
+            combat_state.player_preserved_chill =
+                combat_state.player_preserved_chill.saturating_add(
+                    player_status
+                        .chill
+                        .saturating_sub(player_status_before_phase.chill),
+                );
             handle_enemy_reflection_depleted_transition(
                 combat_state,
                 &mut enemy_stats.hp,
@@ -844,12 +869,16 @@ fn execute_turn(
         );
         player_stats.hp = player_hp;
         enemy_damage_dealt = damage;
-        combat_state.enemy_preserved_chill = combat_state
-            .enemy_preserved_chill
-            .saturating_add(enemy_status.chill.saturating_sub(enemy_status_before_phase.chill));
-        combat_state.player_preserved_chill = combat_state
-            .player_preserved_chill
-            .saturating_add(player_status.chill.saturating_sub(player_status_before_phase.chill));
+        combat_state.enemy_preserved_chill = combat_state.enemy_preserved_chill.saturating_add(
+            enemy_status
+                .chill
+                .saturating_sub(enemy_status_before_phase.chill),
+        );
+        combat_state.player_preserved_chill = combat_state.player_preserved_chill.saturating_add(
+            player_status
+                .chill
+                .saturating_sub(player_status_before_phase.chill),
+        );
         handle_enemy_reflection_depleted_transition(
             combat_state,
             &mut enemy_stats.hp,
@@ -887,12 +916,17 @@ fn execute_turn(
             );
             enemy_stats.hp = enemy_hp;
             player_damage_dealt = damage;
-            combat_state.player_preserved_chill = combat_state
-                .player_preserved_chill
-                .saturating_add(player_status.chill.saturating_sub(player_status_before_phase.chill));
-            combat_state.enemy_preserved_chill = combat_state
-                .enemy_preserved_chill
-                .saturating_add(enemy_status.chill.saturating_sub(enemy_status_before_phase.chill));
+            combat_state.player_preserved_chill =
+                combat_state.player_preserved_chill.saturating_add(
+                    player_status
+                        .chill
+                        .saturating_sub(player_status_before_phase.chill),
+                );
+            combat_state.enemy_preserved_chill = combat_state.enemy_preserved_chill.saturating_add(
+                enemy_status
+                    .chill
+                    .saturating_sub(enemy_status_before_phase.chill),
+            );
             handle_enemy_reflection_depleted_transition(
                 combat_state,
                 &mut enemy_stats.hp,
@@ -1194,8 +1228,11 @@ fn apply_end_of_turn_effects(
     if combat_state.player.status.bleed > 0 {
         update_pvp_tie_snapshot(pvp_tie_snapshot, combat_state, pvp_final_tie_player_wins);
         let old_hp = combat_state.player.hp;
-        combat_state.player.hp =
-            process_bleed_damage(combat_state.player.status.bleed, combat_state.player.hp);
+        combat_state.player.hp = process_bleed_damage(
+            combat_state.player.status.bleed,
+            combat_state.player.status.chill,
+            combat_state.player.hp,
+        );
         let damage = old_hp - combat_state.player.hp;
         if damage > 0 {
             log.push(CombatLogEntry::status_damage(
@@ -1236,8 +1273,11 @@ fn apply_end_of_turn_effects(
     if combat_state.enemy.status.bleed > 0 {
         update_pvp_tie_snapshot(pvp_tie_snapshot, combat_state, pvp_final_tie_player_wins);
         let old_hp = combat_state.enemy.hp;
-        combat_state.enemy.hp =
-            process_bleed_damage(combat_state.enemy.status.bleed, combat_state.enemy.hp);
+        combat_state.enemy.hp = process_bleed_damage(
+            combat_state.enemy.status.bleed,
+            combat_state.enemy.status.chill,
+            combat_state.enemy.hp,
+        );
         let damage = old_hp - combat_state.enemy.hp;
         if damage > 0 {
             log.push(CombatLogEntry::status_damage(
@@ -1449,13 +1489,21 @@ fn apply_start_of_turn_effects_for_side(
                 let damage = combat_state.player.stored_damage;
                 combat_state.enemy.hp = combat_state.enemy.hp.saturating_sub(damage);
                 combat_state.player.stored_damage = 0;
-                log.push(CombatLogEntry::non_weapon_damage(combat_state.turn, false, damage));
+                log.push(CombatLogEntry::non_weapon_damage(
+                    combat_state.turn,
+                    false,
+                    damage,
+                ));
             }
         } else if combat_state.enemy.stored_damage > 0 && combat_state.player.hp > 0 {
             let damage = combat_state.enemy.stored_damage;
             combat_state.player.hp = combat_state.player.hp.saturating_sub(damage);
             combat_state.enemy.stored_damage = 0;
-            log.push(CombatLogEntry::non_weapon_damage(combat_state.turn, true, damage));
+            log.push(CombatLogEntry::non_weapon_damage(
+                combat_state.turn,
+                true,
+                damage,
+            ));
         }
     }
 
@@ -1764,14 +1812,19 @@ fn process_phase_effects(
 
     if is_player {
         if combat_state.player_acted_this_turn {
-            combat_state.player_preserved_chill = combat_state
-                .player_preserved_chill
-                .saturating_add(working_status.chill.saturating_sub(owner_status_before.chill));
+            combat_state.player_preserved_chill =
+                combat_state.player_preserved_chill.saturating_add(
+                    working_status
+                        .chill
+                        .saturating_sub(owner_status_before.chill),
+                );
         }
         if combat_state.enemy_acted_this_turn {
-            combat_state.enemy_preserved_chill = combat_state
-                .enemy_preserved_chill
-                .saturating_add(opponent_status.chill.saturating_sub(opponent_status_before.chill));
+            combat_state.enemy_preserved_chill = combat_state.enemy_preserved_chill.saturating_add(
+                opponent_status
+                    .chill
+                    .saturating_sub(opponent_status_before.chill),
+            );
         }
         handle_enemy_reflection_depleted_transition(
             combat_state,
@@ -1783,14 +1836,19 @@ fn process_phase_effects(
         combat_state.enemy.hp = opponent_stats.hp;
     } else {
         if combat_state.enemy_acted_this_turn {
-            combat_state.enemy_preserved_chill = combat_state
-                .enemy_preserved_chill
-                .saturating_add(working_status.chill.saturating_sub(owner_status_before.chill));
+            combat_state.enemy_preserved_chill = combat_state.enemy_preserved_chill.saturating_add(
+                working_status
+                    .chill
+                    .saturating_sub(owner_status_before.chill),
+            );
         }
         if combat_state.player_acted_this_turn {
-            combat_state.player_preserved_chill = combat_state
-                .player_preserved_chill
-                .saturating_add(opponent_status.chill.saturating_sub(opponent_status_before.chill));
+            combat_state.player_preserved_chill =
+                combat_state.player_preserved_chill.saturating_add(
+                    opponent_status
+                        .chill
+                        .saturating_sub(opponent_status_before.chill),
+                );
         }
         handle_enemy_reflection_depleted_transition(
             combat_state,
@@ -1821,8 +1879,8 @@ mod tests {
             spd: 1, // Player acts second
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 100, // Enemy won't die quickly
@@ -1832,8 +1890,8 @@ mod tests {
             spd: 2, // Enemy acts first
             dig: 0,
             strikes: 2,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
 
         // Player has a FirstTimeWounded effect that grants 6 armor (simulating Gore Mantle)
@@ -1883,8 +1941,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -1894,8 +1952,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
 
         // Player has a FirstTimeWounded effect that grants 6 armor
@@ -1939,8 +1997,8 @@ mod tests {
             spd: 2, // Player acts first
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 20,
@@ -1950,8 +2008,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
 
         let player_effects = vec![];
@@ -1995,8 +2053,8 @@ mod tests {
             spd: 2, // Player acts first
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -2006,8 +2064,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
 
         // Player has:
@@ -2061,8 +2119,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -2072,8 +2130,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
 
         // Player has:
@@ -2129,8 +2187,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -2140,8 +2198,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
 
         // Player has:
@@ -2190,8 +2248,8 @@ mod tests {
             spd: 2, // Player attacks first
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -2201,8 +2259,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
 
         // Player has:
@@ -2261,8 +2319,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -2272,8 +2330,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
 
         // Stone Sigil: End of turn, if you have Armor, gain +2 Armor
@@ -2315,8 +2373,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -2326,8 +2384,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
 
         // Stone Sigil: End of turn, if you have Armor, gain +2 Armor
@@ -2366,8 +2424,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 100,
@@ -2377,8 +2435,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
 
         let player_effects = vec![ItemEffect {
@@ -2426,8 +2484,8 @@ mod tests {
             spd: 2, // Player attacks first
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -2437,8 +2495,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
 
         // Player has EveryOtherTurnFirstHit heal effect (like Emerald Shard)
@@ -2479,8 +2537,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -2490,8 +2548,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
 
         let player_effects = vec![ItemEffect {
@@ -2533,7 +2591,7 @@ mod tests {
             dig: 0,
             strikes: 3, // Multiple strikes
             attack_source: None,
-        atk_contributions: Vec::new(),
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 100, // High HP to survive multiple turns
@@ -2543,8 +2601,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
 
         let player_effects = vec![ItemEffect {
@@ -2588,8 +2646,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -2599,8 +2657,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
 
         // Ruby Shard: Deal non-weapon damage on first hit every other turn
@@ -2641,8 +2699,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -2652,8 +2710,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
 
         // Sapphire Shard: Gain armor on first hit every other turn
@@ -2695,8 +2753,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 100,
@@ -2706,8 +2764,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
 
         let player_effects = vec![ItemEffect {
@@ -2770,8 +2828,8 @@ mod tests {
             spd: 1, // Player acts second (enemy attacks first)
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -2781,8 +2839,8 @@ mod tests {
             spd: 2, // Enemy acts first
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
 
         // Rime Cloak: OnStruck (once per turn), apply 1 Chill to attacker
@@ -2823,8 +2881,8 @@ mod tests {
             spd: 1, // Player acts second
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 100,
@@ -2835,7 +2893,7 @@ mod tests {
             dig: 0,
             strikes: 3, // Multiple strikes
             attack_source: None,
-        atk_contributions: Vec::new(),
+            atk_contributions: Vec::new(),
         };
 
         // OnStruck once per turn: apply 1 Chill
@@ -2886,8 +2944,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -2897,8 +2955,8 @@ mod tests {
             spd: 2, // Enemy acts first
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
 
         let player_effects = vec![ItemEffect {
@@ -2936,8 +2994,8 @@ mod tests {
             spd: 2, // Player acts first
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 100,
@@ -2947,8 +3005,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
 
         // Player: OnStruck apply Chill to attacker
@@ -3009,8 +3067,8 @@ mod tests {
             spd: 1, // Player acts second
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 50,
@@ -3020,8 +3078,8 @@ mod tests {
             spd: 2, // Enemy acts first
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
 
         // Rime Cloak: OnStruck (once per turn), apply 1 Chill to attacker
@@ -3071,8 +3129,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 20,
@@ -3082,8 +3140,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 2,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let player_effects = vec![ItemEffect {
             trigger: TriggerType::OnHit,
@@ -3115,8 +3173,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 20,
@@ -3126,19 +3184,13 @@ mod tests {
             spd: 2,
             dig: 3,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
 
-        let outcome = resolve_boss_combat_with_player_gold(
-            player,
-            enemy,
-            vec![],
-            vec![],
-            0,
-            BOSS_MAD_MINER,
-        )
-        .unwrap();
+        let outcome =
+            resolve_boss_combat_with_player_gold(player, enemy, vec![], vec![], 0, BOSS_MAD_MINER)
+                .unwrap();
 
         let enemy_turn_1_attacks = outcome
             .log
@@ -3168,8 +3220,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 2,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 20,
@@ -3179,8 +3231,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let player_effects = vec![ItemEffect {
             trigger: TriggerType::OnHit,
@@ -3225,7 +3277,7 @@ mod tests {
             max_hp: 25,
             atk: 3,
             arm: 0,
-            spd: 5,
+            spd: 4,
             dig: 0,
             strikes: 2,
             attack_source: None,
@@ -3295,7 +3347,7 @@ mod tests {
             max_hp: 25,
             atk: 3,
             arm: 0,
-            spd: 5,
+            spd: 4,
             dig: 0,
             strikes: 2,
             attack_source: None,
@@ -3361,8 +3413,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 20,
@@ -3372,8 +3424,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy_effects = vec![
             ItemEffect {
@@ -3423,8 +3475,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 20,
@@ -3434,8 +3486,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
 
         let outcome = resolve_boss_combat_with_player_gold(
@@ -3466,8 +3518,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 20,
@@ -3477,8 +3529,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
 
         let outcome = resolve_boss_combat_with_player_gold(
@@ -3520,8 +3572,8 @@ mod tests {
             spd: 2,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
         let enemy = CombatantInput {
             hp: 20,
@@ -3531,8 +3583,8 @@ mod tests {
             spd: 1,
             dig: 0,
             strikes: 1,
-        attack_source: None,
-        atk_contributions: Vec::new(),
+            attack_source: None,
+            atk_contributions: Vec::new(),
         };
 
         let outcome = resolve_boss_combat_with_player_gold(
@@ -3874,7 +3926,10 @@ mod tests {
         )
         .unwrap();
 
-        assert!(!outcome.player_won, "Higher pre-exchange HP+ARM should win before SPD");
+        assert!(
+            !outcome.player_won,
+            "Higher pre-exchange HP+ARM should win before SPD"
+        );
         assert_eq!(outcome.final_player_hp, 0);
         assert_eq!(outcome.final_enemy_hp, 0);
         assert_eq!(outcome.resolution_type, ResolutionType::PvpTieEnemyWin);
@@ -3946,5 +4001,53 @@ mod tests {
         assert_eq!(player_wins.resolution_type, ResolutionType::PvpTiePlayerWin);
         assert!(!enemy_wins.player_won);
         assert_eq!(enemy_wins.resolution_type, ResolutionType::PvpTieEnemyWin);
+    }
+
+    #[test]
+    fn test_spd_advantage_of_five_grants_one_extra_strike_before_slower_side_acts() {
+        let player = CombatantInput {
+            hp: 20,
+            max_hp: 20,
+            atk: 1,
+            arm: 0,
+            spd: 6,
+            dig: 0,
+            strikes: 1,
+            attack_source: None,
+            atk_contributions: Vec::new(),
+        };
+        let enemy = CombatantInput {
+            hp: 20,
+            max_hp: 20,
+            atk: 1,
+            arm: 0,
+            spd: 1,
+            dig: 0,
+            strikes: 1,
+            attack_source: None,
+            atk_contributions: Vec::new(),
+        };
+
+        let outcome = resolve_combat(player, enemy, vec![], vec![]).unwrap();
+        let first_enemy_attack = outcome
+            .log
+            .iter()
+            .position(|entry| matches!(entry.action, LogAction::Attack) && !entry.is_player)
+            .unwrap_or(usize::MAX);
+        let player_attack_positions = outcome
+            .log
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| matches!(entry.action, LogAction::Attack) && entry.is_player)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let player_attacks_before_enemy = player_attack_positions
+            .iter()
+            .copied()
+            .filter(|index| *index < first_enemy_attack)
+            .collect::<Vec<_>>();
+
+        assert_eq!(player_attacks_before_enemy.len(), 2);
+        assert!(first_enemy_attack > player_attacks_before_enemy[1]);
     }
 }

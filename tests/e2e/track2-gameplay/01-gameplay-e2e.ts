@@ -22,7 +22,9 @@ import {
   getPlayerProfilePda,
   getMapConfigPda,
   getGeneratedMapPda,
+  getMapVrfStatePda,
   getGameStatePda,
+  getGameplayVrfStatePda,
   getMapEnemiesPda,
   getGameplayAuthorityPda,
   getDuelVaultPda,
@@ -34,6 +36,7 @@ import {
   getGauntletWeekPoolPda,
   getInventoryPda,
   getMapPoisPda,
+  getPoiVrfStatePda,
   deriveDelegateAccounts,
 } from "../shared/pda-helpers";
 import {
@@ -46,6 +49,19 @@ import {
 const RPC_URL = process.env.ANCHOR_PROVIDER_URL || "http://127.0.0.1:8899";
 const ER_RPC_URL =
   process.env.EXPO_PUBLIC_EPHEMERAL_PROVIDER_ENDPOINT || "http://127.0.0.1:7799";
+const DEFAULT_LOCAL_VRF_QUEUE = "GKE6d7iv8kCBrsxr78W3xVdjGLLLJnxsGiuzrsZCGEvb";
+const DEFAULT_REMOTE_VRF_QUEUE = "5hBR571xnXppuCPveTrctfTU7tJLSN94nq7kv7FRK5Tc";
+const DEFAULT_VRF_QUEUE =
+  RPC_URL.includes("127.0.0.1") || RPC_URL.includes("localhost")
+    ? DEFAULT_LOCAL_VRF_QUEUE
+    : DEFAULT_REMOTE_VRF_QUEUE;
+const ER_VRF_QUEUE = new PublicKey(
+  process.env.EXPO_PUBLIC_VRF_ORACLE_QUEUE || DEFAULT_VRF_QUEUE
+);
+const ER_VRF_PROGRAM_ID = new PublicKey(
+  "Vrf1RNUjXmQGjmQrQLvJHs9SNkvDJEsRVFPkfSQUwGz"
+);
+const SLOT_HASHES_SYSVAR = new PublicKey("SysvarS1otHashes111111111111111111111111111");
 
 const DELEGATION_PROGRAM_ID = PROGRAM_IDS.delegation;
 const ER_VALIDATOR = new PublicKey("mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev");
@@ -72,6 +88,9 @@ let mapEnemiesPda: PublicKey;
 let generatedMapPda: PublicKey;
 let inventoryPda: PublicKey;
 let mapPoisPda: PublicKey;
+let mapVrfStatePda: PublicKey;
+let poiVrfStatePda: PublicKey;
+let gameplayVrfStatePda: PublicKey;
 let gameplayAuthorityPda: PublicKey;
 let sessionManagerAuthorityPda: PublicKey;
 
@@ -422,6 +441,9 @@ describe("Track 2 E2E: Create profile + start session", function () {
     [generatedMapPda] = getGeneratedMapPda(sessionPda);
     [inventoryPda] = getInventoryPda(sessionPda);
     [mapPoisPda] = getMapPoisPda(sessionPda);
+    [mapVrfStatePda] = getMapVrfStatePda(sessionPda);
+    [poiVrfStatePda] = getPoiVrfStatePda(sessionPda);
+    [gameplayVrfStatePda] = getGameplayVrfStatePda(sessionPda);
 
     await programs.sessionManager.methods
       .startSession(campaignLevel)
@@ -481,6 +503,134 @@ describe("Track 2 E2E: Create profile + start session", function () {
     const gameState = await fetchGameStateFrom(connection);
     initialX = Number(gameState.positionX);
     initialY = Number(gameState.positionY);
+  });
+
+  it("uses VRF-only session randomness interfaces", async () => {
+    expect(typeof (programs.mapGenerator.methods as any).initMapVrfState).to.equal("function");
+    expect(typeof (programs.mapGenerator.methods as any).requestMapVrf).to.equal("function");
+    expect((programs.mapGenerator.methods as any).requestMapRng).to.equal(undefined);
+    expect((programs.mapGenerator.methods as any).fulfillMapRng).to.equal(undefined);
+
+    expect(typeof (programs.poiSystem.methods as any).initPoiVrfState).to.equal("function");
+    expect(typeof (programs.poiSystem.methods as any).requestPoiVrf).to.equal("function");
+    expect((programs.poiSystem.methods as any).requestPoiRng).to.equal(undefined);
+    expect((programs.poiSystem.methods as any).fulfillPoiRng).to.equal(undefined);
+
+    expect(typeof (programs.gameplayState.methods as any).initGameplayVrfState).to.equal("function");
+    expect(typeof (programs.gameplayState.methods as any).requestGameplayVrf).to.equal("function");
+    expect((programs.gameplayState.methods as any).requestGameplayRng).to.equal(undefined);
+    expect((programs.gameplayState.methods as any).fulfillGameplayRng).to.equal(undefined);
+  });
+
+  it("initializes session VRF state PDAs on base layer", async () => {
+    const mapIx = await programs.mapGenerator.methods
+      .initMapVrfState()
+      .accounts({
+        payer: sessionSigner.publicKey,
+        session: sessionPda,
+        vrfState: mapVrfStatePda,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .instruction();
+
+    const poiIx = await programs.poiSystem.methods
+      .initPoiVrfState()
+      .accounts({
+        payer: sessionSigner.publicKey,
+        session: sessionPda,
+        vrfState: poiVrfStatePda,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .instruction();
+
+    const gameplayIx = await programs.gameplayState.methods
+      .initGameplayVrfState()
+      .accounts({
+        payer: sessionSigner.publicKey,
+        session: sessionPda,
+        vrfState: gameplayVrfStatePda,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .instruction();
+
+    await sendDelegateTx("init-vrf-states", [mapIx, poiIx, gameplayIx]);
+
+    const [mapInfo, poiInfo, gameplayInfo] = await Promise.all([
+      connection.getAccountInfo(mapVrfStatePda, "confirmed"),
+      connection.getAccountInfo(poiVrfStatePda, "confirmed"),
+      connection.getAccountInfo(gameplayVrfStatePda, "confirmed"),
+    ]);
+
+    expect(mapInfo?.owner.equals(PROGRAM_IDS.mapGenerator)).to.be.true;
+    expect(poiInfo?.owner.equals(PROGRAM_IDS.poiSystem)).to.be.true;
+    expect(gameplayInfo?.owner.equals(PROGRAM_IDS.gameplayState)).to.be.true;
+  });
+
+  it("builds ER VRF request instructions for all session-critical paths", async function () {
+    const vrfProgramInfo = await erConnection.getAccountInfo(ER_VRF_PROGRAM_ID, "confirmed");
+    if (!vrfProgramInfo) {
+      this.skip();
+      return;
+    }
+
+    const [mapProgramIdentity] = PublicKey.findProgramAddressSync(
+      [Buffer.from("identity")],
+      programs.mapGenerator.programId
+    );
+    const [poiProgramIdentity] = PublicKey.findProgramAddressSync(
+      [Buffer.from("identity")],
+      programs.poiSystem.programId
+    );
+    const [gameplayProgramIdentity] = PublicKey.findProgramAddressSync(
+      [Buffer.from("identity")],
+      programs.gameplayState.programId
+    );
+
+    const mapIx = await programs.mapGenerator.methods
+      .requestMapVrf()
+      .accounts({
+        payer: sessionSigner.publicKey,
+        session: sessionPda,
+        vrfState: mapVrfStatePda,
+        programIdentity: mapProgramIdentity,
+        oracleQueue: ER_VRF_QUEUE,
+        slotHashes: SLOT_HASHES_SYSVAR,
+        vrfProgram: ER_VRF_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .instruction();
+
+    const poiIx = await programs.poiSystem.methods
+      .requestPoiVrf()
+      .accounts({
+        payer: sessionSigner.publicKey,
+        session: sessionPda,
+        vrfState: poiVrfStatePda,
+        programIdentity: poiProgramIdentity,
+        oracleQueue: ER_VRF_QUEUE,
+        slotHashes: SLOT_HASHES_SYSVAR,
+        vrfProgram: ER_VRF_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .instruction();
+
+    const gameplayIx = await programs.gameplayState.methods
+      .requestGameplayVrf()
+      .accounts({
+        payer: sessionSigner.publicKey,
+        session: sessionPda,
+        vrfState: gameplayVrfStatePda,
+        programIdentity: gameplayProgramIdentity,
+        oracleQueue: ER_VRF_QUEUE,
+        slotHashes: SLOT_HASHES_SYSVAR,
+        vrfProgram: ER_VRF_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .instruction();
+
+    expect(mapIx.programId.equals(PROGRAM_IDS.mapGenerator)).to.be.true;
+    expect(poiIx.programId.equals(PROGRAM_IDS.poiSystem)).to.be.true;
+    expect(gameplayIx.programId.equals(PROGRAM_IDS.gameplayState)).to.be.true;
   });
 });
 
@@ -683,7 +833,7 @@ describe("Track 2 E2E: Gameplay on ER", function () {
           poiSystemProgram: programs.poiSystem.programId,
           gameplayVrfState: null,
           player: sessionSigner.publicKey,
-        })
+        } as any)
         .transaction();
 
       moveTx.feePayer = sessionSigner.publicKey;
@@ -896,7 +1046,7 @@ describe("Track 2 E2E: End session", function () {
         playerProfileProgram: programs.playerProfile.programId,
         mapGeneratorProgram: programs.mapGenerator.programId,
         poiSystemProgram: programs.poiSystem.programId,
-      })
+      } as any)
       .instruction();
 
     const tx = new Transaction().add(endSessionIx);

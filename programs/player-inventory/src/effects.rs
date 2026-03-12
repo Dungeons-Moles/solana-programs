@@ -183,7 +183,10 @@ pub fn generate_combat_effects(inventory: &PlayerInventory) -> Vec<ItemEffect> {
 }
 
 pub fn generate_annotated_tool_effects(tool: &ItemInstance) -> Vec<AnnotatedItemEffect> {
-    annotate_effects(generate_tool_effects(tool), item_source(CombatSourceKind::Tool, &tool.item_id))
+    annotate_effects(
+        generate_tool_effects(tool),
+        item_source(CombatSourceKind::Tool, &tool.item_id),
+    )
 }
 
 pub fn generate_annotated_gear_effects(
@@ -411,9 +414,15 @@ mod tests {
 
         let emerald = effects
             .iter()
-            .find(|e| e.trigger == TriggerType::EveryOtherTurnFirstHit && e.effect_type == EffectType::Heal)
+            .find(|e| {
+                e.trigger == TriggerType::EveryOtherTurnFirstHit
+                    && e.effect_type == EffectType::Heal
+            })
             .unwrap();
-        assert_eq!(emerald.value, 3, "Emerald shard should heal 3 at T1 with Gemfinder");
+        assert_eq!(
+            emerald.value, 3,
+            "Emerald shard should heal 3 at T1 with Gemfinder"
+        );
 
         let ruby = effects
             .iter()
@@ -422,7 +431,10 @@ mod tests {
                     && e.effect_type == EffectType::DealNonWeaponDamage
             })
             .unwrap();
-        assert_eq!(ruby.value, 2, "Ruby shard should deal 2 at T1 with Gemfinder");
+        assert_eq!(
+            ruby.value, 2,
+            "Ruby shard should deal 2 at T1 with Gemfinder"
+        );
 
         let sapphire = effects
             .iter()

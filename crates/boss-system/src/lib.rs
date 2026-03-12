@@ -12,8 +12,8 @@ pub use traits::*;
 
 // Re-export combat types from combat-system to avoid duplication
 pub use combat_system::state::CombatantInput;
-pub use combat_system::{EffectType, ItemEffect, TriggerType};
 use combat_system::state::{AnnotatedItemEffect, CombatSourceKind, CombatSourceRef};
+pub use combat_system::{EffectType, ItemEffect, TriggerType};
 
 /// Biome type for boss categorization
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

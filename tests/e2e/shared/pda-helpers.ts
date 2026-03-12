@@ -87,6 +87,15 @@ export function getGeneratedMapPda(
   );
 }
 
+export function getMapVrfStatePda(
+  sessionPda: PublicKey
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("map_vrf"), sessionPda.toBuffer()],
+    PROGRAM_IDS.mapGenerator
+  );
+}
+
 // ── Gameplay State PDAs ─────────────────────────────────────────────────────
 export function getGameStatePda(sessionPda: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
@@ -105,6 +114,15 @@ export function getMapEnemiesPda(sessionPda: PublicKey): [PublicKey, number] {
 export function getGameplayAuthorityPda(): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("gameplay_authority")],
+    PROGRAM_IDS.gameplayState
+  );
+}
+
+export function getGameplayVrfStatePda(
+  sessionPda: PublicKey
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("gameplay_vrf"), sessionPda.toBuffer()],
     PROGRAM_IDS.gameplayState
   );
 }
@@ -198,6 +216,15 @@ export function getInventoryPda(sessionPda: PublicKey): [PublicKey, number] {
 export function getMapPoisPda(sessionPda: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("map_pois"), sessionPda.toBuffer()],
+    PROGRAM_IDS.poiSystem
+  );
+}
+
+export function getPoiVrfStatePda(
+  sessionPda: PublicKey
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("poi_vrf"), sessionPda.toBuffer()],
     PROGRAM_IDS.poiSystem
   );
 }

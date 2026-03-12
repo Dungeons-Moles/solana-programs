@@ -155,12 +155,30 @@ action "gameplay_state_combat_ended" "svm::deploy_subgraph" {
     }
 }
 
-action "gameplay_state_combat_log" "svm::deploy_subgraph" {
+action "gameplay_state_pit_draft_combat_visual" "svm::deploy_subgraph" {
     program_id = action.deploy_gameplay_state.program_id
     program_idl = action.deploy_gameplay_state.program_idl
     block_height = 0 // action.deploy_gameplay_state.block_height
     event {
-        name = "CombatLog"
+        name = "PitDraftCombatVisual"
+    }
+}
+
+action "gameplay_state_duel_combat_visual" "svm::deploy_subgraph" {
+    program_id = action.deploy_gameplay_state.program_id
+    program_idl = action.deploy_gameplay_state.program_idl
+    block_height = 0 // action.deploy_gameplay_state.block_height
+    event {
+        name = "DuelCombatVisual"
+    }
+}
+
+action "gameplay_state_gauntlet_combat_visual" "svm::deploy_subgraph" {
+    program_id = action.deploy_gameplay_state.program_id
+    program_idl = action.deploy_gameplay_state.program_idl
+    block_height = 0 // action.deploy_gameplay_state.block_height
+    event {
+        name = "GauntletCombatVisual"
     }
 }
 
@@ -432,4 +450,3 @@ action "poi_system_rest_completed" "svm::deploy_subgraph" {
         name = "RestCompleted"
     }
 }
-

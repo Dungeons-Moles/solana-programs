@@ -314,8 +314,12 @@ pub enum EffectType {
     SetArmorPiercing,
     /// Convert starting armor to max HP (capped at value)
     ArmorToMaxHp,
+    /// While armored, take less weapon damage from each strike (minimum 1).
+    ReduceWeaponDamageWhileArmored,
     /// Reduce countdown of all bomb items by value
     ReduceAllCountdowns,
+    /// Increase enemy-facing countdown bomb damage.
+    BombDamageBonus,
     /// Amplify all non-weapon damage by value
     AmplifyNonWeaponDamage,
     /// Apply +damage to the next non-weapon damage instance only.
@@ -332,18 +336,24 @@ pub enum EffectType {
     ReduceNextBombSelfDamage,
     /// For Pneumatic Drill: strikes beyond the 2nd use half gear ATK bonus.
     HalfGearAtkAfterSecondStrike,
-    /// Immune to self-inflicted blast damage
+    /// Reduce self-inflicted blast damage by 50% (round down).
     BlastImmunity,
+    /// Increase shrapnel retaliation damage per consumed stack.
+    ShrapnelReflectBonus,
     /// Double the next bomb trigger effect
     DoubleBombTrigger,
     /// Double OnHit effects (once per turn)
     DoubleOnHitEffects,
+    /// OnHit effects can trigger once per strike instead of once per turn.
+    OnHitPerStrike,
     /// Trigger all equipped shard effects
     TriggerAllShards,
     /// Override shard cadence so `EveryOtherTurnFirstHit` effects can trigger every turn.
     ShardsEveryTurn,
     /// Keep up to `value` shrapnel stacks at end of turn.
     PreserveShrapnel,
+    /// Limit Gold->Armor conversions to `value` times per battle.
+    LimitGoldArmorConversions,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, InitSpace)]
@@ -376,7 +386,6 @@ pub enum ResolutionType {
 
 /// Per-combatant state during combat. Replaces the flat `player_*`/`enemy_*`
 /// fields that were previously duplicated on `CombatState`.
-#[derive(Default)]
 pub(crate) struct Combatant {
     pub hp: i16,
     pub max_hp: u16,
@@ -389,16 +398,23 @@ pub(crate) struct Combatant {
     pub stored_damage: i16,
     pub gear_atk_bonus: i16,
     pub half_gear_atk_after_second_strike: bool,
+    pub weapon_damage_reduction_while_armored: i16,
     pub next_bomb_damage_bonus: i16,
+    pub bomb_damage_bonus: i16,
     pub next_bomb_self_damage_reduction: i16,
     pub active_bomb_self_damage_reduction: i16,
+    pub blast_self_damage_multiplier: u8,
     pub non_weapon_damage_bonus: i16,
     pub next_non_weapon_damage_bonus: i16,
+    pub shrapnel_reflect_bonus: i16,
     pub gold_gain_bonus: i16,
+    pub gold_armor_conversion_limit: u8,
+    pub gold_armor_conversions_used: u8,
     pub non_weapon_hits_this_turn: u8,
     pub double_detonation_first: i16,
     pub double_detonation_second: i16,
     pub double_bomb_trigger: bool,
+    pub on_hit_per_strike: bool,
     pub pending_self_non_weapon_bonus: i16,
     pub preserve_shrapnel_cap: u8,
     pub shards_every_turn: bool,
@@ -408,6 +424,49 @@ pub(crate) struct Combatant {
     pub status: StatusEffects,
     /// Bitmask for first-time event flags (WOUNDED, EXPOSED, GAINED_SHRAPNEL).
     pub first_time_flags: u8,
+}
+
+impl Default for Combatant {
+    fn default() -> Self {
+        Self {
+            hp: 0,
+            max_hp: 0,
+            atk: 0,
+            arm: 0,
+            spd: 0,
+            dig: 0,
+            strikes: 0,
+            armor_piercing: 0,
+            stored_damage: 0,
+            gear_atk_bonus: 0,
+            half_gear_atk_after_second_strike: false,
+            weapon_damage_reduction_while_armored: 0,
+            next_bomb_damage_bonus: 0,
+            bomb_damage_bonus: 0,
+            next_bomb_self_damage_reduction: 0,
+            active_bomb_self_damage_reduction: 0,
+            blast_self_damage_multiplier: 100,
+            non_weapon_damage_bonus: 0,
+            next_non_weapon_damage_bonus: 0,
+            shrapnel_reflect_bonus: 0,
+            gold_gain_bonus: 0,
+            gold_armor_conversion_limit: 0,
+            gold_armor_conversions_used: 0,
+            non_weapon_hits_this_turn: 0,
+            double_detonation_first: 0,
+            double_detonation_second: 0,
+            double_bomb_trigger: false,
+            on_hit_per_strike: false,
+            pending_self_non_weapon_bonus: 0,
+            preserve_shrapnel_cap: 0,
+            shards_every_turn: false,
+            attack_source: None,
+            attack_base_value: 0,
+            atk_contributions: Vec::new(),
+            status: StatusEffects::default(),
+            first_time_flags: 0,
+        }
+    }
 }
 
 impl Combatant {
@@ -439,16 +498,23 @@ impl Combatant {
             stored_damage: self.stored_damage,
             gear_atk_bonus: self.gear_atk_bonus,
             half_gear_atk_after_second_strike: self.half_gear_atk_after_second_strike,
+            weapon_damage_reduction_while_armored: self.weapon_damage_reduction_while_armored,
             next_bomb_damage_bonus: self.next_bomb_damage_bonus,
+            bomb_damage_bonus: self.bomb_damage_bonus,
             next_bomb_self_damage_reduction: self.next_bomb_self_damage_reduction,
             active_bomb_self_damage_reduction: self.active_bomb_self_damage_reduction,
+            blast_self_damage_multiplier: self.blast_self_damage_multiplier,
             non_weapon_damage_bonus: self.non_weapon_damage_bonus,
             next_non_weapon_damage_bonus: self.next_non_weapon_damage_bonus,
+            shrapnel_reflect_bonus: self.shrapnel_reflect_bonus,
             gold_gain_bonus: self.gold_gain_bonus,
+            gold_armor_conversion_limit: self.gold_armor_conversion_limit,
+            gold_armor_conversions_used: self.gold_armor_conversions_used,
             non_weapon_hits_this_turn: self.non_weapon_hits_this_turn,
             double_detonation_first: self.double_detonation_first,
             double_detonation_second: self.double_detonation_second,
             double_bomb_trigger: self.double_bomb_trigger,
+            on_hit_per_strike: self.on_hit_per_strike,
             pending_self_non_weapon_bonus: self.pending_self_non_weapon_bonus,
             preserve_shrapnel_cap: self.preserve_shrapnel_cap,
             shards_every_turn: self.shards_every_turn,
@@ -469,16 +535,23 @@ impl Combatant {
         self.stored_damage = stats.stored_damage;
         self.gear_atk_bonus = stats.gear_atk_bonus;
         self.half_gear_atk_after_second_strike = stats.half_gear_atk_after_second_strike;
+        self.weapon_damage_reduction_while_armored = stats.weapon_damage_reduction_while_armored;
         self.next_bomb_damage_bonus = stats.next_bomb_damage_bonus;
+        self.bomb_damage_bonus = stats.bomb_damage_bonus;
         self.next_bomb_self_damage_reduction = stats.next_bomb_self_damage_reduction;
         self.active_bomb_self_damage_reduction = stats.active_bomb_self_damage_reduction;
+        self.blast_self_damage_multiplier = stats.blast_self_damage_multiplier;
         self.non_weapon_damage_bonus = stats.non_weapon_damage_bonus;
         self.next_non_weapon_damage_bonus = stats.next_non_weapon_damage_bonus;
+        self.shrapnel_reflect_bonus = stats.shrapnel_reflect_bonus;
         self.gold_gain_bonus = stats.gold_gain_bonus;
+        self.gold_armor_conversion_limit = stats.gold_armor_conversion_limit;
+        self.gold_armor_conversions_used = stats.gold_armor_conversions_used;
         self.non_weapon_hits_this_turn = stats.non_weapon_hits_this_turn;
         self.double_detonation_first = stats.double_detonation_first;
         self.double_detonation_second = stats.double_detonation_second;
         self.double_bomb_trigger = stats.double_bomb_trigger;
+        self.on_hit_per_strike = stats.on_hit_per_strike;
         self.pending_self_non_weapon_bonus = stats.pending_self_non_weapon_bonus;
         self.preserve_shrapnel_cap = stats.preserve_shrapnel_cap;
         self.shards_every_turn = stats.shards_every_turn;
@@ -508,7 +581,7 @@ pub(crate) struct CombatState {
 
 #[cfg(test)]
 mod tests {
-    use super::{Combatant, StatusEffects};
+    use super::Combatant;
     use crate::triggers::CombatantStats;
 
     #[test]
@@ -537,12 +610,7 @@ mod tests {
             attack_source: None,
             atk_contributions: Vec::new(),
             attack_base_value: 0,
-            status: StatusEffects::default(),
-            first_time_flags: 0,
-            double_detonation_first: 0,
-            double_detonation_second: 0,
-            double_bomb_trigger: false,
-            pending_self_non_weapon_bonus: 0,
+            ..Combatant::default()
         };
         let updated_stats = CombatantStats {
             hp: 12,

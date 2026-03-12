@@ -69,17 +69,10 @@ fn extract_poi_vrf<'info>(
         &[PoiVrfState::SEED_PREFIX, session_key.as_ref()],
         &crate::ID,
     );
-    require_keys_eq!(
-        account.key(),
-        expected_pda,
-        PoiSystemError::InvalidSession
-    );
+    require_keys_eq!(account.key(), expected_pda, PoiSystemError::InvalidSession);
 
     // Validate owner
-    require!(
-        account.owner == &crate::ID,
-        PoiSystemError::InvalidSession
-    );
+    require!(account.owner == &crate::ID, PoiSystemError::InvalidSession);
 
     // Deserialize and validate
     let data = account.try_borrow_data()?;
@@ -582,11 +575,7 @@ pub mod poi_system {
             PoiSystemError::Unauthorized
         );
         let map_pois = read_map_pois(&ctx.accounts.map_pois)?;
-        require_keys_eq!(
-            map_pois.session,
-            session_key,
-            PoiSystemError::Unauthorized
-        );
+        require_keys_eq!(map_pois.session, session_key, PoiSystemError::Unauthorized);
 
         let session_signer_end = GameSession::SESSION_SIGNER_OFFSET + 32;
         let session_data = ctx.accounts.game_session.try_borrow_data()?;
@@ -816,7 +805,11 @@ pub mod poi_system {
                 poi_authority: ctx.accounts.poi_authority.to_account_info(),
                 gameplay_authority: ctx.accounts.gameplay_authority.to_account_info(),
                 player_inventory_program: ctx.accounts.player_inventory_program.to_account_info(),
-                gameplay_vrf_state: ctx.accounts.gameplay_vrf_state.as_ref().map(|a| a.to_account_info()),
+                gameplay_vrf_state: ctx
+                    .accounts
+                    .gameplay_vrf_state
+                    .as_ref()
+                    .map(|a| a.to_account_info()),
             },
             &[&seeds[..]],
         ))?;
@@ -1973,33 +1966,8 @@ pub mod poi_system {
         Ok(())
     }
 
-    /// LOCALNET ONLY: request local RNG (same lifecycle as request_poi_vrf).
-    #[cfg(feature = "local-rng")]
-    pub fn request_poi_rng(ctx: Context<RequestPoiRng>) -> Result<()> {
-        let vrf_state = &mut ctx.accounts.vrf_state;
-        vrf_state.session = ctx.accounts.session.key();
-        vrf_state.randomness = [0u8; 32];
-        vrf_state.nonce = 1;
-        vrf_state.status = VrfStatus::Requested;
-        vrf_state.bump = ctx.bumps.vrf_state;
-        Ok(())
-    }
-
     /// Oracle callback: receives VRF randomness for POI offers.
     pub fn fulfill_poi_vrf(ctx: Context<FulfillPoiVrf>, randomness: [u8; 32]) -> Result<()> {
-        let vrf_state = &mut ctx.accounts.vrf_state;
-        require!(
-            vrf_state.status == VrfStatus::Requested,
-            PoiSystemError::VrfNotRequested
-        );
-        vrf_state.randomness = randomness;
-        vrf_state.status = VrfStatus::Fulfilled;
-        Ok(())
-    }
-
-    /// LOCALNET ONLY: self-fulfill local RNG (same lifecycle as fulfill_poi_vrf).
-    #[cfg(feature = "local-rng")]
-    pub fn fulfill_poi_rng(ctx: Context<FulfillPoiRng>, randomness: [u8; 32]) -> Result<()> {
         let vrf_state = &mut ctx.accounts.vrf_state;
         require!(
             vrf_state.status == VrfStatus::Requested,
@@ -2027,8 +1995,10 @@ pub mod poi_system {
             <[u8; 32]>::try_from(&session_data[GameSession::PLAYER_OFFSET..player_end]).unwrap(),
         );
         let stored_session_signer = Pubkey::from(
-            <[u8; 32]>::try_from(&session_data[GameSession::SESSION_SIGNER_OFFSET..session_signer_end])
-                .unwrap(),
+            <[u8; 32]>::try_from(
+                &session_data[GameSession::SESSION_SIGNER_OFFSET..session_signer_end],
+            )
+            .unwrap(),
         );
 
         require!(
@@ -2891,28 +2861,6 @@ pub struct RequestPoiVrf<'info> {
     pub oracle_queue: UncheckedAccount<'info>,
 }
 
-#[cfg(feature = "local-rng")]
-#[derive(Accounts)]
-pub struct RequestPoiRng<'info> {
-    #[account(mut)]
-    pub payer: Signer<'info>,
-
-    /// CHECK: Session PDA owned by session-manager.
-    #[account(owner = SESSION_MANAGER_PROGRAM_ID @ PoiSystemError::InvalidSessionOwner)]
-    pub session: UncheckedAccount<'info>,
-
-    #[account(
-        init,
-        payer = payer,
-        space = PoiVrfState::SPACE,
-        seeds = [PoiVrfState::SEED_PREFIX, session.key().as_ref()],
-        bump
-    )]
-    pub vrf_state: Account<'info, PoiVrfState>,
-
-    pub system_program: Program<'info, System>,
-}
-
 #[derive(Accounts)]
 pub struct FulfillPoiVrf<'info> {
     /// Oracle identity signer.
@@ -2920,19 +2868,6 @@ pub struct FulfillPoiVrf<'info> {
         not(feature = "mock-vrf"),
         account(address = ephemeral_vrf_sdk::consts::VRF_PROGRAM_IDENTITY)
     )]
-    pub oracle: Signer<'info>,
-
-    #[account(
-        mut,
-        seeds = [PoiVrfState::SEED_PREFIX, vrf_state.session.as_ref()],
-        bump = vrf_state.bump,
-    )]
-    pub vrf_state: Account<'info, PoiVrfState>,
-}
-
-#[cfg(feature = "local-rng")]
-#[derive(Accounts)]
-pub struct FulfillPoiRng<'info> {
     pub oracle: Signer<'info>,
 
     #[account(

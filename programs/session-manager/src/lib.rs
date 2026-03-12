@@ -276,7 +276,11 @@ pub mod session_manager {
         // Derive session PDA key for VRF lookup (duel uses fixed seed prefix + nonce)
         let duel_nonce_bytes = ctx.accounts.session_nonces.duel_nonce.to_le_bytes();
         let (session_pda, _) = Pubkey::find_program_address(
-            &[GameSession::DUEL_SEED_PREFIX, session_player.as_ref(), &duel_nonce_bytes],
+            &[
+                GameSession::DUEL_SEED_PREFIX,
+                session_player.as_ref(),
+                &duel_nonce_bytes,
+            ],
             &crate::ID,
         );
 
@@ -295,11 +299,9 @@ pub mod session_manager {
             }
             None => {
                 let pda_bytes = session_pda.to_bytes();
-                u64::from_le_bytes(
-                    pda_bytes[8..16].try_into().unwrap_or([0u8; 8]),
-                )
-                .wrapping_add(clock.slot)
-                .wrapping_mul(6364136223846793005u64)
+                u64::from_le_bytes(pda_bytes[8..16].try_into().unwrap_or([0u8; 8]))
+                    .wrapping_add(clock.slot)
+                    .wrapping_mul(6364136223846793005u64)
             }
         };
 
@@ -453,7 +455,11 @@ pub mod session_manager {
         // Derive session PDA key for VRF lookup (gauntlet uses prefix + nonce)
         let gauntlet_nonce_bytes = ctx.accounts.session_nonces.gauntlet_nonce.to_le_bytes();
         let (session_pda, _) = Pubkey::find_program_address(
-            &[GameSession::GAUNTLET_SEED_PREFIX, session_player.as_ref(), &gauntlet_nonce_bytes],
+            &[
+                GameSession::GAUNTLET_SEED_PREFIX,
+                session_player.as_ref(),
+                &gauntlet_nonce_bytes,
+            ],
             &crate::ID,
         );
 
@@ -472,11 +478,9 @@ pub mod session_manager {
             }
             None => {
                 let pda_bytes = session_pda.to_bytes();
-                u64::from_le_bytes(
-                    pda_bytes[8..16].try_into().unwrap_or([0u8; 8]),
-                )
-                .wrapping_add(clock.slot)
-                .wrapping_mul(6364136223846793005u64)
+                u64::from_le_bytes(pda_bytes[8..16].try_into().unwrap_or([0u8; 8]))
+                    .wrapping_add(clock.slot)
+                    .wrapping_mul(6364136223846793005u64)
             }
         };
 
@@ -611,8 +615,11 @@ pub mod session_manager {
 
     /// Delegates gameplay-state account to the MagicBlock delegation program.
     pub fn delegate_game_state(ctx: Context<DelegateGameState>, campaign_level: u8) -> Result<()> {
-        let game_session_key =
-            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level, ctx.accounts.session_nonces.campaign_nonce);
+        let game_session_key = derive_campaign_session_pda(
+            &ctx.accounts.player.key(),
+            campaign_level,
+            ctx.accounts.session_nonces.campaign_nonce,
+        );
         let (expected_game_state, _) = Pubkey::find_program_address(
             &[b"game_state", game_session_key.as_ref()],
             &gameplay_state::ID,
@@ -636,8 +643,11 @@ pub mod session_manager {
         ctx: Context<DelegateMapEnemies>,
         campaign_level: u8,
     ) -> Result<()> {
-        let game_session_key =
-            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level, ctx.accounts.session_nonces.campaign_nonce);
+        let game_session_key = derive_campaign_session_pda(
+            &ctx.accounts.player.key(),
+            campaign_level,
+            ctx.accounts.session_nonces.campaign_nonce,
+        );
         let (expected_map_enemies, _) = Pubkey::find_program_address(
             &[MapEnemies::SEED_PREFIX, game_session_key.as_ref()],
             &gameplay_state::ID,
@@ -661,8 +671,11 @@ pub mod session_manager {
         ctx: Context<DelegateGeneratedMap>,
         campaign_level: u8,
     ) -> Result<()> {
-        let game_session_key =
-            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level, ctx.accounts.session_nonces.campaign_nonce);
+        let game_session_key = derive_campaign_session_pda(
+            &ctx.accounts.player.key(),
+            campaign_level,
+            ctx.accounts.session_nonces.campaign_nonce,
+        );
         let (expected_generated_map, _) = Pubkey::find_program_address(
             &[GeneratedMap::SEED_PREFIX, game_session_key.as_ref()],
             &map_generator::ID,
@@ -683,8 +696,11 @@ pub mod session_manager {
 
     /// Delegates inventory account to the MagicBlock delegation program.
     pub fn delegate_inventory(ctx: Context<DelegateInventory>, campaign_level: u8) -> Result<()> {
-        let game_session_key =
-            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level, ctx.accounts.session_nonces.campaign_nonce);
+        let game_session_key = derive_campaign_session_pda(
+            &ctx.accounts.player.key(),
+            campaign_level,
+            ctx.accounts.session_nonces.campaign_nonce,
+        );
         let (expected_inventory, _) = Pubkey::find_program_address(
             &[b"inventory", game_session_key.as_ref()],
             &player_inventory::ID,
@@ -705,8 +721,11 @@ pub mod session_manager {
 
     /// Delegates map-pois account to the MagicBlock delegation program.
     pub fn delegate_map_pois(ctx: Context<DelegateMapPois>, campaign_level: u8) -> Result<()> {
-        let game_session_key =
-            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level, ctx.accounts.session_nonces.campaign_nonce);
+        let game_session_key = derive_campaign_session_pda(
+            &ctx.accounts.player.key(),
+            campaign_level,
+            ctx.accounts.session_nonces.campaign_nonce,
+        );
         let (expected_map_pois, _) = Pubkey::find_program_address(
             &[b"map_pois", game_session_key.as_ref()],
             &POI_SYSTEM_PROGRAM_ID,
@@ -727,7 +746,11 @@ pub mod session_manager {
 
     /// Delegates PoiVrfState account to the MagicBlock delegation program.
     /// Only needed for PvP sessions that use VRF for POI offers.
-    pub fn delegate_poi_vrf_state(ctx: Context<DelegatePoiVrfState>, session_key: Pubkey, validator: Option<Pubkey>) -> Result<()> {
+    pub fn delegate_poi_vrf_state(
+        ctx: Context<DelegatePoiVrfState>,
+        session_key: Pubkey,
+        validator: Option<Pubkey>,
+    ) -> Result<()> {
         let (expected_poi_vrf, _) = Pubkey::find_program_address(
             &[b"poi_vrf", session_key.as_ref()],
             &POI_SYSTEM_PROGRAM_ID,
@@ -738,8 +761,11 @@ pub mod session_manager {
             SessionManagerError::Unauthorized
         );
         let poi_vrf_seeds: &[&[u8]] = &[b"poi_vrf", session_key.as_ref()];
-        ctx.accounts
-            .delegate_poi_vrf_state(&ctx.accounts.player, poi_vrf_seeds, local_delegate_config(validator))?;
+        ctx.accounts.delegate_poi_vrf_state(
+            &ctx.accounts.player,
+            poi_vrf_seeds,
+            local_delegate_config(validator),
+        )?;
         Ok(())
     }
 
@@ -796,10 +822,16 @@ pub mod session_manager {
             &campaign_seed,
             &campaign_nonce_bytes,
         ];
-        let duel_session_seeds: &[&[u8]] =
-            &[GameSession::DUEL_SEED_PREFIX, session_player.as_ref(), &duel_nonce_bytes];
-        let gauntlet_session_seeds: &[&[u8]] =
-            &[GameSession::GAUNTLET_SEED_PREFIX, session_player.as_ref(), &gauntlet_nonce_bytes];
+        let duel_session_seeds: &[&[u8]] = &[
+            GameSession::DUEL_SEED_PREFIX,
+            session_player.as_ref(),
+            &duel_nonce_bytes,
+        ];
+        let gauntlet_session_seeds: &[&[u8]] = &[
+            GameSession::GAUNTLET_SEED_PREFIX,
+            session_player.as_ref(),
+            &gauntlet_nonce_bytes,
+        ];
 
         let (campaign_session_pda, _) =
             Pubkey::find_program_address(campaign_session_seeds, &crate::ID);
@@ -893,7 +925,11 @@ pub mod session_manager {
         let generated_map_info = ctx.accounts.generated_map.to_account_info();
         let inventory_info = ctx.accounts.inventory.to_account_info();
         let map_pois_info = ctx.accounts.map_pois.to_account_info();
-        let poi_vrf_info = ctx.accounts.poi_vrf_state.as_ref().map(|a| a.to_account_info());
+        let poi_vrf_info = ctx
+            .accounts
+            .poi_vrf_state
+            .as_ref()
+            .map(|a| a.to_account_info());
         let mut accounts_to_commit = vec![
             &game_session_info,
             &game_state_info,
@@ -1111,11 +1147,16 @@ pub mod session_manager {
 
     /// Settles run outcome into player-profile without requiring account closure.
     /// This is idempotent and can be retried independently when close fails.
-    pub fn settle_session_result(ctx: Context<SettleSessionResult>, _campaign_level: u8) -> Result<()> {
+    pub fn settle_session_result(
+        ctx: Context<SettleSessionResult>,
+        _campaign_level: u8,
+    ) -> Result<()> {
         let clock = Clock::get()?;
 
-        let (expected_game_state, _) =
-            Pubkey::find_program_address(&[b"game_state", ctx.accounts.game_session.key().as_ref()], &gameplay_state::ID);
+        let (expected_game_state, _) = Pubkey::find_program_address(
+            &[b"game_state", ctx.accounts.game_session.key().as_ref()],
+            &gameplay_state::ID,
+        );
         require_keys_eq!(
             ctx.accounts.game_state.key(),
             expected_game_state,
@@ -1166,8 +1207,10 @@ pub mod session_manager {
     pub fn close_session_only(ctx: Context<CloseSessionOnly>) -> Result<()> {
         let clock = Clock::get()?;
 
-        let (expected_game_state, _) =
-            Pubkey::find_program_address(&[b"game_state", ctx.accounts.game_session.key().as_ref()], &gameplay_state::ID);
+        let (expected_game_state, _) = Pubkey::find_program_address(
+            &[b"game_state", ctx.accounts.game_session.key().as_ref()],
+            &gameplay_state::ID,
+        );
         require_keys_eq!(
             ctx.accounts.game_state.key(),
             expected_game_state,
@@ -1602,7 +1645,10 @@ pub mod session_manager {
                 ctx.accounts.gameplay_state_program.to_account_info(),
                 gameplay_state::cpi::accounts::RotateGameStateSessionKey {
                     game_state: ctx.accounts.game_state.to_account_info(),
-                    session_manager_authority: ctx.accounts.session_manager_authority.to_account_info(),
+                    session_manager_authority: ctx
+                        .accounts
+                        .session_manager_authority
+                        .to_account_info(),
                 },
                 signer_seeds,
             ),
@@ -1615,7 +1661,10 @@ pub mod session_manager {
                 ctx.accounts.player_inventory_program.to_account_info(),
                 player_inventory::cpi::accounts::RotateInventoryOwner {
                     inventory: ctx.accounts.inventory.to_account_info(),
-                    session_manager_authority: ctx.accounts.session_manager_authority.to_account_info(),
+                    session_manager_authority: ctx
+                        .accounts
+                        .session_manager_authority
+                        .to_account_info(),
                 },
                 signer_seeds,
             ),
@@ -2185,7 +2234,12 @@ fn validate_secondary_runtime_accounts(
 fn derive_campaign_session_pda(player: &Pubkey, campaign_level: u8, nonce: u64) -> Pubkey {
     let campaign_seed = [campaign_level];
     let nonce_bytes = nonce.to_le_bytes();
-    let seeds: &[&[u8]] = &[GameSession::SEED_PREFIX, player.as_ref(), &campaign_seed, &nonce_bytes];
+    let seeds: &[&[u8]] = &[
+        GameSession::SEED_PREFIX,
+        player.as_ref(),
+        &campaign_seed,
+        &nonce_bytes,
+    ];
     Pubkey::find_program_address(seeds, &crate::ID).0
 }
 
@@ -2973,8 +3027,7 @@ pub const CLOSE_MAP_ENEMIES_DISCRIMINATOR: [u8; 8] = [192, 111, 190, 66, 236, 13
 pub const CLOSE_GENERATED_MAP_DISCRIMINATOR: [u8; 8] = [249, 208, 241, 231, 57, 214, 174, 103];
 pub const CLOSE_MAP_POIS_VIA_SESSION_SIGNER_DISCRIMINATOR: [u8; 8] =
     [35, 38, 19, 18, 250, 66, 39, 150];
-pub const CLOSE_MAP_POIS_ORPHANED_DISCRIMINATOR: [u8; 8] =
-    [218, 44, 98, 133, 139, 114, 27, 98];
+pub const CLOSE_MAP_POIS_ORPHANED_DISCRIMINATOR: [u8; 8] = [218, 44, 98, 133, 139, 114, 27, 98];
 
 fn close_game_state_via_session_signer_cpi<'info>(
     program: &AccountInfo<'info>,

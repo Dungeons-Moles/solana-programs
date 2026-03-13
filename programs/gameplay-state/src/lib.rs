@@ -182,6 +182,8 @@ pub const DAY_VISION_RADIUS: u8 = 4;
 pub const PIT_DRAFT_MAX_START_GOLD: u16 = 30;
 pub const DISCOVER_VISIBLE_WAYPOINTS_DISCRIMINATOR: [u8; 8] =
     [0x3b, 0x26, 0x6a, 0x00, 0x3a, 0xb1, 0x50, 0xfc];
+pub const DISCOVER_VISIBLE_WAYPOINTS_AUTHORIZED_DISCRIMINATOR: [u8; 8] =
+    [0xe8, 0x21, 0x93, 0x9c, 0x32, 0x7a, 0x1e, 0x8f];
 /// Player inventory program ID for authorized HP modifications via CPI
 pub const PLAYER_INVENTORY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     0x8b, 0x77, 0xfe, 0x0c, 0xa3, 0x5f, 0x22, 0x83, 0xa1, 0x7c, 0x15, 0x8e, 0x3e, 0x68, 0xbd, 0x0e,
@@ -1876,12 +1878,6 @@ pub mod gameplay_state {
             GameplayStateError::NotAdjacent
         );
 
-        let is_night_move = game_state.phase.is_night();
-        let visibility_radius = if is_night_move {
-            NIGHT_VISION_RADIUS
-        } else {
-            DAY_VISION_RADIUS
-        };
         let is_wall = !generated_map.is_walkable(target_x, target_y);
         let player_stats =
             calculate_stats(inventory, game_state.campaign_level, game_state.run_mode);
@@ -1905,6 +1901,11 @@ pub mod gameplay_state {
                 GameplayStateError::InsufficientMoves
             );
         }
+
+        let original_phase = game_state.phase;
+        let (post_move_phase, post_move_moves_remaining) =
+            resolve_post_move_phase_and_moves(original_phase, game_state.moves_remaining, move_cost)?;
+        let visibility_radius = visibility_radius_for_phase(post_move_phase);
 
         let is_last_move_of_week =
             game_state.phase.is_night3() && game_state.moves_remaining == move_cost;
@@ -2025,6 +2026,8 @@ pub mod gameplay_state {
 
         game_state.position_x = target_x;
         game_state.position_y = target_y;
+        game_state.phase = post_move_phase;
+        game_state.moves_remaining = post_move_moves_remaining;
         reveal_radius_cpi(
             &ctx.accounts.generated_map.to_account_info(),
             &ctx.accounts.game_session,
@@ -2034,40 +2037,23 @@ pub mod gameplay_state {
             target_y,
             visibility_radius,
         )?;
-        discover_visible_waypoints_cpi(
+        discover_visible_waypoints_authorized_cpi(
             &ctx.accounts.map_pois,
-            &game_state.to_account_info(),
-            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.gameplay_authority,
             &ctx.accounts.poi_system_program.to_account_info(),
+            ctx.bumps.gameplay_authority,
+            target_x,
+            target_y,
             visibility_radius,
         )?;
 
-        // Handle move cost consumption, potentially spanning phases
         if needs_phase_span {
-            // Consume all moves from current phase
-            let moves_from_current = game_state.moves_remaining;
-            let remaining_cost = move_cost - moves_from_current;
-
-            // Advance to next phase
-            let next_phase = game_state.phase.next().unwrap();
-            game_state.phase = next_phase;
-            game_state.moves_remaining = next_phase
-                .moves_allowed()
-                .checked_sub(remaining_cost)
-                .ok_or(GameplayStateError::ArithmeticOverflow)?;
-
             emit!(PhaseAdvanced {
                 player: game_state.player,
-                new_phase: next_phase,
+                new_phase: post_move_phase,
                 new_week: game_state.week,
                 moves_remaining: game_state.moves_remaining,
             });
-        } else {
-            // Simple subtraction within same phase
-            game_state.moves_remaining = game_state
-                .moves_remaining
-                .checked_sub(move_cost)
-                .ok_or(GameplayStateError::ArithmeticOverflow)?;
         }
 
         game_state.total_moves = game_state
@@ -3692,6 +3678,45 @@ fn discover_visible_waypoints_cpi<'info>(
     Ok(())
 }
 
+fn discover_visible_waypoints_authorized_cpi<'info>(
+    map_pois: &AccountInfo<'info>,
+    gameplay_authority: &AccountInfo<'info>,
+    poi_system_program: &AccountInfo<'info>,
+    gameplay_authority_bump: u8,
+    center_x: u8,
+    center_y: u8,
+    visibility_radius: u8,
+) -> Result<()> {
+    let mut data = [0u8; 11];
+    data[..8].copy_from_slice(&DISCOVER_VISIBLE_WAYPOINTS_AUTHORIZED_DISCRIMINATOR);
+    data[8] = center_x;
+    data[9] = center_y;
+    data[10] = visibility_radius;
+
+    let instruction = Instruction {
+        program_id: POI_SYSTEM_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(map_pois.key(), false),
+            AccountMeta::new_readonly(gameplay_authority.key(), true),
+        ],
+        data: data.to_vec(),
+    };
+
+    let signer_seeds: &[&[&[u8]]] = &[&[GAMEPLAY_AUTHORITY_SEED, &[gameplay_authority_bump]]];
+
+    anchor_lang::solana_program::program::invoke_signed(
+        &instruction,
+        &[
+            map_pois.clone(),
+            gameplay_authority.clone(),
+            poi_system_program.clone(),
+        ],
+        signer_seeds,
+    )?;
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn select_enemy_step(
     enemy_x: u8,
@@ -3863,6 +3888,37 @@ fn should_resolve_weekly_boss(run_mode: RunMode, week: u8) -> bool {
         // Duel mode uses bosses on week 1/2; week 3 is async PvP resolution in finalize_duel_run.
         RunMode::Duel => week < 3,
         RunMode::Gauntlet => false,
+    }
+}
+
+fn resolve_post_move_phase_and_moves(
+    phase: Phase,
+    moves_remaining: u8,
+    move_cost: u8,
+) -> Result<(Phase, u8)> {
+    if moves_remaining >= move_cost {
+        let updated_moves = moves_remaining
+            .checked_sub(move_cost)
+            .ok_or(GameplayStateError::ArithmeticOverflow)?;
+        return Ok((phase, updated_moves));
+    }
+
+    let next_phase = phase.next().ok_or(GameplayStateError::InsufficientMoves)?;
+    let remaining_cost = move_cost
+        .checked_sub(moves_remaining)
+        .ok_or(GameplayStateError::ArithmeticOverflow)?;
+    let updated_moves = next_phase
+        .moves_allowed()
+        .checked_sub(remaining_cost)
+        .ok_or(GameplayStateError::ArithmeticOverflow)?;
+    Ok((next_phase, updated_moves))
+}
+
+fn visibility_radius_for_phase(phase: Phase) -> u8 {
+    if phase.is_night() {
+        NIGHT_VISION_RADIUS
+    } else {
+        DAY_VISION_RADIUS
     }
 }
 
@@ -5449,6 +5505,7 @@ pub struct GauntletSessionSettled {
 #[cfg(test)]
 mod hp_logic_tests {
     use super::*;
+    use crate::constants::{DAY_MOVES, NIGHT_MOVES};
 
     fn make_base_stats() -> PlayerStats {
         PlayerStats {
@@ -5804,6 +5861,23 @@ mod hp_logic_tests {
         state = make_gauntlet_gate_state();
         state.moves_remaining = 1;
         assert!(!gauntlet_week_resolution_ready(&state));
+    }
+
+    #[test]
+    fn test_phase_spanning_day_move_uses_night_phase_and_radius() {
+        let (phase, moves_remaining) = resolve_post_move_phase_and_moves(Phase::Day1, 1, 2).unwrap();
+        assert_eq!(phase, Phase::Night1);
+        assert_eq!(moves_remaining, NIGHT_MOVES - 1);
+        assert_eq!(visibility_radius_for_phase(phase), NIGHT_VISION_RADIUS);
+    }
+
+    #[test]
+    fn test_phase_spanning_night_move_uses_next_day_phase_and_radius() {
+        let (phase, moves_remaining) =
+            resolve_post_move_phase_and_moves(Phase::Night1, 1, 2).unwrap();
+        assert_eq!(phase, Phase::Day2);
+        assert_eq!(moves_remaining, DAY_MOVES - 1);
+        assert_eq!(visibility_radius_for_phase(phase), DAY_VISION_RADIUS);
     }
 }
 

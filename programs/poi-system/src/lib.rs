@@ -27,6 +27,8 @@ pub const POI_AUTHORITY_SEED: &[u8] = b"poi_authority";
 pub const NIGHT_VISION_RADIUS: u8 = 2;
 pub const DAY_VISION_RADIUS: u8 = 4;
 pub const SPAWN_VISION_RADIUS: u8 = 6;
+pub const DISCOVER_VISIBLE_WAYPOINTS_AUTHORIZED_DISCRIMINATOR: [u8; 8] =
+    [0xe8, 0x21, 0x93, 0x9c, 0x32, 0x7a, 0x1e, 0x8f];
 
 /// Session manager program ID for session ownership checks
 pub const SESSION_MANAGER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
@@ -217,6 +219,10 @@ fn discover_visible_waypoints_in_map(
             });
         }
     }
+}
+
+fn is_valid_authorized_waypoint_visibility_radius(visibility_radius: u8) -> bool {
+    visibility_radius == NIGHT_VISION_RADIUS || visibility_radius == DAY_VISION_RADIUS
 }
 
 fn is_tile_discovered(discovered_tiles: &[u8], width: u8, x: u8, y: u8) -> bool {
@@ -1760,6 +1766,32 @@ pub mod poi_system {
         Ok(())
     }
 
+    /// Discover visible Rail Waypoints (L8) using gameplay-state's PDA authority.
+    ///
+    /// This exists for movement flows where gameplay-state has already computed the
+    /// resulting position/phase, but those updates have not yet been serialized back
+    /// into the GameState account data visible to downstream CPIs.
+    pub fn discover_visible_waypoints_authorized(
+        ctx: Context<DiscoverVisibleWaypointsAuthorized>,
+        center_x: u8,
+        center_y: u8,
+        visibility_radius: u8,
+    ) -> Result<()> {
+        require!(
+            is_valid_authorized_waypoint_visibility_radius(visibility_radius),
+            PoiSystemError::InvalidVisionRadius
+        );
+
+        discover_visible_waypoints_in_map(
+            &mut ctx.accounts.map_pois,
+            center_x,
+            center_y,
+            visibility_radius,
+        );
+
+        Ok(())
+    }
+
     /// Fast travel between Rail Waypoints (L8).
     ///
     /// Player must be at a discovered waypoint and select another discovered waypoint.
@@ -2874,6 +2906,22 @@ pub struct DiscoverVisibleWaypoints<'info> {
     pub player: Signer<'info>,
 }
 
+#[derive(Accounts)]
+pub struct DiscoverVisibleWaypointsAuthorized<'info> {
+    #[account(mut)]
+    pub map_pois: Account<'info, MapPois>,
+
+    /// Gameplay authority PDA from gameplay-state for internal waypoint discovery.
+    /// CHECK: PDA derived from gameplay-state program and must sign via CPI.
+    #[account(
+        seeds = [b"gameplay_authority"],
+        bump,
+        seeds::program = gameplay_state::ID,
+        constraint = gameplay_authority.is_signer @ PoiSystemError::Unauthorized,
+    )]
+    pub gameplay_authority: AccountInfo<'info>,
+}
+
 /// Context for fast travel between Rail Waypoints (L8)
 #[derive(Accounts)]
 pub struct FastTravel<'info> {
@@ -3352,17 +3400,36 @@ pub const INITIALIZE_MAP_POIS_DISCRIMINATOR: [u8; 8] =
 #[cfg(test)]
 mod discriminator_tests {
     use super::*;
+    use sha2::{Digest, Sha256};
 
     /// Validates that INITIALIZE_MAP_POIS_DISCRIMINATOR matches sha256("global:initialize_map_pois")[..8].
     /// Computes the hash at test time so a rename is caught immediately.
     #[test]
     fn test_initialize_map_pois_discriminator() {
-        use sha2::{Digest, Sha256};
         let hash = Sha256::digest(b"global:initialize_map_pois");
         let expected: [u8; 8] = hash[..8].try_into().unwrap();
         assert_eq!(
             INITIALIZE_MAP_POIS_DISCRIMINATOR, expected,
             "INITIALIZE_MAP_POIS_DISCRIMINATOR doesn't match sha256(\"global:initialize_map_pois\")[..8]"
         );
+    }
+
+    #[test]
+    fn test_discover_visible_waypoints_authorized_discriminator() {
+        let hash = Sha256::digest(b"global:discover_visible_waypoints_authorized");
+        let expected: [u8; 8] = hash[..8].try_into().unwrap();
+        assert_eq!(
+            DISCOVER_VISIBLE_WAYPOINTS_AUTHORIZED_DISCRIMINATOR, expected,
+            "DISCOVER_VISIBLE_WAYPOINTS_AUTHORIZED_DISCRIMINATOR doesn't match sha256(\"global:discover_visible_waypoints_authorized\")[..8]"
+        );
+    }
+
+    #[test]
+    fn test_authorized_waypoint_visibility_radius_allows_only_day_or_night() {
+        assert!(is_valid_authorized_waypoint_visibility_radius(DAY_VISION_RADIUS));
+        assert!(is_valid_authorized_waypoint_visibility_radius(NIGHT_VISION_RADIUS));
+        assert!(!is_valid_authorized_waypoint_visibility_radius(SPAWN_VISION_RADIUS));
+        assert!(!is_valid_authorized_waypoint_visibility_radius(1));
+        assert!(!is_valid_authorized_waypoint_visibility_radius(13));
     }
 }

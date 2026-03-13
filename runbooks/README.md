@@ -7,6 +7,27 @@
 ### deployment
 Deploy programs
 
+### deployment-gameplay-state
+Deploy gameplay_state only
+
+### deployment-poi-system
+Deploy poi_system only
+
+### deployment-map-generator
+Deploy map_generator only
+
+### deployment-session-manager
+Deploy session_manager only
+
+### deployment-player-inventory
+Deploy player_inventory only
+
+### deployment-player-profile
+Deploy player_profile only
+
+### deployment-nft-marketplace
+Deploy nft_marketplace only
+
 ## Getting Started
 
 This repository is using [Surfpool](https://surfpool.run) as a part of its development workflow.
@@ -72,6 +93,13 @@ Our [Surfpool 101 Series](https://www.youtube.com/playlist?list=PL0FMgRjJMRzO1Fd
 $ surfpool ls
 Name                                    Description
 deployment                              Deploy programs
+deployment-gameplay-state               Deploy gameplay_state only
+deployment-poi-system                   Deploy poi_system only
+deployment-map-generator                Deploy map_generator only
+deployment-session-manager              Deploy session_manager only
+deployment-player-inventory             Deploy player_inventory only
+deployment-player-profile               Deploy player_profile only
+deployment-nft-marketplace              Deploy nft_marketplace only
 ```
 
 ### Start a Surfnet, automatically executing the `deployment` runbook on program recompile:
@@ -82,4 +110,10 @@ $ surfpool start --watch
 ### Execute an existing runbook
 ```console
 $ surfpool run deployment
+```
+
+Deploy one program only:
+```console
+$ surfpool run deployment-gameplay-state
+$ surfpool run deployment-poi-system
 ```

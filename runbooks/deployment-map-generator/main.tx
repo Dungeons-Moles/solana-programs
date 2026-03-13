@@ -1,0 +1,15 @@
+################################################################
+# Deploy map_generator only
+################################################################
+
+addon "svm" {
+    rpc_api_url = input.rpc_api_url
+    network_id = input.network_id
+}
+
+action "deploy_map_generator" "svm::deploy_program" {
+    description = "Deploy map_generator program"
+    program = svm::get_program_from_anchor_project("map_generator")
+    authority = signer.authority
+    payer = signer.payer
+}

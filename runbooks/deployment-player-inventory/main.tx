@@ -1,0 +1,15 @@
+################################################################
+# Deploy player_inventory only
+################################################################
+
+addon "svm" {
+    rpc_api_url = input.rpc_api_url
+    network_id = input.network_id
+}
+
+action "deploy_player_inventory" "svm::deploy_program" {
+    description = "Deploy player_inventory program"
+    program = svm::get_program_from_anchor_project("player_inventory")
+    authority = signer.authority
+    payer = signer.payer
+}

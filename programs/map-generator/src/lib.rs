@@ -468,6 +468,22 @@ pub mod map_generator {
         Ok(())
     }
 
+    /// Marks a discovered POI as used in SessionDiscovery.
+    /// Called via CPI from poi-system after a one-time POI is consumed.
+    pub fn mark_discovered_poi_used(
+        ctx: Context<RecordDiscoveredPoi>,
+        map_pois_index: u8,
+    ) -> Result<()> {
+        let discovery = &mut ctx.accounts.session_discovery;
+        for i in 0..discovery.discovered_poi_count as usize {
+            if discovery.discovered_pois[i].map_pois_index == map_pois_index {
+                discovery.discovered_pois[i].used = 1;
+                return Ok(());
+            }
+        }
+        Ok(()) // POI not in discovery yet — no-op
+    }
+
     /// Updates the active offer data in SessionDiscovery.
     /// Called via CPI from poi-system when an offer is generated, rerolled, or consumed.
     pub fn update_active_offer(

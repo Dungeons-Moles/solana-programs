@@ -247,6 +247,27 @@ fn record_discovered_poi_cpi<'info>(
     Ok(())
 }
 
+fn mark_discovered_poi_used_cpi<'info>(
+    session_discovery: &AccountInfo<'info>,
+    session: &AccountInfo<'info>,
+    session_signer: &AccountInfo<'info>,
+    map_generator_program: &AccountInfo<'info>,
+    map_pois_index: u8,
+) -> Result<()> {
+    map_generator::cpi::mark_discovered_poi_used(
+        CpiContext::new(
+            map_generator_program.clone(),
+            map_generator::cpi::accounts::RecordDiscoveredPoi {
+                session_discovery: session_discovery.clone(),
+                session: session.clone(),
+                session_signer: session_signer.clone(),
+            },
+        ),
+        map_pois_index,
+    )?;
+    Ok(())
+}
+
 /// Attempt to dual-write offer data to SessionDiscovery via CPI.
 /// Only calls the CPI if all three optional accounts are present.
 fn try_update_active_offer<'info>(
@@ -1073,6 +1094,17 @@ pub mod poi_system {
         // Mark POI as used if needed
         if result.mark_used {
             map_pois.pois[poi_index as usize].used = true;
+            if let (Some(ref sd), Some(ref sess), Some(ref mgp)) = (
+                &ctx.accounts.session_discovery,
+                &ctx.accounts.session,
+                &ctx.accounts.map_generator_program,
+            ) {
+                mark_discovered_poi_used_cpi(
+                    &sd.to_account_info(), &sess.to_account_info(),
+                    &ctx.accounts.player.to_account_info(), &mgp.to_account_info(),
+                    poi_index,
+                )?;
+            }
         }
 
         let seeds = &[POI_AUTHORITY_SEED, &[ctx.bumps.poi_authority]];
@@ -1409,6 +1441,17 @@ pub mod poi_system {
         // Mark POI as used
         if result.mark_used {
             map_pois.pois[poi_index as usize].used = true;
+            if let (Some(ref sd), Some(ref sess), Some(ref mgp)) = (
+                &ctx.accounts.session_discovery,
+                &ctx.accounts.session,
+                &ctx.accounts.map_generator_program,
+            ) {
+                mark_discovered_poi_used_cpi(
+                    &sd.to_account_info(), &sess.to_account_info(),
+                    &ctx.accounts.player.to_account_info(), &mgp.to_account_info(),
+                    poi_index,
+                )?;
+            }
         }
 
         // Remove the consumed offer from saved offers
@@ -1577,6 +1620,17 @@ pub mod poi_system {
 
         // Mark POI as used (one-time use)
         map_pois.pois[poi_index as usize].used = true;
+        if let (Some(ref sd), Some(ref sess), Some(ref mgp)) = (
+            &ctx.accounts.session_discovery,
+            &ctx.accounts.session,
+            &ctx.accounts.map_generator_program,
+        ) {
+            mark_discovered_poi_used_cpi(
+                &sd.to_account_info(), &sess.to_account_info(),
+                &ctx.accounts.player.to_account_info(), &mgp.to_account_info(),
+                poi_index,
+            )?;
+        }
 
         // Remove the consumed offer from saved offers
         map_pois.oil_offers.swap_remove(offer_pos);
@@ -2216,9 +2270,18 @@ pub mod poi_system {
 
         let result = interactions::execute_survey_beacon(poi, map_width, map_height, is_night)?;
 
-        // Mark POI as used (one-time)
+        // Mark POI as used (one-time) in MapPois and SessionDiscovery
         map_pois.pois[poi_index as usize].used = true;
         let sd_info = ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info());
+        if let Some(ref sd) = sd_info {
+            mark_discovered_poi_used_cpi(
+                sd,
+                &ctx.accounts.session.to_account_info(),
+                &ctx.accounts.player.to_account_info(),
+                &ctx.accounts.map_generator_program.to_account_info(),
+                poi_index,
+            )?;
+        }
         reveal_manhattan_radius_cpi(
             &ctx.accounts.generated_map.to_account_info(),
             &ctx.accounts.session.to_account_info(),
@@ -2350,6 +2413,15 @@ pub mod poi_system {
 
         // Mark POI as used (one-time)
         map_pois.pois[poi_index as usize].used = true;
+        if let Some(ref sd) = ctx.accounts.session_discovery {
+            mark_discovered_poi_used_cpi(
+                &sd.to_account_info(),
+                &ctx.accounts.session.to_account_info(),
+                &ctx.accounts.player.to_account_info(),
+                &ctx.accounts.map_generator_program.to_account_info(),
+                poi_index,
+            )?;
+        }
         map_pois.scanner_offers.swap_remove(offer_pos);
 
         let mut nearest: Option<(usize, u16)> = None;
@@ -2956,6 +3028,19 @@ pub struct InteractRest<'info> {
 
     /// Player initiating the interaction
     pub player: Signer<'info>,
+
+    /// Optional SessionDiscovery for marking POI as used.
+    /// CHECK: Passed through to map-generator CPI; validated there.
+    #[account(mut)]
+    pub session_discovery: Option<UncheckedAccount<'info>>,
+
+    /// Session PDA for SessionDiscovery CPI
+    /// CHECK: Only used for CPI seed derivation when session_discovery is present.
+    pub session: Option<UncheckedAccount<'info>>,
+
+    /// Map generator program for mark_discovered_poi_used CPI
+    /// CHECK: Program ID validated by Anchor CPI.
+    pub map_generator_program: Option<UncheckedAccount<'info>>,
 }
 
 /// Context for interacting with a pick-item POI (L2, L3, L12, L13)

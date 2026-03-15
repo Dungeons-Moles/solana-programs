@@ -58,4 +58,8 @@ pub enum MapGeneratorError {
     /// SessionDiscovery discovered_pois array is full
     #[msg("Discovered POIs full")]
     DiscoveredPoisFull,
+
+    /// Invalid offer data passed to update_active_offer
+    #[msg("Invalid offer data")]
+    InvalidOfferData,
 }

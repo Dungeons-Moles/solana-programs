@@ -313,6 +313,23 @@ impl GeneratedMap {
 // Session Discovery (player-readable fog-of-war account)
 // =============================================================================
 
+/// A shop offer entry stored in SessionDiscovery (12 bytes).
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default, Debug)]
+pub struct DiscoveryShopOffer {
+    pub item_id: [u8; 8],
+    pub tier: u8,
+    pub price: u16,
+    pub purchased: u8,
+}
+
+/// An item offer entry stored in SessionDiscovery (10 bytes).
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default, Debug)]
+pub struct DiscoveryOfferItem {
+    pub item_id: [u8; 8],
+    pub rarity: u8,
+    pub tier: u8,
+}
+
 /// A discovered POI entry visible to the player (5 bytes).
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default)]
 pub struct DiscoveredPoi {
@@ -386,12 +403,30 @@ pub struct SessionDiscovery {
     pub current_echo_present: u8,                      // 1
     /// Raw serialized GauntletEchoSnapshot bytes
     pub current_echo_data: [u8; ECHO_DATA_SIZE],       // 179
+    /// Active offer type: 0=none, 1=shop, 2=cache, 3=oil, 4=scanner
+    pub active_offer_type: u8,                          // 1
+    /// MapPois index of the POI with the active offer
+    pub active_offer_poi_index: u8,                     // 1
+    /// Shop offers (valid when active_offer_type == 1)
+    pub shop_offers: [DiscoveryShopOffer; 6],           // 72
+    /// Shop reroll count
+    pub shop_reroll_count: u8,                          // 1
+    /// Shop active flag
+    pub shop_active: u8,                                // 1
+    /// Cache offer items (valid when active_offer_type == 2)
+    pub cache_offer_items: [DiscoveryOfferItem; 3],     // 30
+    /// Oil offer flags (valid when active_offer_type == 3)
+    pub oil_offer_oils: [u8; 3],                        // 3
+    /// Scanner offer count (valid when active_offer_type == 4)
+    pub scanner_offer_count: u8,                        // 1
+    /// Scanner offer POI types
+    pub scanner_offer_types: [u8; 3],                   // 3
 }
 
 impl SessionDiscovery {
     pub const SEED_PREFIX: &'static [u8] = b"session_discovery";
 
-    /// Account space: 8 (discriminator) + 1475 (data) = 1483 bytes
+    /// Account space: 8 (discriminator) + 1580 (data) = 1588 bytes
     pub const SPACE: usize = 8
         + 32                      // session
         + PACKED_TILES_SIZE       // discovered_tiles
@@ -409,7 +444,16 @@ impl SessionDiscovery {
         + (MAX_ENEMIES * 6)       // discovered_enemies
         + 12                      // current_boss_id
         + 1                       // current_echo_present
-        + ECHO_DATA_SIZE;         // current_echo_data
+        + ECHO_DATA_SIZE          // current_echo_data
+        + 1                       // active_offer_type
+        + 1                       // active_offer_poi_index
+        + (6 * 12)                // shop_offers (6 * DiscoveryShopOffer)
+        + 1                       // shop_reroll_count
+        + 1                       // shop_active
+        + (3 * 10)                // cache_offer_items (3 * DiscoveryOfferItem)
+        + 3                       // oil_offer_oils
+        + 1                       // scanner_offer_count
+        + 3;                      // scanner_offer_types
 
     /// Sync a single tile's discovery state from GeneratedMap to SessionDiscovery.
     /// Returns true if the tile was newly discovered.
@@ -581,6 +625,15 @@ mod tests {
             current_boss_id: [0u8; 12],
             current_echo_present: 0,
             current_echo_data: [0u8; ECHO_DATA_SIZE],
+            active_offer_type: 0,
+            active_offer_poi_index: 0,
+            shop_offers: [DiscoveryShopOffer::default(); 6],
+            shop_reroll_count: 0,
+            shop_active: 0,
+            cache_offer_items: [DiscoveryOfferItem::default(); 3],
+            oil_offer_oils: [0u8; 3],
+            scanner_offer_count: 0,
+            scanner_offer_types: [0u8; 3],
         }
     }
 
@@ -591,9 +644,10 @@ mod tests {
     #[test]
     fn test_session_discovery_space() {
         let expected = 8 + 32 + 313 + 313 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + (64 * 5) + 1
-            + 1 + (48 * 6) + 12 + 1 + 179;
+            + 1 + (48 * 6) + 12 + 1 + 179
+            + 1 + 1 + (6 * 12) + 1 + 1 + (3 * 10) + 3 + 1 + 3;
         assert_eq!(SessionDiscovery::SPACE, expected);
-        assert_eq!(SessionDiscovery::SPACE, 1475);
+        assert_eq!(SessionDiscovery::SPACE, 1588);
     }
 
     // =========================================================================

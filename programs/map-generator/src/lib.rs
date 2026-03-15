@@ -468,6 +468,70 @@ pub mod map_generator {
         Ok(())
     }
 
+    /// Updates the active offer data in SessionDiscovery.
+    /// Called via CPI from poi-system when an offer is generated, rerolled, or consumed.
+    pub fn update_active_offer(
+        ctx: Context<UpdateActiveOffer>,
+        offer_type: u8,
+        poi_index: u8,
+        data: Vec<u8>,
+    ) -> Result<()> {
+        let discovery = &mut ctx.accounts.session_discovery;
+        discovery.active_offer_type = offer_type;
+        discovery.active_offer_poi_index = poi_index;
+
+        match offer_type {
+            0 => {
+                // Clear offer — no data needed
+            }
+            1 => {
+                // Shop: 6 * (8 item_id + 1 tier + 2 price + 1 purchased) + 1 reroll + 1 active = 74 bytes
+                require!(data.len() >= 74, MapGeneratorError::InvalidOfferData);
+                for i in 0..6 {
+                    let offset = i * 12;
+                    let mut item_id = [0u8; 8];
+                    item_id.copy_from_slice(&data[offset..offset + 8]);
+                    discovery.shop_offers[i] = state::DiscoveryShopOffer {
+                        item_id,
+                        tier: data[offset + 8],
+                        price: u16::from_le_bytes([data[offset + 9], data[offset + 10]]),
+                        purchased: data[offset + 11],
+                    };
+                }
+                discovery.shop_reroll_count = data[72];
+                discovery.shop_active = data[73];
+            }
+            2 => {
+                // Cache: 3 * (8 item_id + 1 rarity + 1 tier) = 30 bytes
+                require!(data.len() >= 30, MapGeneratorError::InvalidOfferData);
+                for i in 0..3 {
+                    let offset = i * 10;
+                    let mut item_id = [0u8; 8];
+                    item_id.copy_from_slice(&data[offset..offset + 8]);
+                    discovery.cache_offer_items[i] = state::DiscoveryOfferItem {
+                        item_id,
+                        rarity: data[offset + 8],
+                        tier: data[offset + 9],
+                    };
+                }
+            }
+            3 => {
+                // Oil: 3 oil flags
+                require!(data.len() >= 3, MapGeneratorError::InvalidOfferData);
+                discovery.oil_offer_oils.copy_from_slice(&data[..3]);
+            }
+            4 => {
+                // Scanner: 1 count + 3 poi_types = 4 bytes
+                require!(data.len() >= 4, MapGeneratorError::InvalidOfferData);
+                discovery.scanner_offer_count = data[0];
+                discovery.scanner_offer_types.copy_from_slice(&data[1..4]);
+            }
+            _ => return Err(MapGeneratorError::InvalidOfferData.into()),
+        }
+
+        Ok(())
+    }
+
     /// Overwrites discovered enemies in SessionDiscovery.
     /// Called via CPI from gameplay-state after movement reveals new tiles.
     ///
@@ -1297,6 +1361,24 @@ pub struct UndelegateSessionDiscovery<'info> {
 /// Called via CPI from poi-system when POIs are discovered.
 #[derive(Accounts)]
 pub struct RecordDiscoveredPoi<'info> {
+    #[account(
+        mut,
+        seeds = [SessionDiscovery::SEED_PREFIX, session.key().as_ref()],
+        bump = session_discovery.bump,
+        has_one = session,
+    )]
+    pub session_discovery: Account<'info, SessionDiscovery>,
+
+    /// CHECK: Session PDA for seed derivation.
+    pub session: UncheckedAccount<'info>,
+
+    pub session_signer: Signer<'info>,
+}
+
+/// Context for writing active offer data into SessionDiscovery.
+/// Called via CPI from poi-system when offers are generated, rerolled, or consumed.
+#[derive(Accounts)]
+pub struct UpdateActiveOffer<'info> {
     #[account(
         mut,
         seeds = [SessionDiscovery::SEED_PREFIX, session.key().as_ref()],

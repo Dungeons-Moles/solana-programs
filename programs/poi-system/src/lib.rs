@@ -194,6 +194,32 @@ fn reveal_manhattan_radius_cpi<'info>(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn update_active_offer_cpi<'info>(
+    session_discovery: &AccountInfo<'info>,
+    session: &AccountInfo<'info>,
+    session_signer: &AccountInfo<'info>,
+    map_generator_program: &AccountInfo<'info>,
+    offer_type: u8,
+    poi_index: u8,
+    data: Vec<u8>,
+) -> Result<()> {
+    map_generator::cpi::update_active_offer(
+        CpiContext::new(
+            map_generator_program.clone(),
+            map_generator::cpi::accounts::UpdateActiveOffer {
+                session_discovery: session_discovery.clone(),
+                session: session.clone(),
+                session_signer: session_signer.clone(),
+            },
+        ),
+        offer_type,
+        poi_index,
+        data,
+    )?;
+    Ok(())
+}
+
 fn record_discovered_poi_cpi<'info>(
     session_discovery: &AccountInfo<'info>,
     session: &AccountInfo<'info>,
@@ -219,6 +245,71 @@ fn record_discovered_poi_cpi<'info>(
         map_pois_index,
     )?;
     Ok(())
+}
+
+/// Attempt to dual-write offer data to SessionDiscovery via CPI.
+/// Only calls the CPI if all three optional accounts are present.
+fn try_update_active_offer<'info>(
+    session_discovery: &Option<UncheckedAccount<'info>>,
+    session: &Option<UncheckedAccount<'info>>,
+    session_signer: &AccountInfo<'info>,
+    map_generator_program: &Option<UncheckedAccount<'info>>,
+    offer_type: u8,
+    poi_index: u8,
+    data: Vec<u8>,
+) -> Result<()> {
+    if let (Some(ref sd), Some(ref sess), Some(ref mgp)) =
+        (session_discovery, session, map_generator_program)
+    {
+        update_active_offer_cpi(
+            &sd.to_account_info(),
+            &sess.to_account_info(),
+            session_signer,
+            &mgp.to_account_info(),
+            offer_type,
+            poi_index,
+            data,
+        )?;
+    }
+    Ok(())
+}
+
+/// Serialize shop state into 74-byte data blob for update_active_offer CPI.
+fn serialize_shop_offer_data(shop_state: &ShopState) -> Vec<u8> {
+    let mut data = Vec::with_capacity(74);
+    for offer in &shop_state.offers {
+        data.extend_from_slice(&offer.item_id);
+        data.push(offer.tier);
+        data.extend_from_slice(&offer.price.to_le_bytes());
+        data.push(if offer.purchased { 1 } else { 0 });
+    }
+    data.push(shop_state.reroll_count);
+    data.push(if shop_state.active { 1 } else { 0 });
+    data
+}
+
+/// Serialize cache offer items into 30-byte data blob for update_active_offer CPI.
+fn serialize_cache_offer_data(items: &[state::OfferItem; 3]) -> Vec<u8> {
+    let mut data = Vec::with_capacity(30);
+    for item in items {
+        data.extend_from_slice(&item.item_id);
+        data.push(item.rarity);
+        data.push(item.tier);
+    }
+    data
+}
+
+/// Serialize oil offer into 3-byte data blob for update_active_offer CPI.
+fn serialize_oil_offer_data(oils: &[u8; 3]) -> Vec<u8> {
+    oils.to_vec()
+}
+
+/// Serialize scanner offer into 4-byte data blob for update_active_offer CPI.
+fn serialize_scanner_offer_data(offer: &state::ScannerOffer) -> Vec<u8> {
+    let mut data = Vec::with_capacity(4);
+    data.push(offer.count);
+    data.extend_from_slice(&offer.poi_types);
+    data
 }
 
 fn is_within_visibility_radius(center_x: u8, center_y: u8, x: u8, y: u8, radius: u8) -> bool {
@@ -1225,6 +1316,17 @@ pub mod poi_system {
             generated_at_seed: seed,
         });
 
+        // Dual-write cache offer data to SessionDiscovery
+        try_update_active_offer(
+            &ctx.accounts.session_discovery,
+            &ctx.accounts.session,
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.map_generator_program,
+            2, // cache
+            poi_index,
+            serialize_cache_offer_data(&items),
+        )?;
+
         emit!(CacheOfferGenerated {
             session: map_pois.session,
             poi_index,
@@ -1379,6 +1481,17 @@ pub mod poi_system {
 
         // Persist in MapPois
         map_pois.oil_offers.push(oil_offer);
+
+        // Dual-write oil offer data to SessionDiscovery
+        try_update_active_offer(
+            &ctx.accounts.session_discovery,
+            &ctx.accounts.session,
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.map_generator_program,
+            3, // oil
+            poi_index,
+            serialize_oil_offer_data(&oil_offer.oils),
+        )?;
 
         emit!(OilOfferGenerated {
             session: map_pois.session,
@@ -1547,6 +1660,17 @@ pub mod poi_system {
 
         copy_shop_offers(&mut map_pois.shop_state, &generated.offers, false);
 
+        // Dual-write shop offer data to SessionDiscovery
+        try_update_active_offer(
+            &ctx.accounts.session_discovery,
+            &ctx.accounts.session,
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.map_generator_program,
+            1, // shop
+            poi_index,
+            serialize_shop_offer_data(&map_pois.shop_state),
+        )?;
+
         emit!(ShopEntered {
             session: map_pois.session,
             poi_index,
@@ -1598,6 +1722,17 @@ pub mod poi_system {
             ctx.bumps.poi_authority,
             offer.item_id,
             offer.tier,
+        )?;
+
+        // Dual-write updated shop state to SessionDiscovery (purchased flag changed)
+        try_update_active_offer(
+            &ctx.accounts.session_discovery,
+            &ctx.accounts.session,
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.map_generator_program,
+            1, // shop
+            map_pois.shop_state.poi_index,
+            serialize_shop_offer_data(&map_pois.shop_state),
         )?;
 
         emit!(ItemPurchased {
@@ -1669,6 +1804,17 @@ pub mod poi_system {
         let generated = offers::generate_smuggler_hatch_offers(act, w1, w2, seed, pool);
 
         copy_shop_offers(&mut map_pois.shop_state, &generated.offers, true);
+
+        // Dual-write rerolled shop offers to SessionDiscovery
+        try_update_active_offer(
+            &ctx.accounts.session_discovery,
+            &ctx.accounts.session,
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.map_generator_program,
+            1, // shop
+            map_pois.shop_state.poi_index,
+            serialize_shop_offer_data(&map_pois.shop_state),
+        )?;
 
         emit!(ShopRerolled {
             session: map_pois.session,
@@ -2148,6 +2294,17 @@ pub mod poi_system {
 
         let offer = build_scanner_offer(poi_index, &map_pois.pois, &ctx.accounts.generated_map, seed);
         map_pois.scanner_offers.push(offer);
+
+        // Dual-write scanner offer data to SessionDiscovery
+        try_update_active_offer(
+            &ctx.accounts.session_discovery,
+            &ctx.accounts.session,
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.map_generator_program,
+            4, // scanner
+            poi_index,
+            serialize_scanner_offer_data(&offer),
+        )?;
 
         emit!(ScannerOfferGenerated {
             session: map_pois.session,
@@ -2866,6 +3023,19 @@ pub struct InteractPickItem<'info> {
 
     /// Player initiating the interaction
     pub player: Signer<'info>,
+
+    /// Optional SessionDiscovery for offer data dual-write.
+    /// CHECK: Passed through to map-generator CPI; validated there.
+    #[account(mut)]
+    pub session_discovery: Option<UncheckedAccount<'info>>,
+
+    /// Session PDA for SessionDiscovery CPI
+    /// CHECK: Only used for CPI seed derivation when session_discovery is present.
+    pub session: Option<UncheckedAccount<'info>>,
+
+    /// Map generator program for offer data CPI
+    /// CHECK: Program ID validated by Anchor CPI.
+    pub map_generator_program: Option<UncheckedAccount<'info>>,
 }
 
 /// Context for interacting with a Tool Oil Rack (L4)
@@ -2913,6 +3083,19 @@ pub struct InteractToolOil<'info> {
 
     /// Player initiating the interaction
     pub player: Signer<'info>,
+
+    /// Optional SessionDiscovery for offer data dual-write.
+    /// CHECK: Passed through to map-generator CPI; validated there.
+    #[account(mut)]
+    pub session_discovery: Option<UncheckedAccount<'info>>,
+
+    /// Session PDA for SessionDiscovery CPI
+    /// CHECK: Only used for CPI seed derivation when session_discovery is present.
+    pub session: Option<UncheckedAccount<'info>>,
+
+    /// Map generator program for offer data CPI
+    /// CHECK: Program ID validated by Anchor CPI.
+    pub map_generator_program: Option<UncheckedAccount<'info>>,
 }
 
 /// Context for entering the Smuggler Hatch shop (L9)
@@ -2945,6 +3128,19 @@ pub struct EnterShop<'info> {
 
     /// Player initiating the interaction
     pub player: Signer<'info>,
+
+    /// Optional SessionDiscovery for offer data dual-write.
+    /// CHECK: Passed through to map-generator CPI; validated there.
+    #[account(mut)]
+    pub session_discovery: Option<UncheckedAccount<'info>>,
+
+    /// Session PDA for SessionDiscovery CPI
+    /// CHECK: Only used for CPI seed derivation when session_discovery is present.
+    pub session: Option<UncheckedAccount<'info>>,
+
+    /// Map generator program for offer data CPI
+    /// CHECK: Program ID validated by Anchor CPI.
+    pub map_generator_program: Option<UncheckedAccount<'info>>,
 }
 
 /// Context for purchasing from the shop
@@ -3001,6 +3197,19 @@ pub struct ShopPurchase<'info> {
 
     /// Player making the purchase
     pub player: Signer<'info>,
+
+    /// Optional SessionDiscovery for offer data dual-write.
+    /// CHECK: Passed through to map-generator CPI; validated there.
+    #[account(mut)]
+    pub session_discovery: Option<UncheckedAccount<'info>>,
+
+    /// Session PDA for SessionDiscovery CPI
+    /// CHECK: Only used for CPI seed derivation when session_discovery is present.
+    pub session: Option<UncheckedAccount<'info>>,
+
+    /// Map generator program for offer data CPI
+    /// CHECK: Program ID validated by Anchor CPI.
+    pub map_generator_program: Option<UncheckedAccount<'info>>,
 }
 
 /// Context for rerolling shop offers
@@ -3041,6 +3250,19 @@ pub struct ShopReroll<'info> {
 
     /// Player rerolling
     pub player: Signer<'info>,
+
+    /// Optional SessionDiscovery for offer data dual-write.
+    /// CHECK: Passed through to map-generator CPI; validated there.
+    #[account(mut)]
+    pub session_discovery: Option<UncheckedAccount<'info>>,
+
+    /// Session PDA for SessionDiscovery CPI
+    /// CHECK: Only used for CPI seed derivation when session_discovery is present.
+    pub session: Option<UncheckedAccount<'info>>,
+
+    /// Map generator program for offer data CPI
+    /// CHECK: Program ID validated by Anchor CPI.
+    pub map_generator_program: Option<UncheckedAccount<'info>>,
 }
 
 /// Context for leaving the shop
@@ -3337,6 +3559,19 @@ pub struct GenerateScannerOffer<'info> {
 
     /// Player activating
     pub player: Signer<'info>,
+
+    /// Optional SessionDiscovery for offer data dual-write.
+    /// CHECK: Passed through to map-generator CPI; validated there.
+    #[account(mut)]
+    pub session_discovery: Option<UncheckedAccount<'info>>,
+
+    /// Session PDA for SessionDiscovery CPI
+    /// CHECK: Only used for CPI seed derivation when session_discovery is present.
+    pub session: Option<UncheckedAccount<'info>>,
+
+    /// Map generator program for offer data CPI
+    /// CHECK: Program ID validated by Anchor CPI.
+    pub map_generator_program: Option<UncheckedAccount<'info>>,
 }
 
 /// Context for activating a Seismic Scanner (L7)

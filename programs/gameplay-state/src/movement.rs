@@ -1,7 +1,8 @@
 use crate::constants::{BASE_DIG_COST, FLOOR_MOVE_COST, MIN_DIG_COST};
 use crate::errors::GameplayStateError;
-use crate::state::Phase;
+use crate::state::{MapEnemies, Phase};
 use anchor_lang::prelude::*;
+use map_generator::constants::PACKED_TILES_SIZE;
 
 /// Calculates Chebyshev distance (max of x/y difference) between two points.
 /// Used for enemy detection radius (enemies within 3 tiles move during night).
@@ -145,9 +146,39 @@ pub fn get_duel_boss_id_vrf(
     Ok(boss.id)
 }
 
+/// Compute all enemies on discovered tiles for SessionDiscovery sync.
+pub fn compute_visible_enemies(
+    map_enemies: &MapEnemies,
+    discovered_tiles: &[u8; PACKED_TILES_SIZE],
+    map_width: u8,
+) -> Vec<map_generator::state::DiscoveredEnemy> {
+    let mut result = Vec::new();
+    for (idx, enemy) in map_enemies.enemies.iter().enumerate() {
+        if enemy.defeated {
+            continue;
+        }
+        let tile_index = (enemy.y as usize) * (map_width as usize) + (enemy.x as usize);
+        let byte_idx = tile_index / 8;
+        let bit_idx = tile_index % 8;
+        if byte_idx < PACKED_TILES_SIZE && (discovered_tiles[byte_idx] >> bit_idx) & 1 == 1 {
+            result.push(map_generator::state::DiscoveredEnemy {
+                archetype_id: enemy.archetype_id,
+                tier: enemy.tier,
+                x: enemy.x,
+                y: enemy.y,
+                defeated: if enemy.defeated { 1 } else { 0 },
+                map_enemies_index: idx as u8,
+            });
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::{EnemyInstance, MapEnemies};
+    use anchor_lang::prelude::Pubkey;
 
     #[test]
     fn test_chebyshev_distance_same_point() {
@@ -229,5 +260,38 @@ mod tests {
         assert!(!should_process_target_enemy_combat(true, false, true));
         assert!(!should_process_target_enemy_combat(false, true, true));
         assert!(!should_process_target_enemy_combat(false, false, false));
+    }
+
+    #[test]
+    fn test_compute_visible_enemies_excludes_defeated() {
+        let mut discovered_tiles = [0u8; PACKED_TILES_SIZE];
+        discovered_tiles[0] = 0b0000_0011;
+
+        let map_enemies = MapEnemies {
+            session: Pubkey::default(),
+            enemies: vec![
+                EnemyInstance {
+                    archetype_id: 0,
+                    tier: 0,
+                    x: 0,
+                    y: 0,
+                    defeated: false,
+                },
+                EnemyInstance {
+                    archetype_id: 1,
+                    tier: 1,
+                    x: 1,
+                    y: 0,
+                    defeated: true,
+                },
+            ],
+            count: 2,
+            bump: 0,
+        };
+
+        let visible = compute_visible_enemies(&map_enemies, &discovered_tiles, 50);
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].archetype_id, 0);
+        assert_eq!(visible[0].map_enemies_index, 0);
     }
 }

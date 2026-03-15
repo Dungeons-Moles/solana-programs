@@ -38,6 +38,7 @@ import {
   getMapPoisPda,
   getDuelSessionPda,
   getGauntletSessionPda,
+  getSessionDiscoveryPda,
   deriveDelegateAccounts,
 } from "../shared/pda-helpers";
 import {
@@ -364,6 +365,8 @@ const moveUntilDeadOrBoss = async (
           mapPois: mapPoisPda,
           poiSystemProgram: PROGRAM_IDS.poiSystem,
           gameplayVrfState: null,
+          sessionDiscovery: null,
+          gauntletEchoes: null,
           player: sessionSigner.publicKey,
         } as any)
       .transaction();
@@ -484,6 +487,9 @@ const moveUntilDeadOrBoss = async (
         inventory: inventoryPda,
         gameplayAuthority: gameplayAuthorityPda,
         playerInventoryProgram: PROGRAM_IDS.playerInventory,
+        gameplayVrfState: null,
+        sessionDiscovery: null,
+        mapGeneratorProgram: null,
         player: sessionSigner.publicKey,
       } as any)
       .instruction();
@@ -593,6 +599,7 @@ const endSessionOnBase = async (
   user: Keypair,
   campaignLevel: number,
 ): Promise<void> => {
+  const [sessionDiscoveryPda] = getSessionDiscoveryPda(sessionPda);
   const endSessionIx = await programs.sessionManager.methods
     .endSession(campaignLevel)
     .accounts({
@@ -601,6 +608,7 @@ const endSessionOnBase = async (
       mapEnemies: mapEnemiesPda,
       generatedMap: generatedMapPda,
       mapPois: mapPoisPda,
+      sessionDiscovery: sessionDiscoveryPda,
       playerProfile: playerProfilePda,
       player: user.publicKey,
       sessionSigner: sessionSigner.publicKey,
@@ -609,6 +617,7 @@ const endSessionOnBase = async (
       mapVrfState: null,
       poiVrfState: null,
       gameplayVrfState: null,
+      gauntletEchoes: null,
       playerInventoryProgram: PROGRAM_IDS.playerInventory,
       gameplayStateProgram: PROGRAM_IDS.gameplayState,
       playerProfileProgram: PROGRAM_IDS.playerProfile,
@@ -743,12 +752,13 @@ describe("Boss Death E2E: Campaign (level 1)", function () {
       .signers([user]).rpc();
 
     const [sessionNoncesPda] = getSessionNoncesPda(user.publicKey);
+    const [sessionDiscoveryPda] = getSessionDiscoveryPda(sessionPda);
     await programs.sessionManager.methods.startSession(campaignLevel)
       .accounts({
         sessionNonces: sessionNoncesPda,
         gameSession: sessionPda, sessionCounter: sessionCounterPda, playerProfile: playerProfilePda,
         player: user.publicKey, sessionSigner: sessionSigner.publicKey, mapConfig: mapConfigPda,
-        generatedMap: generatedMapPda, gameState: gameStatePda, mapEnemies: mapEnemiesPda,
+        generatedMap: generatedMapPda, sessionDiscovery: sessionDiscoveryPda, gameState: gameStatePda, mapEnemies: mapEnemiesPda,
         mapPois: mapPoisPda, inventory: inventoryPda,
         mapGeneratorProgram: PROGRAM_IDS.mapGenerator, gameplayStateProgram: PROGRAM_IDS.gameplayState,
         poiSystemProgram: PROGRAM_IDS.poiSystem, playerInventoryProgram: PROGRAM_IDS.playerInventory,
@@ -843,13 +853,14 @@ describe("Boss Death E2E: Duel", function () {
       .signers([user]).rpc();
 
     const [duelSessionNoncesPda] = getSessionNoncesPda(user.publicKey);
+    const [duelSessionDiscoveryPda] = getSessionDiscoveryPda(sessionPda);
     await programs.sessionManager.methods.startDuelSession()
       .accounts({
         sessionNonces: duelSessionNoncesPda,
         gameSession: sessionPda, sessionCounter: sessionCounterPda, playerProfile: playerProfilePda,
         player: user.publicKey, sessionSigner: sessionSigner.publicKey,
         sessionManagerAuthority: sessionManagerAuthorityPda, mapConfig: mapConfigPda,
-        generatedMap: generatedMapPda, gameState: gameStatePda, mapEnemies: mapEnemiesPda,
+        generatedMap: generatedMapPda, sessionDiscovery: duelSessionDiscoveryPda, gameState: gameStatePda, mapEnemies: mapEnemiesPda,
         mapPois: mapPoisPda, inventory: inventoryPda,
         mapVrfState: null,
         poiVrfState: null,
@@ -935,13 +946,14 @@ describe("Boss Death E2E: Gauntlet", function () {
       .signers([user]).rpc();
 
     const [gauntletSessionNoncesPda] = getSessionNoncesPda(user.publicKey);
+    const [gauntletSessionDiscoveryPda] = getSessionDiscoveryPda(sessionPda);
     await programs.sessionManager.methods.startGauntletSession()
       .accounts({
         sessionNonces: gauntletSessionNoncesPda,
         gameSession: sessionPda, sessionCounter: sessionCounterPda, playerProfile: playerProfilePda,
         player: user.publicKey, sessionSigner: sessionSigner.publicKey,
         mapConfig: mapConfigPda,
-        generatedMap: generatedMapPda, gameState: gameStatePda, mapEnemies: mapEnemiesPda,
+        generatedMap: generatedMapPda, sessionDiscovery: gauntletSessionDiscoveryPda, gameState: gameStatePda, mapEnemies: mapEnemiesPda,
         mapPois: mapPoisPda, inventory: inventoryPda,
         mapVrfState: null,
         poiVrfState: null,

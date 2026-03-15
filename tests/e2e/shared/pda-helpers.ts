@@ -96,6 +96,15 @@ export function getMapVrfStatePda(
   );
 }
 
+export function getSessionDiscoveryPda(
+  sessionPda: PublicKey
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("session_discovery"), sessionPda.toBuffer()],
+    PROGRAM_IDS.mapGenerator
+  );
+}
+
 // ── Gameplay State PDAs ─────────────────────────────────────────────────────
 export function getGameStatePda(sessionPda: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
@@ -188,6 +197,15 @@ export function getGauntletEpochPoolPda(epochId: bigint): [PublicKey, number] {
   buf.writeBigUInt64LE(epochId);
   return PublicKey.findProgramAddressSync(
     [Buffer.from("gauntlet_epoch_pool"), buf],
+    PROGRAM_IDS.gameplayState
+  );
+}
+
+export function getGauntletEchoesPda(
+  sessionPda: PublicKey
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("gauntlet_echoes"), sessionPda.toBuffer()],
     PROGRAM_IDS.gameplayState
   );
 }

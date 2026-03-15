@@ -58,57 +58,77 @@ cargo clippy
 
 ## Local Testing
 
-Local testing uses a single Surfpool-based flow. Surfpool stays local while using Solana Devnet as the upstream base layer, and the programs are deployed through the runbooks.
+There are two options for running the local validator stack. Both require the Ephemeral Validator CLI and VRF oracle.
 
-1. Install Surfpool:
+### Prerequisites
 
 ```bash
+# Ephemeral Validator CLI
+npm install -g @magicblock-labs/ephemeral-validator@latest
+
+# Surfpool (only needed for Option B)
 curl -sL https://run.surfpool.run/ | bash
 ```
 
-2. Install the Ephemeral Validator CLI:
+### Option A: mb-test-validator with --bpf-program (recommended)
 
-```bash
-npm install -g @magicblock-labs/ephemeral-validator@latest
-```
+Loads programs at genesis — no deploy step needed. Faster and more reliable than `anchor deploy`.
 
-3. Build the programs:
+> **Note:** This method does not load Metaplex programs, so NFT marketplace features (minting, listing, buying skins/items) cannot be tested. Use Option B if you need Metaplex/NFT flows.
+
+1. Build the programs:
 
 ```bash
 anchor build
 ```
 
-4. Start Surfpool:
+2. Start the base validator with all programs pre-loaded:
 
 ```bash
-surfpool start --rpc-url https://api.devnet.solana.com
+mb-test-validator --reset --ledger .mb-ledger --rpc-port 8899 --faucet-port 9902 \
+  --bpf-program C8hK4qsqsSYQeqyXuTPTUUS3T7N74WnZCuzvChTpK1Mo target/deploy/gameplay_state.so \
+  --bpf-program GCy5GqvnJN99rgGtV6fMn8NtL9E7RoAyHDGzQv8me65j target/deploy/map_generator.so \
+  --bpf-program KiT25b86BSAF8yErcWwyuuWNaoXMpNf859NjH41TpSj target/deploy/poi_system.so \
+  --bpf-program 6w1XVMSTRmZU9AWCKVvKohGAHSFMENhda7vqhKPQ8TPn target/deploy/session_manager.so \
+  --bpf-program APRnvp41jEYnT1EnrdBTim7bodqE6v2RSgzv1CG7Qv7u target/deploy/player_inventory.so \
+  --bpf-program Ch3bbL1oQk2z5rX1jiun3KuSWZqnXZ1MnrfrtKj4MKun target/deploy/player_profile.so
 ```
 
-5. In a second terminal, start the ephemeral validator:
-
-```bash
-ephemeral-validator --remotes "http://localhost:8899" --remotes "ws://localhost:8900" -l "7799" --lifecycle ephemeral
-```
-
-6. In a third terminal, start the local VRF oracle. This oracle adds requests to the local test queue:
-
-```bash
-VRF_ORACLE_SKIP_PREFLIGHT="true" RPC_URL="http://localhost:8899" WEBSOCKET_URL="ws://localhost:8999" RUST_LOG=info vrf-oracle
-```
-
-7. Initialize the on-chain program state:
+3. Initialize the on-chain program state:
 
 ```bash
 anchor run init
 ```
 
-8. Initialize the Metaplex collections and marketplace config:
+### Option B: Surfpool with anchor deploy
+
+Surfpool stays local while using Solana Devnet as the upstream base layer. Supports all features including Metaplex/NFT marketplace.
+
+1. Build the programs:
 
 ```bash
-anchor run init-collections
+anchor build
 ```
 
-At this point the local stack is ready for gameplay, session lifecycle testing, and NFT flows against Surfpool.
+2. Start Surfpool (programs are deployed on devnet via runbooks):
+
+```bash
+surfpool start --rpc-url https://api.devnet.solana.com
+```
+
+### Start the Ephemeral Rollup validator and VRF oracle
+
+Both options require the ER validator and VRF oracle running in separate terminals:
+
+```bash
+ephemeral-validator --remotes "http://localhost:8899" --remotes "ws://localhost:8900" -l "7799" --lifecycle replica
+```
+
+```bash
+VRF_ORACLE_SKIP_PREFLIGHT="true" RPC_URL="http://localhost:8899" WEBSOCKET_URL="ws://localhost:8999" RUST_LOG=info vrf-oracle
+```
+
+At this point the local stack is ready for gameplay and session lifecycle testing. NFT flows are only available with Option B.
 
 ## Minting NFTs
 

@@ -146,6 +146,7 @@ fn reveal_radius_cpi<'info>(
     center_x: u8,
     center_y: u8,
     radius: u8,
+    session_discovery: Option<&AccountInfo<'info>>,
 ) -> Result<()> {
     map_generator::cpi::reveal_radius(
         CpiContext::new(
@@ -154,6 +155,7 @@ fn reveal_radius_cpi<'info>(
                 generated_map: generated_map.clone(),
                 session: session.clone(),
                 session_signer: session_signer.clone(),
+                session_discovery: session_discovery.cloned(),
             },
         ),
         center_x,
@@ -172,6 +174,7 @@ fn reveal_manhattan_radius_cpi<'info>(
     center_x: u8,
     center_y: u8,
     radius: u8,
+    session_discovery: Option<&AccountInfo<'info>>,
 ) -> Result<()> {
     map_generator::cpi::reveal_manhattan_radius(
         CpiContext::new(
@@ -180,6 +183,7 @@ fn reveal_manhattan_radius_cpi<'info>(
                 generated_map: generated_map.clone(),
                 session: session.clone(),
                 session_signer: session_signer.clone(),
+                session_discovery: session_discovery.cloned(),
             },
         ),
         center_x,
@@ -187,6 +191,33 @@ fn reveal_manhattan_radius_cpi<'info>(
         radius,
     )?;
 
+    Ok(())
+}
+
+fn record_discovered_poi_cpi<'info>(
+    session_discovery: &AccountInfo<'info>,
+    session: &AccountInfo<'info>,
+    session_signer: &AccountInfo<'info>,
+    map_generator_program: &AccountInfo<'info>,
+    poi_type: u8,
+    x: u8,
+    y: u8,
+    map_pois_index: u8,
+) -> Result<()> {
+    map_generator::cpi::record_discovered_poi(
+        CpiContext::new(
+            map_generator_program.clone(),
+            map_generator::cpi::accounts::RecordDiscoveredPoi {
+                session_discovery: session_discovery.clone(),
+                session: session.clone(),
+                session_signer: session_signer.clone(),
+            },
+        ),
+        poi_type,
+        x,
+        y,
+        map_pois_index,
+    )?;
     Ok(())
 }
 
@@ -198,20 +229,24 @@ fn is_within_visibility_radius(center_x: u8, center_y: u8, x: u8, y: u8, radius:
     distance_sq <= r * (r + 1)
 }
 
+/// Discovers waypoints in visibility radius. Returns indices of newly discovered waypoints.
 fn discover_visible_waypoints_in_map(
     map_pois: &mut MapPois,
     player_x: u8,
     player_y: u8,
     visibility_radius: u8,
-) {
+) -> Vec<u8> {
     let session = map_pois.session;
-    for poi in map_pois.pois.iter_mut() {
-        if poi.poi_type != 8 || poi.discovered {
+    let mut newly_discovered = Vec::new();
+    for (idx, poi) in map_pois.pois.iter_mut().enumerate() {
+        // Skip empty slots and already-discovered POIs
+        if poi.poi_type == 0 || poi.discovered {
             continue;
         }
 
         if is_within_visibility_radius(player_x, player_y, poi.x, poi.y, visibility_radius) {
             poi.discovered = true;
+            newly_discovered.push(idx as u8);
             emit!(WaypointDiscovered {
                 session,
                 x: poi.x,
@@ -219,10 +254,13 @@ fn discover_visible_waypoints_in_map(
             });
         }
     }
+    newly_discovered
 }
 
 fn is_valid_authorized_waypoint_visibility_radius(visibility_radius: u8) -> bool {
-    visibility_radius == NIGHT_VISION_RADIUS || visibility_radius == DAY_VISION_RADIUS
+    visibility_radius == NIGHT_VISION_RADIUS
+        || visibility_radius == DAY_VISION_RADIUS
+        || visibility_radius == SPAWN_VISION_RADIUS
 }
 
 fn is_tile_discovered(discovered_tiles: &[u8], width: u8, x: u8, y: u8) -> bool {
@@ -619,6 +657,72 @@ pub mod poi_system {
         Ok(())
     }
 
+    /// Refreshes existing MapPois for a campaign run without exposing the
+    /// campaign seed to the client. The seed is loaded from map-generator's
+    /// on-chain MapConfig using the provided campaign level.
+    pub fn refresh_map_pois_for_campaign(
+        ctx: Context<RefreshMapPoisForCampaign>,
+        act: u8,
+        week: u8,
+        campaign_level: u8,
+    ) -> Result<()> {
+        require_keys_eq!(
+            *ctx.accounts.session.owner,
+            SESSION_MANAGER_PROGRAM_ID,
+            PoiSystemError::InvalidSessionOwner
+        );
+        require!((1..=4).contains(&act), PoiSystemError::InvalidAct);
+        require!((1..=40).contains(&campaign_level), PoiSystemError::InvalidCampaignLevel);
+
+        let seed = ctx.accounts.map_config.seeds[(campaign_level - 1) as usize];
+        let generated_map = read_generated_map(&ctx.accounts.generated_map)?;
+        let poi_count = generated_map.poi_count as usize;
+
+        let map_pois = &mut ctx.accounts.map_pois;
+        map_pois.session = ctx.accounts.session.key();
+        map_pois.act = act;
+        map_pois.week = week;
+        map_pois.seed = seed;
+        map_pois.shop_state = ShopState::default();
+        map_pois.cache_offers = Vec::new();
+        map_pois.oil_offers = Vec::new();
+        map_pois.scanner_offers = Vec::new();
+
+        let exclude_counter_cache = matches!(
+            ctx.accounts.game_state.run_mode,
+            RunMode::Duel | RunMode::Gauntlet
+        );
+
+        let mut pois = Vec::with_capacity(poi_count);
+        for i in 0..poi_count {
+            let generated_poi = generated_map.pois[i];
+            let poi_type = generated_poi.poi_type;
+            if exclude_counter_cache && poi_type == pois::L13_COUNTER_CACHE.id {
+                continue;
+            }
+
+            pois.push(state::PoiInstance {
+                poi_type,
+                x: generated_poi.x,
+                y: generated_poi.y,
+                used: generated_poi.is_used,
+                discovered: poi_type == pois::L1_MOLE_DEN.id,
+                week_spawned: week,
+            });
+        }
+
+        map_pois.count = pois.len() as u8;
+        map_pois.pois = pois;
+
+        emit!(PoisInitialized {
+            session: map_pois.session,
+            count: map_pois.count,
+            act,
+        });
+
+        Ok(())
+    }
+
     /// Delegates map-pois PDA to MagicBlock from poi-system (its owner program).
     pub fn delegate_map_pois(
         ctx: Context<DelegateMapPois>,
@@ -911,6 +1015,11 @@ pub mod poi_system {
                 gameplay_vrf_state: ctx
                     .accounts
                     .gameplay_vrf_state
+                    .as_ref()
+                    .map(|a| a.to_account_info()),
+                gauntlet_echoes: ctx
+                    .accounts
+                    .gauntlet_echoes
                     .as_ref()
                     .map(|a| a.to_account_info()),
             },
@@ -1756,12 +1865,35 @@ pub mod poi_system {
             );
         }
 
-        discover_visible_waypoints_in_map(
+        let newly_discovered = discover_visible_waypoints_in_map(
             map_pois,
             game_state.position_x,
             game_state.position_y,
             visibility_radius,
         );
+
+        // Record newly discovered waypoints into SessionDiscovery
+        if let (Some(ref sd), Some(ref session), Some(ref mgp)) = (
+            &ctx.accounts.session_discovery,
+            &ctx.accounts.session,
+            &ctx.accounts.map_generator_program,
+        ) {
+            let session_info = session.to_account_info();
+            let mgp_info = mgp.to_account_info();
+            for idx in newly_discovered {
+                let poi = &map_pois.pois[idx as usize];
+                record_discovered_poi_cpi(
+                    &sd.to_account_info(),
+                    &session_info,
+                    &ctx.accounts.player.to_account_info(),
+                    &mgp_info,
+                    poi.poi_type,
+                    poi.x,
+                    poi.y,
+                    idx,
+                )?;
+            }
+        }
 
         Ok(())
     }
@@ -1782,12 +1914,34 @@ pub mod poi_system {
             PoiSystemError::InvalidVisionRadius
         );
 
-        discover_visible_waypoints_in_map(
+        let newly_discovered = discover_visible_waypoints_in_map(
             &mut ctx.accounts.map_pois,
             center_x,
             center_y,
             visibility_radius,
         );
+
+        // Record newly discovered waypoints into SessionDiscovery
+        if let (Some(ref sd), Some(ref session), Some(ref session_signer), Some(ref mgp)) = (
+            &ctx.accounts.session_discovery,
+            &ctx.accounts.session,
+            &ctx.accounts.session_signer,
+            &ctx.accounts.map_generator_program,
+        ) {
+            for idx in newly_discovered {
+                let poi = &ctx.accounts.map_pois.pois[idx as usize];
+                record_discovered_poi_cpi(
+                    &sd.to_account_info(),
+                    &session.to_account_info(),
+                    &session_signer.to_account_info(),
+                    &mgp.to_account_info(),
+                    poi.poi_type,
+                    poi.x,
+                    poi.y,
+                    idx,
+                )?;
+            }
+        }
 
         Ok(())
     }
@@ -1857,13 +2011,31 @@ pub mod poi_system {
             result.to_x,
             result.to_y,
             visibility_radius,
+            ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info()).as_ref(),
         )?;
-        discover_visible_waypoints_in_map(
+        let newly_discovered = discover_visible_waypoints_in_map(
             &mut ctx.accounts.map_pois,
             result.to_x,
             result.to_y,
             visibility_radius,
         );
+
+        // Record newly discovered waypoints into SessionDiscovery
+        if let Some(ref sd) = ctx.accounts.session_discovery {
+            for idx in newly_discovered {
+                let poi = &ctx.accounts.map_pois.pois[idx as usize];
+                record_discovered_poi_cpi(
+                    &sd.to_account_info(),
+                    &ctx.accounts.session.to_account_info(),
+                    &ctx.accounts.player.to_account_info(),
+                    &ctx.accounts.map_generator_program.to_account_info(),
+                    poi.poi_type,
+                    poi.x,
+                    poi.y,
+                    idx,
+                )?;
+            }
+        }
 
         emit!(FastTravelCompleted {
             session,
@@ -1900,6 +2072,7 @@ pub mod poi_system {
 
         // Mark POI as used (one-time)
         map_pois.pois[poi_index as usize].used = true;
+        let sd_info = ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info());
         reveal_manhattan_radius_cpi(
             &ctx.accounts.generated_map.to_account_info(),
             &ctx.accounts.session.to_account_info(),
@@ -1908,8 +2081,26 @@ pub mod poi_system {
             result.center_x,
             result.center_y,
             13,
+            sd_info.as_ref(),
         )?;
-        discover_visible_waypoints_in_map(map_pois, result.center_x, result.center_y, 13);
+        let newly_discovered_wps = discover_visible_waypoints_in_map(map_pois, result.center_x, result.center_y, 13);
+
+        // Record any waypoints discovered in the revealed area into SessionDiscovery
+        if let Some(ref sd) = sd_info {
+            for idx in newly_discovered_wps {
+                let poi = &map_pois.pois[idx as usize];
+                record_discovered_poi_cpi(
+                    sd,
+                    &ctx.accounts.session.to_account_info(),
+                    &ctx.accounts.player.to_account_info(),
+                    &ctx.accounts.map_generator_program.to_account_info(),
+                    poi.poi_type,
+                    poi.x,
+                    poi.y,
+                    idx,
+                )?;
+            }
+        }
 
         emit!(TilesRevealed {
             session: map_pois.session,
@@ -2022,7 +2213,9 @@ pub mod poi_system {
         if let Some((revealed_idx, _)) = nearest {
             let x = map_pois.pois[revealed_idx].x;
             let y = map_pois.pois[revealed_idx].y;
+            let revealed_poi_type = map_pois.pois[revealed_idx].poi_type;
             map_pois.pois[revealed_idx].discovered = true;
+            let sd_info = ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info());
             reveal_radius_cpi(
                 &ctx.accounts.generated_map.to_account_info(),
                 &ctx.accounts.session.to_account_info(),
@@ -2031,8 +2224,40 @@ pub mod poi_system {
                 x,
                 y,
                 1,
+                sd_info.as_ref(),
             )?;
-            discover_visible_waypoints_in_map(map_pois, x, y, 1);
+            let newly_discovered_wps = discover_visible_waypoints_in_map(map_pois, x, y, 1);
+
+            // Record any waypoints discovered in the revealed area
+            if let Some(ref sd) = sd_info {
+                for wp_idx in newly_discovered_wps {
+                    let wp = &map_pois.pois[wp_idx as usize];
+                    record_discovered_poi_cpi(
+                        sd,
+                        &ctx.accounts.session.to_account_info(),
+                        &ctx.accounts.player.to_account_info(),
+                        &ctx.accounts.map_generator_program.to_account_info(),
+                        wp.poi_type,
+                        wp.x,
+                        wp.y,
+                        wp_idx,
+                    )?;
+                }
+            }
+
+            // Record the discovered POI into SessionDiscovery
+            if let Some(ref sd) = sd_info {
+                record_discovered_poi_cpi(
+                    sd,
+                    &ctx.accounts.session.to_account_info(),
+                    &ctx.accounts.player.to_account_info(),
+                    &ctx.accounts.map_generator_program.to_account_info(),
+                    revealed_poi_type,
+                    x,
+                    y,
+                    revealed_idx as u8,
+                )?;
+            }
 
             emit!(PoiRevealed {
                 session: map_pois.session,
@@ -2362,6 +2587,43 @@ pub struct RefreshMapPois<'info> {
 }
 
 #[derive(Accounts)]
+pub struct RefreshMapPoisForCampaign<'info> {
+    #[account(
+        mut,
+        seeds = [MAP_POIS_SEED, map_pois.session.as_ref()],
+        bump = map_pois.bump
+    )]
+    pub map_pois: Account<'info, MapPois>,
+
+    /// CHECK: session key is validated against map_pois.session and owner.
+    #[account(
+        constraint = session.key() == map_pois.session @ PoiSystemError::InvalidSession,
+        owner = SESSION_MANAGER_PROGRAM_ID @ PoiSystemError::InvalidSessionOwner
+    )]
+    pub session: AccountInfo<'info>,
+
+    /// CHECK: Validated by owner check (must be owned by map-generator program).
+    #[account(
+        owner = MAP_GENERATOR_PROGRAM_ID @ PoiSystemError::InvalidGeneratedMap
+    )]
+    pub generated_map: AccountInfo<'info>,
+
+    #[account(
+        seeds = [map_generator::state::MapConfig::SEED_PREFIX],
+        bump = map_config.bump
+    )]
+    pub map_config: Account<'info, map_generator::state::MapConfig>,
+
+    #[account(
+        constraint = game_state.session == session.key() @ PoiSystemError::InvalidSession,
+        has_one = session_signer @ PoiSystemError::Unauthorized,
+    )]
+    pub game_state: Box<Account<'info, GameState>>,
+
+    pub session_signer: Signer<'info>,
+}
+
+#[derive(Accounts)]
 pub struct CloseMapPois<'info> {
     #[account(
         mut,
@@ -2529,6 +2791,11 @@ pub struct InteractRest<'info> {
     /// Optional GameplayVrfState for VRF-backed boss selection in skip_to_day CPI.
     /// CHECK: Passed through to gameplay-state CPI; validated there.
     pub gameplay_vrf_state: Option<AccountInfo<'info>>,
+
+    /// Optional GauntletEchoes for gauntlet echo resolution in skip_to_day CPI.
+    /// CHECK: Passed through to gameplay-state CPI; validated there.
+    #[account(mut)]
+    pub gauntlet_echoes: Option<AccountInfo<'info>>,
 
     /// Player initiating the interaction
     pub player: Signer<'info>,
@@ -2902,8 +3169,20 @@ pub struct DiscoverVisibleWaypoints<'info> {
     )]
     pub game_state: Box<Account<'info, GameState>>,
 
-    /// Player discovering
+    /// Player discovering (also acts as session_signer for CPI)
     pub player: Signer<'info>,
+
+    /// Optional SessionDiscovery for recording waypoints (mut for CPI write)
+    #[account(mut)]
+    pub session_discovery: Option<Box<Account<'info, map_generator::state::SessionDiscovery>>>,
+
+    /// Session PDA for SessionDiscovery CPI
+    /// CHECK: Only used for CPI seed derivation when session_discovery is present.
+    pub session: Option<UncheckedAccount<'info>>,
+
+    /// Map generator program for record_discovered_poi CPI
+    /// CHECK: Program ID validated by Anchor CPI.
+    pub map_generator_program: Option<UncheckedAccount<'info>>,
 }
 
 #[derive(Accounts)]
@@ -2920,6 +3199,21 @@ pub struct DiscoverVisibleWaypointsAuthorized<'info> {
         constraint = gameplay_authority.is_signer @ PoiSystemError::Unauthorized,
     )]
     pub gameplay_authority: AccountInfo<'info>,
+
+    /// Optional SessionDiscovery for recording waypoints
+    pub session_discovery: Option<Box<Account<'info, map_generator::state::SessionDiscovery>>>,
+
+    /// Session PDA for SessionDiscovery CPI
+    /// CHECK: Only used for CPI seed derivation when session_discovery is present.
+    pub session: Option<UncheckedAccount<'info>>,
+
+    /// Session signer for record_discovered_poi CPI
+    /// CHECK: Must be a signer on the outer transaction (passed through from gameplay-state).
+    pub session_signer: Option<UncheckedAccount<'info>>,
+
+    /// Map generator program for record_discovered_poi CPI
+    /// CHECK: Program ID validated by Anchor CPI.
+    pub map_generator_program: Option<UncheckedAccount<'info>>,
 }
 
 /// Context for fast travel between Rail Waypoints (L8)
@@ -2964,6 +3258,11 @@ pub struct FastTravel<'info> {
 
     pub map_generator_program: Program<'info, map_generator::program::MapGenerator>,
 
+    /// Optional SessionDiscovery for fog-of-war dual-write.
+    /// CHECK: Passed through to map-generator CPI; validated there.
+    #[account(mut)]
+    pub session_discovery: Option<UncheckedAccount<'info>>,
+
     /// Player traveling
     pub player: Signer<'info>,
 }
@@ -2998,6 +3297,11 @@ pub struct InteractSurveyBeacon<'info> {
     pub session: UncheckedAccount<'info>,
 
     pub map_generator_program: Program<'info, map_generator::program::MapGenerator>,
+
+    /// Optional SessionDiscovery for fog-of-war dual-write.
+    /// CHECK: Passed through to map-generator CPI; validated there.
+    #[account(mut)]
+    pub session_discovery: Option<UncheckedAccount<'info>>,
 
     /// Player activating
     pub player: Signer<'info>,
@@ -3065,6 +3369,11 @@ pub struct InteractSeismicScanner<'info> {
     pub session: UncheckedAccount<'info>,
 
     pub map_generator_program: Program<'info, map_generator::program::MapGenerator>,
+
+    /// Optional SessionDiscovery for fog-of-war dual-write.
+    /// CHECK: Passed through to map-generator CPI; validated there.
+    #[account(mut)]
+    pub session_discovery: Option<UncheckedAccount<'info>>,
 
     /// Player activating
     pub player: Signer<'info>,

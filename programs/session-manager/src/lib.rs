@@ -168,6 +168,19 @@ pub mod session_manager {
             campaign_level,
         )?;
 
+        // 1b. Allocate empty SessionDiscovery (populated on ER during map generation)
+        map_generator::cpi::init_session_discovery(
+            CpiContext::new(
+                ctx.accounts.map_generator_program.to_account_info(),
+                map_generator::cpi::accounts::InitSessionDiscovery {
+                    payer: ctx.accounts.player.to_account_info(),
+                    session: ctx.accounts.game_session.to_account_info(),
+                    session_discovery: ctx.accounts.session_discovery.to_account_info(),
+                    system_program: ctx.accounts.system_program.to_account_info(),
+                },
+            ),
+        )?;
+
         // 2. Initialize Game State with placeholder map dimensions (50x50, spawn 0,0).
         // Map dimensions and spawn position will be synced by sync_map_enemies on ER
         // after fill_map_with_seed populates the GeneratedMap with actual maze content.
@@ -325,6 +338,19 @@ pub mod session_manager {
                 },
             ),
             campaign_level,
+        )?;
+
+        // Allocate empty SessionDiscovery (populated on ER during map generation)
+        map_generator::cpi::init_session_discovery(
+            CpiContext::new(
+                ctx.accounts.map_generator_program.to_account_info(),
+                map_generator::cpi::accounts::InitSessionDiscovery {
+                    payer: ctx.accounts.player.to_account_info(),
+                    session: ctx.accounts.game_session.to_account_info(),
+                    session_discovery: ctx.accounts.session_discovery.to_account_info(),
+                    system_program: ctx.accounts.system_program.to_account_info(),
+                },
+            ),
         )?;
 
         // Initialize Game State with placeholder dimensions; actual spawn set by sync_map_enemies on ER.
@@ -496,6 +522,19 @@ pub mod session_manager {
                 },
             ),
             campaign_level,
+        )?;
+
+        // Allocate empty SessionDiscovery (populated on ER during map generation)
+        map_generator::cpi::init_session_discovery(
+            CpiContext::new(
+                ctx.accounts.map_generator_program.to_account_info(),
+                map_generator::cpi::accounts::InitSessionDiscovery {
+                    payer: ctx.accounts.player.to_account_info(),
+                    session: ctx.accounts.game_session.to_account_info(),
+                    session_discovery: ctx.accounts.session_discovery.to_account_info(),
+                    system_program: ctx.accounts.system_program.to_account_info(),
+                },
+            ),
         )?;
 
         // Initialize Game State with placeholder dimensions; actual spawn set by sync_map_enemies on ER.
@@ -1080,6 +1119,15 @@ pub mod session_manager {
             &ctx.accounts.session_signer.to_account_info(),
         )?;
 
+        // 1b. Close session_discovery (depends on session)
+        close_session_discovery_cpi(
+            &ctx.accounts.map_generator_program,
+            &ctx.accounts.session_discovery,
+            &ctx.accounts.game_session.to_account_info(),
+            &ctx.accounts.player,
+            &ctx.accounts.session_signer.to_account_info(),
+        )?;
+
         // 2. Close generated_map (depends on session)
         close_generated_map_cpi(
             &ctx.accounts.map_generator_program,
@@ -1097,6 +1145,17 @@ pub mod session_manager {
             &ctx.accounts.player,
             &ctx.accounts.session_signer.to_account_info(),
         )?;
+
+        // 3b. Close gauntlet_echoes if present (depends on game_state)
+        if let Some(ref ge) = ctx.accounts.gauntlet_echoes {
+            close_gauntlet_echoes_cpi(
+                &ctx.accounts.gameplay_state_program.to_account_info(),
+                &ge.to_account_info(),
+                &ctx.accounts.game_state.to_account_info(),
+                &ctx.accounts.player,
+                &ctx.accounts.session_signer.to_account_info(),
+            )?;
+        }
 
         // 4. Close game_state
         close_game_state_via_session_signer_cpi(
@@ -1328,6 +1387,16 @@ pub mod session_manager {
             )?;
         }
 
+        if *ctx.accounts.session_discovery.owner == MAP_GENERATOR_PROGRAM_ID {
+            close_session_discovery_cpi(
+                &ctx.accounts.map_generator_program,
+                &ctx.accounts.session_discovery,
+                &ctx.accounts.game_session.to_account_info(),
+                &ctx.accounts.player,
+                &ctx.accounts.session_signer.to_account_info(),
+            )?;
+        }
+
         if *ctx.accounts.generated_map.owner == MAP_GENERATOR_PROGRAM_ID {
             close_generated_map_cpi(
                 &ctx.accounts.map_generator_program,
@@ -1512,6 +1581,15 @@ pub mod session_manager {
             &ctx.accounts.session_signer.to_account_info(),
         )?;
 
+        // 1b. Close session_discovery (depends on session)
+        close_session_discovery_cpi(
+            &ctx.accounts.map_generator_program,
+            &ctx.accounts.session_discovery,
+            &ctx.accounts.game_session.to_account_info(),
+            &ctx.accounts.player,
+            &ctx.accounts.session_signer.to_account_info(),
+        )?;
+
         // 2. Close generated_map (depends on session)
         close_generated_map_cpi(
             &ctx.accounts.map_generator_program,
@@ -1529,6 +1607,17 @@ pub mod session_manager {
             &ctx.accounts.player,
             &ctx.accounts.session_signer.to_account_info(),
         )?;
+
+        // 3b. Close gauntlet_echoes if present (depends on game_state)
+        if let Some(ref ge) = ctx.accounts.gauntlet_echoes {
+            close_gauntlet_echoes_cpi(
+                &ctx.accounts.gameplay_state_program.to_account_info(),
+                &ge.to_account_info(),
+                &ctx.accounts.game_state.to_account_info(),
+                &ctx.accounts.player,
+                &ctx.accounts.session_signer.to_account_info(),
+            )?;
+        }
 
         // 4. Close game_state
         close_game_state_via_session_signer_cpi(
@@ -1785,6 +1874,10 @@ pub struct StartSession<'info> {
     pub generated_map: UncheckedAccount<'info>,
 
     #[account(mut)]
+    /// CHECK: PDA created by map-generator CPI
+    pub session_discovery: UncheckedAccount<'info>,
+
+    #[account(mut)]
     /// CHECK: Initialized by gameplay-state CPI
     pub game_state: UncheckedAccount<'info>,
 
@@ -1863,6 +1956,10 @@ pub struct StartDuelSession<'info> {
     #[account(mut)]
     /// CHECK: PDA created by map-generator CPI
     pub generated_map: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    /// CHECK: PDA created by map-generator CPI
+    pub session_discovery: UncheckedAccount<'info>,
 
     #[account(mut)]
     /// CHECK: Initialized by gameplay-state CPI
@@ -1945,6 +2042,10 @@ pub struct StartGauntletSession<'info> {
     #[account(mut)]
     /// CHECK: PDA created by map-generator CPI
     pub generated_map: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    /// CHECK: PDA created by map-generator CPI
+    pub session_discovery: UncheckedAccount<'info>,
 
     #[account(mut)]
     /// CHECK: Initialized by gameplay-state CPI
@@ -2269,6 +2370,11 @@ pub struct EndSession<'info> {
     /// CHECK: Validated by map-generator CPI
     pub generated_map: UncheckedAccount<'info>,
 
+    /// SessionDiscovery account (closed via map-generator CPI)
+    #[account(mut)]
+    /// CHECK: Validated by map-generator CPI
+    pub session_discovery: UncheckedAccount<'info>,
+
     /// Map POIs account (closed via poi-system CPI)
     #[account(mut)]
     /// CHECK: Validated by poi-system CPI
@@ -2318,6 +2424,11 @@ pub struct EndSession<'info> {
     /// CHECK: Validated by gameplay-state close CPI
     #[account(mut)]
     pub gameplay_vrf_state: Option<UncheckedAccount<'info>>,
+
+    /// Optional GauntletEchoes (only for gauntlet sessions)
+    /// CHECK: Validated by gameplay-state close CPI
+    #[account(mut)]
+    pub gauntlet_echoes: Option<UncheckedAccount<'info>>,
 
     pub player_inventory_program: Program<'info, PlayerInventory>,
     pub gameplay_state_program: Program<'info, GameplayState>,
@@ -2452,6 +2563,11 @@ pub struct ForceCloseSession<'info> {
     /// CHECK: Owner checked in handler before CPI.
     pub generated_map: UncheckedAccount<'info>,
 
+    /// SessionDiscovery account — may be delegated.
+    #[account(mut)]
+    /// CHECK: Owner checked in handler before CPI.
+    pub session_discovery: UncheckedAccount<'info>,
+
     /// Map POIs account — may be delegated.
     #[account(mut)]
     /// CHECK: Owner checked in handler before CPI.
@@ -2565,6 +2681,11 @@ pub struct AbandonSession<'info> {
     /// CHECK: Validated by map-generator CPI
     pub generated_map: UncheckedAccount<'info>,
 
+    /// SessionDiscovery account (closed via map-generator CPI)
+    #[account(mut)]
+    /// CHECK: Validated by map-generator CPI
+    pub session_discovery: UncheckedAccount<'info>,
+
     /// Map POIs account (closed via poi-system CPI)
     #[account(mut)]
     /// CHECK: Validated by poi-system CPI
@@ -2613,6 +2734,11 @@ pub struct AbandonSession<'info> {
     /// CHECK: Validated by gameplay-state close CPI
     #[account(mut)]
     pub gameplay_vrf_state: Option<UncheckedAccount<'info>>,
+
+    /// Optional GauntletEchoes (only for gauntlet sessions)
+    /// CHECK: Validated by gameplay-state close CPI
+    #[account(mut)]
+    pub gauntlet_echoes: Option<UncheckedAccount<'info>>,
 
     pub player_inventory_program: Program<'info, PlayerInventory>,
     pub gameplay_state_program: Program<'info, GameplayState>,
@@ -3000,6 +3126,10 @@ pub const CLOSE_GAME_STATE_VIA_SESSION_SIGNER_DISCRIMINATOR: [u8; 8] =
     [199, 166, 186, 238, 90, 16, 234, 79];
 pub const CLOSE_MAP_ENEMIES_DISCRIMINATOR: [u8; 8] = [192, 111, 190, 66, 236, 132, 252, 88];
 pub const CLOSE_GENERATED_MAP_DISCRIMINATOR: [u8; 8] = [249, 208, 241, 231, 57, 214, 174, 103];
+pub const CLOSE_SESSION_DISCOVERY_DISCRIMINATOR: [u8; 8] =
+    [0x60, 0xf6, 0x1c, 0x60, 0x1a, 0xa9, 0x44, 0x7f];
+pub const CLOSE_GAUNTLET_ECHOES_DISCRIMINATOR: [u8; 8] =
+    [0x85, 0xa2, 0xe1, 0xee, 0x33, 0x0d, 0xbf, 0xb2];
 pub const CLOSE_MAP_POIS_VIA_SESSION_SIGNER_DISCRIMINATOR: [u8; 8] =
     [35, 38, 19, 18, 250, 66, 39, 150];
 pub const CLOSE_MAP_POIS_ORPHANED_DISCRIMINATOR: [u8; 8] = [218, 44, 98, 133, 139, 114, 27, 98];
@@ -3044,6 +3174,27 @@ fn close_map_enemies_cpi<'info>(
     )
 }
 
+fn close_gauntlet_echoes_cpi<'info>(
+    program: &AccountInfo<'info>,
+    gauntlet_echoes: &AccountInfo<'info>,
+    game_state: &AccountInfo<'info>,
+    player: &AccountInfo<'info>,
+    session_signer: &AccountInfo<'info>,
+) -> Result<()> {
+    invoke_manual_cpi(
+        program,
+        gameplay_state::ID,
+        &CLOSE_GAUNTLET_ECHOES_DISCRIMINATOR,
+        &[],
+        &[
+            (gauntlet_echoes, true, false),
+            (game_state, false, false),
+            (player, true, false),
+            (session_signer, false, true),
+        ],
+    )
+}
+
 fn close_generated_map_cpi<'info>(
     program: &AccountInfo<'info>,
     generated_map: &AccountInfo<'info>,
@@ -3058,6 +3209,27 @@ fn close_generated_map_cpi<'info>(
         &[],
         &[
             (generated_map, true, false),
+            (session, false, false),
+            (player, true, false),
+            (session_signer, false, true),
+        ],
+    )
+}
+
+fn close_session_discovery_cpi<'info>(
+    program: &AccountInfo<'info>,
+    session_discovery: &AccountInfo<'info>,
+    session: &AccountInfo<'info>,
+    player: &AccountInfo<'info>,
+    session_signer: &AccountInfo<'info>,
+) -> Result<()> {
+    invoke_manual_cpi(
+        program,
+        MAP_GENERATOR_PROGRAM_ID,
+        &CLOSE_SESSION_DISCOVERY_DISCRIMINATOR,
+        &[],
+        &[
+            (session_discovery, true, false),
             (session, false, false),
             (player, true, false),
             (session_signer, false, true),
@@ -3257,6 +3429,17 @@ mod tests {
     }
 
     #[test]
+    fn test_close_gauntlet_echoes_discriminator() {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(b"global:close_gauntlet_echoes");
+        let expected: [u8; 8] = hash[..8].try_into().unwrap();
+        assert_eq!(
+            CLOSE_GAUNTLET_ECHOES_DISCRIMINATOR, expected,
+            "CLOSE_GAUNTLET_ECHOES_DISCRIMINATOR doesn't match"
+        );
+    }
+
+    #[test]
     fn test_close_generated_map_discriminator() {
         use sha2::{Digest, Sha256};
         let hash = Sha256::digest(b"global:close_generated_map");
@@ -3264,6 +3447,17 @@ mod tests {
         assert_eq!(
             CLOSE_GENERATED_MAP_DISCRIMINATOR, expected,
             "CLOSE_GENERATED_MAP_DISCRIMINATOR doesn't match"
+        );
+    }
+
+    #[test]
+    fn test_close_session_discovery_discriminator() {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(b"global:close_session_discovery");
+        let expected: [u8; 8] = hash[..8].try_into().unwrap();
+        assert_eq!(
+            CLOSE_SESSION_DISCOVERY_DISCRIMINATOR, expected,
+            "CLOSE_SESSION_DISCOVERY_DISCRIMINATOR doesn't match"
         );
     }
 

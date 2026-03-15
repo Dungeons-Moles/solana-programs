@@ -72,6 +72,9 @@ pub const DUEL_ENTRY_SEED: &[u8] = b"duel_entry";
 // (8-byte discriminator + DuelOpenQueue::INIT_SPACE = 10,063 bytes total).
 pub const DUEL_OPEN_QUEUE_CAPACITY: usize = 50;
 
+/// PDA seed prefix for per-session gauntlet echoes account
+pub const GAUNTLET_ECHOES_SEED: &[u8] = b"gauntlet_echoes";
+
 /// PDA seed prefix for gauntlet config account
 pub const GAUNTLET_CONFIG_SEED: &[u8] = b"gauntlet_config";
 

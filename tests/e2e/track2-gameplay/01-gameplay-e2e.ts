@@ -37,6 +37,7 @@ import {
   getInventoryPda,
   getMapPoisPda,
   getPoiVrfStatePda,
+  getSessionDiscoveryPda,
   deriveDelegateAccounts,
 } from "../shared/pda-helpers";
 import {
@@ -91,6 +92,7 @@ let mapPoisPda: PublicKey;
 let mapVrfStatePda: PublicKey;
 let poiVrfStatePda: PublicKey;
 let gameplayVrfStatePda: PublicKey;
+let sessionDiscoveryPda: PublicKey;
 let gameplayAuthorityPda: PublicKey;
 let sessionManagerAuthorityPda: PublicKey;
 
@@ -444,6 +446,7 @@ describe("Track 2 E2E: Create profile + start session", function () {
     [mapVrfStatePda] = getMapVrfStatePda(sessionPda);
     [poiVrfStatePda] = getPoiVrfStatePda(sessionPda);
     [gameplayVrfStatePda] = getGameplayVrfStatePda(sessionPda);
+    [sessionDiscoveryPda] = getSessionDiscoveryPda(sessionPda);
 
     await programs.sessionManager.methods
       .startSession(campaignLevel)
@@ -456,6 +459,7 @@ describe("Track 2 E2E: Create profile + start session", function () {
         sessionSigner: sessionSigner.publicKey,
         mapConfig: mapConfigPda,
         generatedMap: generatedMapPda,
+        sessionDiscovery: sessionDiscoveryPda,
         gameState: gameStatePda,
         mapEnemies: mapEnemiesPda,
         mapPois: mapPoisPda,
@@ -477,6 +481,11 @@ describe("Track 2 E2E: Create profile + start session", function () {
     const noncesInfo = await connection.getAccountInfo(sessionNoncesPda, "confirmed");
     expect(noncesInfo).to.not.be.null;
     expect(noncesInfo!.owner.equals(PROGRAM_IDS.sessionManager)).to.be.true;
+
+    // Verify SessionDiscovery created
+    const discoveryInfo = await connection.getAccountInfo(sessionDiscoveryPda, "confirmed");
+    expect(discoveryInfo).to.not.be.null;
+    expect(discoveryInfo!.owner.equals(PROGRAM_IDS.mapGenerator)).to.be.true;
 
     // Verify all sub-accounts created
     const sessionInfo = await connection.getAccountInfo(sessionPda, "confirmed");
@@ -832,6 +841,8 @@ describe("Track 2 E2E: Gameplay on ER", function () {
           mapPois: mapPoisPda,
           poiSystemProgram: programs.poiSystem.programId,
           gameplayVrfState: null,
+          sessionDiscovery: null,
+          gauntletEchoes: null,
           player: sessionSigner.publicKey,
         } as any)
         .transaction();
@@ -1033,6 +1044,7 @@ describe("Track 2 E2E: End session", function () {
         mapEnemies: mapEnemiesPda,
         generatedMap: generatedMapPda,
         mapPois: mapPoisPda,
+        sessionDiscovery: sessionDiscoveryPda,
         playerProfile: playerProfilePda,
         player: user.publicKey,
         sessionSigner: sessionSigner.publicKey,
@@ -1046,6 +1058,7 @@ describe("Track 2 E2E: End session", function () {
         playerProfileProgram: programs.playerProfile.programId,
         mapGeneratorProgram: programs.mapGenerator.programId,
         poiSystemProgram: programs.poiSystem.programId,
+        gauntletEchoes: null,
       } as any)
       .instruction();
 
@@ -1105,6 +1118,7 @@ describe("Track 2 E2E: Error cases", function () {
     const [noGeneratedMapPda] = getGeneratedMapPda(noSessionPda);
     const [noInventoryPda] = getInventoryPda(noSessionPda);
     const [noMapPoisPda] = getMapPoisPda(noSessionPda);
+    const [noSessionDiscoveryPda] = getSessionDiscoveryPda(noSessionPda);
 
     try {
       await programs.sessionManager.methods
@@ -1118,6 +1132,7 @@ describe("Track 2 E2E: Error cases", function () {
           sessionSigner: noProfileSessionSigner.publicKey,
           mapConfig: mapConfigPda,
           generatedMap: noGeneratedMapPda,
+          sessionDiscovery: noSessionDiscoveryPda,
           gameState: noGameStatePda,
           mapEnemies: noMapEnemiesPda,
           mapPois: noMapPoisPda,
@@ -1156,6 +1171,7 @@ describe("Track 2 E2E: Error cases", function () {
     const [dupGeneratedMapPda] = getGeneratedMapPda(dupSessionPda);
     const [dupInventoryPda] = getInventoryPda(dupSessionPda);
     const [dupMapPoisPda] = getMapPoisPda(dupSessionPda);
+    const [dupSessionDiscoveryPda] = getSessionDiscoveryPda(dupSessionPda);
 
     // First session at this level should succeed
     await programs.sessionManager.methods
@@ -1169,6 +1185,7 @@ describe("Track 2 E2E: Error cases", function () {
         sessionSigner: dupSessionSigner.publicKey,
         mapConfig: mapConfigPda,
         generatedMap: dupGeneratedMapPda,
+        sessionDiscovery: dupSessionDiscoveryPda,
         gameState: dupGameStatePda,
         mapEnemies: dupMapEnemiesPda,
         mapPois: dupMapPoisPda,
@@ -1202,6 +1219,7 @@ describe("Track 2 E2E: Error cases", function () {
           sessionSigner: dupSessionSigner2.publicKey,
           mapConfig: mapConfigPda,
           generatedMap: dupGeneratedMapPda,
+          sessionDiscovery: dupSessionDiscoveryPda,
           gameState: dupGameStatePda,
           mapEnemies: dupMapEnemiesPda,
           mapPois: dupMapPoisPda,
@@ -1287,6 +1305,7 @@ describe("Track 2 E2E: Session nonce override", function () {
     const [newGeneratedMapPda] = getGeneratedMapPda(newSessionPda);
     const [newInventoryPda] = getInventoryPda(newSessionPda);
     const [newMapPoisPda] = getMapPoisPda(newSessionPda);
+    const [newSessionDiscoveryPda] = getSessionDiscoveryPda(newSessionPda);
 
     const overrideSessionSigner = Keypair.generate();
     await airdropAndConfirm(
@@ -1306,6 +1325,7 @@ describe("Track 2 E2E: Session nonce override", function () {
         sessionSigner: overrideSessionSigner.publicKey,
         mapConfig: mapConfigPda,
         generatedMap: newGeneratedMapPda,
+        sessionDiscovery: newSessionDiscoveryPda,
         gameState: newGameStatePda,
         mapEnemies: newMapEnemiesPda,
         mapPois: newMapPoisPda,

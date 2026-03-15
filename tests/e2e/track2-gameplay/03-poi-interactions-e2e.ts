@@ -34,12 +34,14 @@ import {
   getGauntletWeekPoolPda,
   getGauntletEpochPoolPda,
   getGauntletPlayerScorePda,
+  getGauntletEchoesPda,
   getInventoryPda,
   getMapPoisPda,
   getDuelSessionPda,
   getGauntletSessionPda,
   getPoiAuthorityPda,
   getInventoryAuthorityPda,
+  getSessionDiscoveryPda,
 } from "../shared/pda-helpers";
 import {
   Transaction,
@@ -353,6 +355,8 @@ const navigatePlayerTo = async (
           mapPois: ctx.mapPoisPda,
           poiSystemProgram: PROGRAM_IDS.poiSystem,
           gameplayVrfState: null,
+          sessionDiscovery: null,
+          gauntletEchoes: null,
           player: ctx.sessionSigner.publicKey,
         } as any)
         .instruction();
@@ -448,6 +452,8 @@ const exhaustMovesToNight = async (
           mapPois: ctx.mapPoisPda,
           poiSystemProgram: PROGRAM_IDS.poiSystem,
           gameplayVrfState: null,
+          sessionDiscovery: null,
+          gauntletEchoes: null,
           player: ctx.sessionSigner.publicKey,
         } as any)
         .instruction();
@@ -565,6 +571,7 @@ const buildInteractRest = async (
       gameplayStateProgram: PROGRAM_IDS.gameplayState,
       playerInventoryProgram: PROGRAM_IDS.playerInventory,
       gameplayVrfState: null,
+      gauntletEchoes: null,
       player: ctx.sessionSigner.publicKey,
     } as any)
     .instruction();
@@ -685,9 +692,10 @@ const buildInteractSurveyBeacon = async (
 ): Promise<TransactionInstruction> => {
   return programs.poiSystem.methods
     .interactSurveyBeacon(poiIndex)
-    .accounts({
+    .accountsPartial({
       mapPois: ctx.mapPoisPda,
       gameState: ctx.gameStatePda,
+      sessionDiscovery: null,
       player: ctx.sessionSigner.publicKey,
     } as any)
     .instruction();
@@ -700,9 +708,10 @@ const buildInteractSeismicScanner = async (
 ): Promise<TransactionInstruction> => {
   return programs.poiSystem.methods
     .interactSeismicScanner(poiIndex, category)
-    .accounts({
+    .accountsPartial({
       mapPois: ctx.mapPoisPda,
       gameState: ctx.gameStatePda,
+      sessionDiscovery: null,
       player: ctx.sessionSigner.publicKey,
     } as any)
     .instruction();
@@ -729,11 +738,12 @@ const buildFastTravel = async (
 ): Promise<TransactionInstruction> => {
   return programs.poiSystem.methods
     .fastTravel(fromPoiIndex, toPoiIndex)
-    .accounts({
+    .accountsPartial({
       mapPois: ctx.mapPoisPda,
       gameState: ctx.gameStatePda,
       poiAuthority: poiAuthorityPda,
       gameplayStateProgram: PROGRAM_IDS.gameplayState,
+      sessionDiscovery: null,
       player: ctx.sessionSigner.publicKey,
     } as any)
     .instruction();
@@ -817,6 +827,7 @@ const createProfileAndCampaignSession = async (
     .rpc();
 
   const [sessionNoncesPda] = getSessionNoncesPda(ctx.user.publicKey);
+  const [sessionDiscoveryPda] = getSessionDiscoveryPda(ctx.sessionPda);
   await programs.sessionManager.methods
     .startSession(ctx.campaignLevel)
     .accounts({
@@ -828,6 +839,7 @@ const createProfileAndCampaignSession = async (
       sessionSigner: ctx.sessionSigner.publicKey,
       mapConfig: mapConfigPda,
       generatedMap: ctx.generatedMapPda,
+      sessionDiscovery: sessionDiscoveryPda,
       gameState: ctx.gameStatePda,
       mapEnemies: ctx.mapEnemiesPda,
       mapPois: ctx.mapPoisPda,
@@ -863,6 +875,7 @@ const createProfileAndDuelSession = async (
     .signers([ctx.user])
     .rpc();
 
+  const [duelDiscoveryPda] = getSessionDiscoveryPda(ctx.sessionPda);
   await programs.sessionManager.methods
     .startDuelSession()
     .accounts({
@@ -874,6 +887,7 @@ const createProfileAndDuelSession = async (
       sessionManagerAuthority: sessionManagerAuthorityPda,
       mapConfig: mapConfigPda,
       generatedMap: ctx.generatedMapPda,
+      sessionDiscovery: duelDiscoveryPda,
       gameState: ctx.gameStatePda,
       mapEnemies: ctx.mapEnemiesPda,
       mapPois: ctx.mapPoisPda,
@@ -909,6 +923,7 @@ const createProfileAndGauntletSession = async (
     .signers([ctx.user])
     .rpc();
 
+  const [gauntletDiscoveryPda] = getSessionDiscoveryPda(ctx.sessionPda);
   await programs.sessionManager.methods
     .startGauntletSession()
     .accounts({
@@ -919,6 +934,7 @@ const createProfileAndGauntletSession = async (
       sessionSigner: ctx.sessionSigner.publicKey,
       mapConfig: mapConfigPda,
       generatedMap: ctx.generatedMapPda,
+      sessionDiscovery: gauntletDiscoveryPda,
       gameState: ctx.gameStatePda,
       mapEnemies: ctx.mapEnemiesPda,
       mapPois: ctx.mapPoisPda,
@@ -962,6 +978,7 @@ const createProfileAndGauntletSession = async (
     ctx.user.publicKey
   );
 
+  const [gauntletEchoesPda] = getGauntletEchoesPda(ctx.sessionPda);
   const enterIx = await (programs.gameplayState.methods as any)
     .enterGauntlet(epochId)
     .accounts({
@@ -973,6 +990,7 @@ const createProfileAndGauntletSession = async (
       companyTreasury: treasuryPk,
       gauntletEpochPool: epochPoolPda,
       gauntletPlayerScore: playerScorePda,
+      gauntletEchoes: gauntletEchoesPda,
       systemProgram: SystemProgram.programId,
     } as any)
     .remainingAccounts([
@@ -996,6 +1014,7 @@ const createProfileAndGauntletSession = async (
 
 const endSession = async (ctx: SessionCtx): Promise<void> => {
   try {
+    const [endSessionDiscoveryPda] = getSessionDiscoveryPda(ctx.sessionPda);
     const endIx = await programs.sessionManager.methods
       .endSession(ctx.campaignLevel)
       .accounts({
@@ -1004,6 +1023,7 @@ const endSession = async (ctx: SessionCtx): Promise<void> => {
         mapEnemies: ctx.mapEnemiesPda,
         generatedMap: ctx.generatedMapPda,
         mapPois: ctx.mapPoisPda,
+        sessionDiscovery: endSessionDiscoveryPda,
         playerProfile: ctx.playerProfilePda,
         player: ctx.user.publicKey,
         sessionSigner: ctx.sessionSigner.publicKey,
@@ -1017,6 +1037,7 @@ const endSession = async (ctx: SessionCtx): Promise<void> => {
         playerProfileProgram: PROGRAM_IDS.playerProfile,
         mapGeneratorProgram: PROGRAM_IDS.mapGenerator,
         poiSystemProgram: PROGRAM_IDS.poiSystem,
+        gauntletEchoes: null,
       } as any)
       .instruction();
 

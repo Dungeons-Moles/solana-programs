@@ -5,6 +5,9 @@ pub enum PoiSystemError {
     #[msg("Act must be 1-4")]
     InvalidAct,
 
+    #[msg("Campaign level must be 1-40")]
+    InvalidCampaignLevel,
+
     #[msg("POI type must be 1-14")]
     InvalidPoiType,
 

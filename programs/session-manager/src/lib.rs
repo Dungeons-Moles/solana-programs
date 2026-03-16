@@ -1124,13 +1124,9 @@ pub mod session_manager {
                     &ctx.accounts.player,
                     &ctx.accounts.session_signer.to_account_info(),
                 )?;
-            } else {
-                let lamports = info.lamports();
-                if lamports > 0 {
-                    **info.try_borrow_mut_lamports()? = 0;
-                    **ctx.accounts.player.try_borrow_mut_lamports()? += lamports;
-                }
             }
+            // else: account corrupted (e.g., after failed ER commit) — skip close,
+            // rent lamports are forfeit. Session can still be abandoned.
         }
 
         // 1b. Close session_discovery — skip CPI if corrupted
@@ -1147,13 +1143,9 @@ pub mod session_manager {
                     &ctx.accounts.player,
                     &ctx.accounts.session_signer.to_account_info(),
                 )?;
-            } else {
-                let lamports = info.lamports();
-                if lamports > 0 {
-                    **info.try_borrow_mut_lamports()? = 0;
-                    **ctx.accounts.player.try_borrow_mut_lamports()? += lamports;
-                }
             }
+            // else: account corrupted (e.g., after failed ER commit) — skip close,
+            // rent lamports are forfeit. Session can still be abandoned.
         }
 
         // 2. Close generated_map — skip CPI if corrupted
@@ -1170,13 +1162,9 @@ pub mod session_manager {
                     &ctx.accounts.player,
                     &ctx.accounts.session_signer.to_account_info(),
                 )?;
-            } else {
-                let lamports = info.lamports();
-                if lamports > 0 {
-                    **info.try_borrow_mut_lamports()? = 0;
-                    **ctx.accounts.player.try_borrow_mut_lamports()? += lamports;
-                }
             }
+            // else: account corrupted (e.g., after failed ER commit) — skip close,
+            // rent lamports are forfeit. Session can still be abandoned.
         }
 
         // 3. Close map_enemies — skip CPI if corrupted
@@ -1193,13 +1181,9 @@ pub mod session_manager {
                     &ctx.accounts.player,
                     &ctx.accounts.session_signer.to_account_info(),
                 )?;
-            } else {
-                let lamports = info.lamports();
-                if lamports > 0 {
-                    **info.try_borrow_mut_lamports()? = 0;
-                    **ctx.accounts.player.try_borrow_mut_lamports()? += lamports;
-                }
             }
+            // else: account corrupted (e.g., after failed ER commit) — skip close,
+            // rent lamports are forfeit. Session can still be abandoned.
         }
 
         // 3b. Close gauntlet_echoes if present (depends on game_state)
@@ -1226,13 +1210,9 @@ pub mod session_manager {
                     &ctx.accounts.player,
                     &ctx.accounts.session_signer.to_account_info(),
                 )?;
-            } else {
-                let lamports = info.lamports();
-                if lamports > 0 {
-                    **info.try_borrow_mut_lamports()? = 0;
-                    **ctx.accounts.player.try_borrow_mut_lamports()? += lamports;
-                }
             }
+            // else: account corrupted (e.g., after failed ER commit) — skip close,
+            // rent lamports are forfeit. Session can still be abandoned.
         }
 
         // 5. Close inventory via CPI to ensure fresh inventory for next session
@@ -1656,13 +1636,9 @@ pub mod session_manager {
                     &ctx.accounts.player,
                     &ctx.accounts.session_signer.to_account_info(),
                 )?;
-            } else {
-                let lamports = info.lamports();
-                if lamports > 0 {
-                    **info.try_borrow_mut_lamports()? = 0;
-                    **ctx.accounts.player.try_borrow_mut_lamports()? += lamports;
-                }
             }
+            // else: account corrupted (e.g., after failed ER commit) — skip close,
+            // rent lamports are forfeit. Session can still be abandoned.
         }
 
         // 1b. Close session_discovery — skip CPI if corrupted
@@ -1679,13 +1655,9 @@ pub mod session_manager {
                     &ctx.accounts.player,
                     &ctx.accounts.session_signer.to_account_info(),
                 )?;
-            } else {
-                let lamports = info.lamports();
-                if lamports > 0 {
-                    **info.try_borrow_mut_lamports()? = 0;
-                    **ctx.accounts.player.try_borrow_mut_lamports()? += lamports;
-                }
             }
+            // else: account corrupted (e.g., after failed ER commit) — skip close,
+            // rent lamports are forfeit. Session can still be abandoned.
         }
 
         // 2. Close generated_map — skip CPI if corrupted
@@ -1702,13 +1674,9 @@ pub mod session_manager {
                     &ctx.accounts.player,
                     &ctx.accounts.session_signer.to_account_info(),
                 )?;
-            } else {
-                let lamports = info.lamports();
-                if lamports > 0 {
-                    **info.try_borrow_mut_lamports()? = 0;
-                    **ctx.accounts.player.try_borrow_mut_lamports()? += lamports;
-                }
             }
+            // else: account corrupted (e.g., after failed ER commit) — skip close,
+            // rent lamports are forfeit. Session can still be abandoned.
         }
 
         // 3. Close map_enemies — skip CPI if corrupted
@@ -1725,13 +1693,9 @@ pub mod session_manager {
                     &ctx.accounts.player,
                     &ctx.accounts.session_signer.to_account_info(),
                 )?;
-            } else {
-                let lamports = info.lamports();
-                if lamports > 0 {
-                    **info.try_borrow_mut_lamports()? = 0;
-                    **ctx.accounts.player.try_borrow_mut_lamports()? += lamports;
-                }
             }
+            // else: account corrupted (e.g., after failed ER commit) — skip close,
+            // rent lamports are forfeit. Session can still be abandoned.
         }
 
         // 3b. Close gauntlet_echoes if present (depends on game_state)
@@ -1758,13 +1722,9 @@ pub mod session_manager {
                     &ctx.accounts.player,
                     &ctx.accounts.session_signer.to_account_info(),
                 )?;
-            } else {
-                let lamports = info.lamports();
-                if lamports > 0 {
-                    **info.try_borrow_mut_lamports()? = 0;
-                    **ctx.accounts.player.try_borrow_mut_lamports()? += lamports;
-                }
             }
+            // else: account corrupted (e.g., after failed ER commit) — skip close,
+            // rent lamports are forfeit. Session can still be abandoned.
         }
 
         // 5. Close inventory via CPI

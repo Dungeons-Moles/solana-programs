@@ -168,18 +168,21 @@ pub mod session_manager {
             campaign_level,
         )?;
 
-        // 1b. Allocate empty SessionDiscovery (populated on ER during map generation)
-        map_generator::cpi::init_session_discovery(
-            CpiContext::new(
-                ctx.accounts.map_generator_program.to_account_info(),
-                map_generator::cpi::accounts::InitSessionDiscovery {
-                    payer: ctx.accounts.player.to_account_info(),
-                    session: ctx.accounts.game_session.to_account_info(),
-                    session_discovery: ctx.accounts.session_discovery.to_account_info(),
-                    system_program: ctx.accounts.system_program.to_account_info(),
-                },
-            ),
-        )?;
+        // 1b. Allocate empty SessionDiscovery (populated on ER during map generation).
+        // Optional: when omitted, the frontend must call init_session_discovery separately.
+        if let Some(ref sd) = ctx.accounts.session_discovery {
+            map_generator::cpi::init_session_discovery(
+                CpiContext::new(
+                    ctx.accounts.map_generator_program.to_account_info(),
+                    map_generator::cpi::accounts::InitSessionDiscovery {
+                        payer: ctx.accounts.player.to_account_info(),
+                        session: ctx.accounts.game_session.to_account_info(),
+                        session_discovery: sd.to_account_info(),
+                        system_program: ctx.accounts.system_program.to_account_info(),
+                    },
+                ),
+            )?;
+        }
 
         // 2. Initialize Game State with placeholder map dimensions (50x50, spawn 0,0).
         // Map dimensions and spawn position will be synced by sync_map_enemies on ER
@@ -340,18 +343,21 @@ pub mod session_manager {
             campaign_level,
         )?;
 
-        // Allocate empty SessionDiscovery (populated on ER during map generation)
-        map_generator::cpi::init_session_discovery(
-            CpiContext::new(
-                ctx.accounts.map_generator_program.to_account_info(),
-                map_generator::cpi::accounts::InitSessionDiscovery {
-                    payer: ctx.accounts.player.to_account_info(),
-                    session: ctx.accounts.game_session.to_account_info(),
-                    session_discovery: ctx.accounts.session_discovery.to_account_info(),
-                    system_program: ctx.accounts.system_program.to_account_info(),
-                },
-            ),
-        )?;
+        // Allocate empty SessionDiscovery (populated on ER during map generation).
+        // Optional: when omitted, the frontend must call init_session_discovery separately.
+        if let Some(ref sd) = ctx.accounts.session_discovery {
+            map_generator::cpi::init_session_discovery(
+                CpiContext::new(
+                    ctx.accounts.map_generator_program.to_account_info(),
+                    map_generator::cpi::accounts::InitSessionDiscovery {
+                        payer: ctx.accounts.player.to_account_info(),
+                        session: ctx.accounts.game_session.to_account_info(),
+                        session_discovery: sd.to_account_info(),
+                        system_program: ctx.accounts.system_program.to_account_info(),
+                    },
+                ),
+            )?;
+        }
 
         // Initialize Game State with placeholder dimensions; actual spawn set by sync_map_enemies on ER.
         gameplay_state::cpi::initialize_game_state(
@@ -524,18 +530,21 @@ pub mod session_manager {
             campaign_level,
         )?;
 
-        // Allocate empty SessionDiscovery (populated on ER during map generation)
-        map_generator::cpi::init_session_discovery(
-            CpiContext::new(
-                ctx.accounts.map_generator_program.to_account_info(),
-                map_generator::cpi::accounts::InitSessionDiscovery {
-                    payer: ctx.accounts.player.to_account_info(),
-                    session: ctx.accounts.game_session.to_account_info(),
-                    session_discovery: ctx.accounts.session_discovery.to_account_info(),
-                    system_program: ctx.accounts.system_program.to_account_info(),
-                },
-            ),
-        )?;
+        // Allocate empty SessionDiscovery (populated on ER during map generation).
+        // Optional: when omitted, the frontend must call init_session_discovery separately.
+        if let Some(ref sd) = ctx.accounts.session_discovery {
+            map_generator::cpi::init_session_discovery(
+                CpiContext::new(
+                    ctx.accounts.map_generator_program.to_account_info(),
+                    map_generator::cpi::accounts::InitSessionDiscovery {
+                        payer: ctx.accounts.player.to_account_info(),
+                        session: ctx.accounts.game_session.to_account_info(),
+                        session_discovery: sd.to_account_info(),
+                        system_program: ctx.accounts.system_program.to_account_info(),
+                    },
+                ),
+            )?;
+        }
 
         // Initialize Game State with placeholder dimensions; actual spawn set by sync_map_enemies on ER.
         gameplay_state::cpi::initialize_game_state(
@@ -1973,9 +1982,9 @@ pub struct StartSession<'info> {
     /// CHECK: PDA created by map-generator CPI
     pub generated_map: UncheckedAccount<'info>,
 
+    /// CHECK: PDA created by map-generator CPI. Optional to keep combined TX under size limit.
     #[account(mut)]
-    /// CHECK: PDA created by map-generator CPI
-    pub session_discovery: UncheckedAccount<'info>,
+    pub session_discovery: Option<UncheckedAccount<'info>>,
 
     #[account(mut)]
     /// CHECK: Initialized by gameplay-state CPI
@@ -2057,9 +2066,9 @@ pub struct StartDuelSession<'info> {
     /// CHECK: PDA created by map-generator CPI
     pub generated_map: UncheckedAccount<'info>,
 
+    /// CHECK: PDA created by map-generator CPI. Optional to keep combined TX under size limit.
     #[account(mut)]
-    /// CHECK: PDA created by map-generator CPI
-    pub session_discovery: UncheckedAccount<'info>,
+    pub session_discovery: Option<UncheckedAccount<'info>>,
 
     #[account(mut)]
     /// CHECK: Initialized by gameplay-state CPI
@@ -2143,9 +2152,9 @@ pub struct StartGauntletSession<'info> {
     /// CHECK: PDA created by map-generator CPI
     pub generated_map: UncheckedAccount<'info>,
 
+    /// CHECK: PDA created by map-generator CPI. Optional to keep combined TX under size limit.
     #[account(mut)]
-    /// CHECK: PDA created by map-generator CPI
-    pub session_discovery: UncheckedAccount<'info>,
+    pub session_discovery: Option<UncheckedAccount<'info>>,
 
     #[account(mut)]
     /// CHECK: Initialized by gameplay-state CPI

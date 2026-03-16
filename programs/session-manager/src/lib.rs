@@ -1110,41 +1110,97 @@ pub mod session_manager {
             )?;
         }
 
-        // 1. Close map_pois (depends on session)
-        close_map_pois_via_session_signer_cpi(
-            &ctx.accounts.poi_system_program,
-            &ctx.accounts.map_pois,
-            &ctx.accounts.game_session.to_account_info(),
-            &ctx.accounts.player,
-            &ctx.accounts.session_signer.to_account_info(),
-        )?;
+        // 1. Close map_pois — skip CPI if account is corrupted (e.g., after failed ER commit)
+        {
+            let info = ctx.accounts.map_pois.to_account_info();
+            let data = info.try_borrow_data()?;
+            let valid = data.len() >= 8 && data[..8] != [0u8; 8];
+            drop(data);
+            if valid {
+                close_map_pois_via_session_signer_cpi(
+                    &ctx.accounts.poi_system_program,
+                    &ctx.accounts.map_pois,
+                    &ctx.accounts.game_session.to_account_info(),
+                    &ctx.accounts.player,
+                    &ctx.accounts.session_signer.to_account_info(),
+                )?;
+            } else {
+                let lamports = info.lamports();
+                if lamports > 0 {
+                    **info.try_borrow_mut_lamports()? = 0;
+                    **ctx.accounts.player.try_borrow_mut_lamports()? += lamports;
+                }
+            }
+        }
 
-        // 1b. Close session_discovery (depends on session)
-        close_session_discovery_cpi(
-            &ctx.accounts.map_generator_program,
-            &ctx.accounts.session_discovery,
-            &ctx.accounts.game_session.to_account_info(),
-            &ctx.accounts.player,
-            &ctx.accounts.session_signer.to_account_info(),
-        )?;
+        // 1b. Close session_discovery — skip CPI if corrupted
+        {
+            let info = ctx.accounts.session_discovery.to_account_info();
+            let data = info.try_borrow_data()?;
+            let valid = data.len() >= 8 && data[..8] != [0u8; 8];
+            drop(data);
+            if valid {
+                close_session_discovery_cpi(
+                    &ctx.accounts.map_generator_program,
+                    &ctx.accounts.session_discovery,
+                    &ctx.accounts.game_session.to_account_info(),
+                    &ctx.accounts.player,
+                    &ctx.accounts.session_signer.to_account_info(),
+                )?;
+            } else {
+                let lamports = info.lamports();
+                if lamports > 0 {
+                    **info.try_borrow_mut_lamports()? = 0;
+                    **ctx.accounts.player.try_borrow_mut_lamports()? += lamports;
+                }
+            }
+        }
 
-        // 2. Close generated_map (depends on session)
-        close_generated_map_cpi(
-            &ctx.accounts.map_generator_program,
-            &ctx.accounts.generated_map,
-            &ctx.accounts.game_session.to_account_info(),
-            &ctx.accounts.player,
-            &ctx.accounts.session_signer.to_account_info(),
-        )?;
+        // 2. Close generated_map — skip CPI if corrupted
+        {
+            let info = ctx.accounts.generated_map.to_account_info();
+            let data = info.try_borrow_data()?;
+            let valid = data.len() >= 8 && data[..8] != [0u8; 8];
+            drop(data);
+            if valid {
+                close_generated_map_cpi(
+                    &ctx.accounts.map_generator_program,
+                    &ctx.accounts.generated_map,
+                    &ctx.accounts.game_session.to_account_info(),
+                    &ctx.accounts.player,
+                    &ctx.accounts.session_signer.to_account_info(),
+                )?;
+            } else {
+                let lamports = info.lamports();
+                if lamports > 0 {
+                    **info.try_borrow_mut_lamports()? = 0;
+                    **ctx.accounts.player.try_borrow_mut_lamports()? += lamports;
+                }
+            }
+        }
 
-        // 3. Close map_enemies (depends on game_state)
-        close_map_enemies_cpi(
-            &ctx.accounts.gameplay_state_program.to_account_info(),
-            &ctx.accounts.map_enemies,
-            &ctx.accounts.game_state.to_account_info(),
-            &ctx.accounts.player,
-            &ctx.accounts.session_signer.to_account_info(),
-        )?;
+        // 3. Close map_enemies — skip CPI if corrupted
+        {
+            let info = ctx.accounts.map_enemies.to_account_info();
+            let data = info.try_borrow_data()?;
+            let valid = data.len() >= 8 && data[..8] != [0u8; 8];
+            drop(data);
+            if valid {
+                close_map_enemies_cpi(
+                    &ctx.accounts.gameplay_state_program.to_account_info(),
+                    &ctx.accounts.map_enemies,
+                    &ctx.accounts.game_state.to_account_info(),
+                    &ctx.accounts.player,
+                    &ctx.accounts.session_signer.to_account_info(),
+                )?;
+            } else {
+                let lamports = info.lamports();
+                if lamports > 0 {
+                    **info.try_borrow_mut_lamports()? = 0;
+                    **ctx.accounts.player.try_borrow_mut_lamports()? += lamports;
+                }
+            }
+        }
 
         // 3b. Close gauntlet_echoes if present (depends on game_state)
         if let Some(ref ge) = ctx.accounts.gauntlet_echoes {
@@ -1157,13 +1213,27 @@ pub mod session_manager {
             )?;
         }
 
-        // 4. Close game_state
-        close_game_state_via_session_signer_cpi(
-            &ctx.accounts.gameplay_state_program.to_account_info(),
-            &ctx.accounts.game_state.to_account_info(),
-            &ctx.accounts.player,
-            &ctx.accounts.session_signer.to_account_info(),
-        )?;
+        // 4. Close game_state — skip CPI if corrupted
+        {
+            let info = ctx.accounts.game_state.to_account_info();
+            let data = info.try_borrow_data()?;
+            let valid = data.len() >= 8 && data[..8] != [0u8; 8];
+            drop(data);
+            if valid {
+                close_game_state_via_session_signer_cpi(
+                    &ctx.accounts.gameplay_state_program.to_account_info(),
+                    &ctx.accounts.game_state.to_account_info(),
+                    &ctx.accounts.player,
+                    &ctx.accounts.session_signer.to_account_info(),
+                )?;
+            } else {
+                let lamports = info.lamports();
+                if lamports > 0 {
+                    **info.try_borrow_mut_lamports()? = 0;
+                    **ctx.accounts.player.try_borrow_mut_lamports()? += lamports;
+                }
+            }
+        }
 
         // 5. Close inventory via CPI to ensure fresh inventory for next session
         // Use session_signer since it's the inventory owner (set during start_session)
@@ -1572,41 +1642,97 @@ pub mod session_manager {
             )?;
         }
 
-        // 1. Close map_pois (depends on session)
-        close_map_pois_via_session_signer_cpi(
-            &ctx.accounts.poi_system_program,
-            &ctx.accounts.map_pois,
-            &ctx.accounts.game_session.to_account_info(),
-            &ctx.accounts.player,
-            &ctx.accounts.session_signer.to_account_info(),
-        )?;
+        // 1. Close map_pois — skip CPI if account is corrupted (e.g., after failed ER commit)
+        {
+            let info = ctx.accounts.map_pois.to_account_info();
+            let data = info.try_borrow_data()?;
+            let valid = data.len() >= 8 && data[..8] != [0u8; 8];
+            drop(data);
+            if valid {
+                close_map_pois_via_session_signer_cpi(
+                    &ctx.accounts.poi_system_program,
+                    &ctx.accounts.map_pois,
+                    &ctx.accounts.game_session.to_account_info(),
+                    &ctx.accounts.player,
+                    &ctx.accounts.session_signer.to_account_info(),
+                )?;
+            } else {
+                let lamports = info.lamports();
+                if lamports > 0 {
+                    **info.try_borrow_mut_lamports()? = 0;
+                    **ctx.accounts.player.try_borrow_mut_lamports()? += lamports;
+                }
+            }
+        }
 
-        // 1b. Close session_discovery (depends on session)
-        close_session_discovery_cpi(
-            &ctx.accounts.map_generator_program,
-            &ctx.accounts.session_discovery,
-            &ctx.accounts.game_session.to_account_info(),
-            &ctx.accounts.player,
-            &ctx.accounts.session_signer.to_account_info(),
-        )?;
+        // 1b. Close session_discovery — skip CPI if corrupted
+        {
+            let info = ctx.accounts.session_discovery.to_account_info();
+            let data = info.try_borrow_data()?;
+            let valid = data.len() >= 8 && data[..8] != [0u8; 8];
+            drop(data);
+            if valid {
+                close_session_discovery_cpi(
+                    &ctx.accounts.map_generator_program,
+                    &ctx.accounts.session_discovery,
+                    &ctx.accounts.game_session.to_account_info(),
+                    &ctx.accounts.player,
+                    &ctx.accounts.session_signer.to_account_info(),
+                )?;
+            } else {
+                let lamports = info.lamports();
+                if lamports > 0 {
+                    **info.try_borrow_mut_lamports()? = 0;
+                    **ctx.accounts.player.try_borrow_mut_lamports()? += lamports;
+                }
+            }
+        }
 
-        // 2. Close generated_map (depends on session)
-        close_generated_map_cpi(
-            &ctx.accounts.map_generator_program,
-            &ctx.accounts.generated_map,
-            &ctx.accounts.game_session.to_account_info(),
-            &ctx.accounts.player,
-            &ctx.accounts.session_signer.to_account_info(),
-        )?;
+        // 2. Close generated_map — skip CPI if corrupted
+        {
+            let info = ctx.accounts.generated_map.to_account_info();
+            let data = info.try_borrow_data()?;
+            let valid = data.len() >= 8 && data[..8] != [0u8; 8];
+            drop(data);
+            if valid {
+                close_generated_map_cpi(
+                    &ctx.accounts.map_generator_program,
+                    &ctx.accounts.generated_map,
+                    &ctx.accounts.game_session.to_account_info(),
+                    &ctx.accounts.player,
+                    &ctx.accounts.session_signer.to_account_info(),
+                )?;
+            } else {
+                let lamports = info.lamports();
+                if lamports > 0 {
+                    **info.try_borrow_mut_lamports()? = 0;
+                    **ctx.accounts.player.try_borrow_mut_lamports()? += lamports;
+                }
+            }
+        }
 
-        // 3. Close map_enemies (depends on game_state)
-        close_map_enemies_cpi(
-            &ctx.accounts.gameplay_state_program.to_account_info(),
-            &ctx.accounts.map_enemies,
-            &ctx.accounts.game_state.to_account_info(),
-            &ctx.accounts.player,
-            &ctx.accounts.session_signer.to_account_info(),
-        )?;
+        // 3. Close map_enemies — skip CPI if corrupted
+        {
+            let info = ctx.accounts.map_enemies.to_account_info();
+            let data = info.try_borrow_data()?;
+            let valid = data.len() >= 8 && data[..8] != [0u8; 8];
+            drop(data);
+            if valid {
+                close_map_enemies_cpi(
+                    &ctx.accounts.gameplay_state_program.to_account_info(),
+                    &ctx.accounts.map_enemies,
+                    &ctx.accounts.game_state.to_account_info(),
+                    &ctx.accounts.player,
+                    &ctx.accounts.session_signer.to_account_info(),
+                )?;
+            } else {
+                let lamports = info.lamports();
+                if lamports > 0 {
+                    **info.try_borrow_mut_lamports()? = 0;
+                    **ctx.accounts.player.try_borrow_mut_lamports()? += lamports;
+                }
+            }
+        }
 
         // 3b. Close gauntlet_echoes if present (depends on game_state)
         if let Some(ref ge) = ctx.accounts.gauntlet_echoes {
@@ -1619,13 +1745,27 @@ pub mod session_manager {
             )?;
         }
 
-        // 4. Close game_state
-        close_game_state_via_session_signer_cpi(
-            &ctx.accounts.gameplay_state_program.to_account_info(),
-            &ctx.accounts.game_state.to_account_info(),
-            &ctx.accounts.player,
-            &ctx.accounts.session_signer.to_account_info(),
-        )?;
+        // 4. Close game_state — skip CPI if corrupted
+        {
+            let info = ctx.accounts.game_state.to_account_info();
+            let data = info.try_borrow_data()?;
+            let valid = data.len() >= 8 && data[..8] != [0u8; 8];
+            drop(data);
+            if valid {
+                close_game_state_via_session_signer_cpi(
+                    &ctx.accounts.gameplay_state_program.to_account_info(),
+                    &ctx.accounts.game_state.to_account_info(),
+                    &ctx.accounts.player,
+                    &ctx.accounts.session_signer.to_account_info(),
+                )?;
+            } else {
+                let lamports = info.lamports();
+                if lamports > 0 {
+                    **info.try_borrow_mut_lamports()? = 0;
+                    **ctx.accounts.player.try_borrow_mut_lamports()? += lamports;
+                }
+            }
+        }
 
         // 5. Close inventory via CPI
         player_inventory::cpi::close_inventory(CpiContext::new(

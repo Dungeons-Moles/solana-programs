@@ -833,16 +833,9 @@ pub mod gameplay_state {
         let gauntlet_echoes = &mut ctx.accounts.gauntlet_echoes;
         gauntlet_echoes.session = game_state.session;
         gauntlet_echoes.bump = ctx.bumps.gauntlet_echoes;
-
-        let vrf = extract_gameplay_vrf(&ctx.accounts.gameplay_vrf_state, &game_state.session)?;
-        let vrf_ref = vrf.as_ref().map(|(r, n)| (r, *n));
-        draw_gauntlet_echoes_from_remaining_vrf(
-            gauntlet_echoes,
-            game_state.session,
-            ctx.accounts.player.key(),
-            ctx.remaining_accounts,
-            vrf_ref,
-        )?;
+        // Echo draw deferred to redraw_gauntlet_echoes (on ER, after VRF fulfillment).
+        // VRF is not available at enter_gauntlet time because it runs on base layer
+        // before delegation. Echoes remain None until redraw populates them.
 
         emit!(GauntletEntered {
             player: ctx.accounts.player.key(),
@@ -851,6 +844,33 @@ pub mod gameplay_state {
             company_fee,
             pool_fee,
         });
+        Ok(())
+    }
+
+    /// Draws gauntlet echoes using VRF randomness.
+    /// Called on ER after VRF fulfillment. enter_gauntlet only inits the
+    /// GauntletEchoes account — this instruction populates it with VRF-random draws.
+    pub fn redraw_gauntlet_echoes(ctx: Context<RedrawGauntletEchoes>) -> Result<()> {
+        let game_state = &ctx.accounts.game_state;
+        require!(
+            game_state.run_mode == RunMode::Gauntlet,
+            GameplayStateError::GauntletRunNotActive
+        );
+
+        let vrf = extract_gameplay_vrf(&ctx.accounts.gameplay_vrf_state, &game_state.session)?;
+        // VRF must be present for redraw — that's the whole point
+        require!(vrf.is_some(), GameplayStateError::VrfNotFulfilled);
+
+        let vrf_ref = vrf.as_ref().map(|(r, n)| (r, *n));
+        let gauntlet_echoes = &mut ctx.accounts.gauntlet_echoes;
+        draw_gauntlet_echoes_from_remaining_vrf(
+            gauntlet_echoes,
+            game_state.session,
+            game_state.player,
+            ctx.remaining_accounts,
+            vrf_ref,
+        )?;
+
         Ok(())
     }
 
@@ -4805,12 +4825,30 @@ pub struct EnterGauntlet<'info> {
     )]
     pub gauntlet_echoes: Account<'info, GauntletEchoes>,
 
-    /// Optional GameplayVrfState for VRF-backed echo draw (required for gauntlet).
-    pub gameplay_vrf_state: Option<Account<'info, GameplayVrfState>>,
-
     pub system_program: Program<'info, System>,
-    // Week pools 1-5 passed as remaining_accounts to avoid deserializing 5 large Vec accounts.
-    // Manual PDA + owner + discriminator checks performed in draw_gauntlet_echoes_from_remaining().
+}
+
+/// Re-draws gauntlet echoes using VRF randomness on ER.
+/// Called after VRF fulfillment to replace the deterministic fallback from enter_gauntlet.
+#[derive(Accounts)]
+pub struct RedrawGauntletEchoes<'info> {
+    #[account(
+        has_one = session_signer @ GameplayStateError::Unauthorized,
+    )]
+    pub game_state: Box<Account<'info, GameState>>,
+
+    pub session_signer: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [GAUNTLET_ECHOES_SEED, game_state.session.as_ref()],
+        bump = gauntlet_echoes.bump,
+    )]
+    pub gauntlet_echoes: Account<'info, GauntletEchoes>,
+
+    /// GameplayVrfState with fulfilled randomness (required).
+    pub gameplay_vrf_state: Option<Account<'info, GameplayVrfState>>,
+    // Week pools 1-5 passed as remaining_accounts.
 }
 
 #[derive(Accounts)]

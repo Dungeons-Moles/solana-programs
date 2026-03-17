@@ -275,7 +275,6 @@ describe("player-inventory", () => {
       inventoryPDA,
       gameStatePDA,
       mapPoisPDA,
-      sessionSigner: sessionSigner,
       sessionSigner,
     };
   };

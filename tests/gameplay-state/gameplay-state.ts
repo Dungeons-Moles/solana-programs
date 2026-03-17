@@ -455,7 +455,6 @@ describe("gameplay-state", () => {
 
     return {
       user,
-      sessionSigner,
       sessionSigner: sessionSigner,
       sessionPDA,
       gameStatePDA,
@@ -543,7 +542,6 @@ describe("gameplay-state", () => {
     const gameState = await gameplayProgram.account.gameState.fetch(gameStatePDA);
     return {
       user,
-      sessionSigner,
       sessionSigner: sessionSigner,
       sessionPDA,
       gameStatePDA,

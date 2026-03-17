@@ -268,6 +268,36 @@ fn mark_discovered_poi_used_cpi<'info>(
     Ok(())
 }
 
+fn refresh_discovered_enemies_authorized_cpi<'info>(
+    gameplay_state_program: &AccountInfo<'info>,
+    session: &AccountInfo<'info>,
+    generated_map: &AccountInfo<'info>,
+    map_enemies: &AccountInfo<'info>,
+    poi_authority: &AccountInfo<'info>,
+    gameplay_authority: &AccountInfo<'info>,
+    map_generator_program: &AccountInfo<'info>,
+    session_discovery: Option<&AccountInfo<'info>>,
+    poi_authority_bump: u8,
+) -> Result<()> {
+    let seeds = &[POI_AUTHORITY_SEED, &[poi_authority_bump]];
+    gameplay_state::cpi::refresh_discovered_enemies_authorized(
+        CpiContext::new_with_signer(
+            gameplay_state_program.clone(),
+            gameplay_state::cpi::accounts::RefreshDiscoveredEnemiesAuthorized {
+                poi_authority: poi_authority.clone(),
+                session: session.clone(),
+                generated_map: generated_map.clone(),
+                map_enemies: map_enemies.clone(),
+                gameplay_authority: gameplay_authority.clone(),
+                map_generator_program: map_generator_program.clone(),
+                session_discovery: session_discovery.cloned(),
+            },
+            &[&seeds[..]],
+        ),
+    )?;
+    Ok(())
+}
+
 /// Attempt to dual-write offer data to SessionDiscovery via CPI.
 /// Only calls the CPI if all three optional accounts are present.
 fn try_update_active_offer<'info>(
@@ -348,7 +378,6 @@ fn discover_visible_waypoints_in_map(
     player_y: u8,
     visibility_radius: u8,
 ) -> Vec<u8> {
-    let session = map_pois.session;
     let mut newly_discovered = Vec::new();
     for (idx, poi) in map_pois.pois.iter_mut().enumerate() {
         // Skip empty slots and already-discovered POIs
@@ -359,11 +388,6 @@ fn discover_visible_waypoints_in_map(
         if is_within_visibility_radius(player_x, player_y, poi.x, poi.y, visibility_radius) {
             poi.discovered = true;
             newly_discovered.push(idx as u8);
-            emit!(WaypointDiscovered {
-                session,
-                x: poi.x,
-                y: poi.y,
-            });
         }
     }
     newly_discovered
@@ -1077,6 +1101,8 @@ pub mod poi_system {
         let inventory = &ctx.accounts.inventory;
 
         let (poi, _) = get_and_validate_poi(map_pois, game_state, poi_index, false)?;
+        let poi_x = poi.x;
+        let poi_y = poi.y;
         let player_stats = gameplay_state::stats::calculate_stats(
             inventory,
             game_state.campaign_level,
@@ -1149,15 +1175,30 @@ pub mod poi_system {
             &[&seeds[..]],
         ))?;
 
-        let poi = &map_pois.pois[poi_index as usize];
-        emit!(RestCompleted {
-            session: map_pois.session,
-            poi_type: poi.poi_type,
-            x: poi.x,
-            y: poi.y,
-            heal_amount: result.heal_amount,
-            full_heal: result.full_heal,
-        });
+        if let (Some(ref sess), Some(ref mgp)) = (&ctx.accounts.session, &ctx.accounts.map_generator_program) {
+            let sd_info = ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info());
+            reveal_radius_cpi(
+                &ctx.accounts.generated_map.to_account_info(),
+                &sess.to_account_info(),
+                &ctx.accounts.player.to_account_info(),
+                &mgp.to_account_info(),
+                poi_x,
+                poi_y,
+                DAY_VISION_RADIUS,
+                sd_info.as_ref(),
+            )?;
+            refresh_discovered_enemies_authorized_cpi(
+                &ctx.accounts.gameplay_state_program.to_account_info(),
+                &sess.to_account_info(),
+                &ctx.accounts.generated_map.to_account_info(),
+                &ctx.accounts.map_enemies.to_account_info(),
+                &ctx.accounts.poi_authority.to_account_info(),
+                &ctx.accounts.gameplay_authority.to_account_info(),
+                &mgp.to_account_info(),
+                sd_info.as_ref(),
+                ctx.bumps.poi_authority,
+            )?;
+        }
 
         Ok(())
     }
@@ -2156,7 +2197,6 @@ pub mod poi_system {
     ) -> Result<()> {
         let map_pois = &ctx.accounts.map_pois;
         let game_state = &ctx.accounts.game_state;
-        let session = map_pois.session;
 
         require_player_owns_game_state(game_state, &ctx.accounts.player)?;
 
@@ -2237,13 +2277,17 @@ pub mod poi_system {
             }
         }
 
-        emit!(FastTravelCompleted {
-            session,
-            from_x: result.from_x,
-            from_y: result.from_y,
-            to_x: result.to_x,
-            to_y: result.to_y,
-        });
+        refresh_discovered_enemies_authorized_cpi(
+            &ctx.accounts.gameplay_state_program.to_account_info(),
+            &ctx.accounts.session.to_account_info(),
+            &ctx.accounts.generated_map.to_account_info(),
+            &ctx.accounts.map_enemies.to_account_info(),
+            &ctx.accounts.poi_authority.to_account_info(),
+            &ctx.accounts.gameplay_authority.to_account_info(),
+            &ctx.accounts.map_generator_program.to_account_info(),
+            ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info()).as_ref(),
+            ctx.bumps.poi_authority,
+        )?;
 
         Ok(())
     }
@@ -2311,12 +2355,17 @@ pub mod poi_system {
             }
         }
 
-        emit!(TilesRevealed {
-            session: map_pois.session,
-            count: result.tiles.len() as u16,
-            center_x: result.center_x,
-            center_y: result.center_y,
-        });
+        refresh_discovered_enemies_authorized_cpi(
+            &ctx.accounts.gameplay_state_program.to_account_info(),
+            &ctx.accounts.session.to_account_info(),
+            &ctx.accounts.generated_map.to_account_info(),
+            &ctx.accounts.map_enemies.to_account_info(),
+            &ctx.accounts.poi_authority.to_account_info(),
+            &ctx.accounts.gameplay_authority.to_account_info(),
+            &ctx.accounts.map_generator_program.to_account_info(),
+            sd_info.as_ref(),
+            ctx.bumps.poi_authority,
+        )?;
 
         Ok(())
     }
@@ -2488,12 +2537,18 @@ pub mod poi_system {
                 )?;
             }
 
-            emit!(PoiRevealed {
-                session: map_pois.session,
-                poi_type,
-                x,
-                y,
-            });
+            refresh_discovered_enemies_authorized_cpi(
+                &ctx.accounts.gameplay_state_program.to_account_info(),
+                &ctx.accounts.session.to_account_info(),
+                &ctx.accounts.generated_map.to_account_info(),
+                &ctx.accounts.map_enemies.to_account_info(),
+                &ctx.accounts.poi_authority.to_account_info(),
+                &ctx.accounts.gameplay_authority.to_account_info(),
+                &ctx.accounts.map_generator_program.to_account_info(),
+                sd_info.as_ref(),
+                ctx.bumps.poi_authority,
+            )?;
+
         }
 
         Ok(())
@@ -2976,6 +3031,13 @@ pub struct InteractRest<'info> {
     )]
     pub game_state: Box<Account<'info, GameState>>,
 
+    #[account(
+        seeds = [gameplay_state::state::MapEnemies::SEED_PREFIX, map_pois.session.as_ref()],
+        bump = map_enemies.bump,
+        seeds::program = gameplay_state::ID,
+    )]
+    pub map_enemies: Account<'info, gameplay_state::state::MapEnemies>,
+
     /// Player's inventory for deriving max_hp and boss fight resolution (mut for gear slot expansion)
     #[account(
         mut,
@@ -2987,6 +3049,7 @@ pub struct InteractRest<'info> {
 
     /// Generated map account (provides seed for duel week 1/2 boss selection in skip_to_day).
     #[account(
+        mut,
         seeds = [b"generated_map", game_state.session.as_ref()],
         bump,
         seeds::program = MAP_GENERATOR_PROGRAM_ID,
@@ -3553,6 +3616,22 @@ pub struct FastTravel<'info> {
     pub gameplay_state_program: Program<'info, gameplay_state::program::GameplayState>,
 
     #[account(
+        seeds = [gameplay_state::state::MapEnemies::SEED_PREFIX, map_pois.session.as_ref()],
+        bump = map_enemies.bump,
+        seeds::program = gameplay_state::ID,
+    )]
+    pub map_enemies: Account<'info, gameplay_state::state::MapEnemies>,
+
+    /// Gameplay authority PDA from gameplay-state for CPI into map-generator.
+    /// CHECK: PDA derived from gameplay-state program.
+    #[account(
+        seeds = [b"gameplay_authority"],
+        bump,
+        seeds::program = gameplay_state::ID,
+    )]
+    pub gameplay_authority: AccountInfo<'info>,
+
+    #[account(
         mut,
         seeds = [map_generator::state::GeneratedMap::SEED_PREFIX, map_pois.session.as_ref()],
         bump = generated_map.bump,
@@ -3602,6 +3681,33 @@ pub struct InteractSurveyBeacon<'info> {
 
     /// CHECK: Session PDA reference validated by generated_map and game_state seeds.
     pub session: UncheckedAccount<'info>,
+
+    #[account(
+        seeds = [gameplay_state::state::MapEnemies::SEED_PREFIX, map_pois.session.as_ref()],
+        bump = map_enemies.bump,
+        seeds::program = gameplay_state::ID,
+    )]
+    pub map_enemies: Account<'info, gameplay_state::state::MapEnemies>,
+
+    /// POI authority PDA for signing CPI calls.
+    /// CHECK: PDA derived from this program, used as signer in CPI.
+    #[account(
+        seeds = [POI_AUTHORITY_SEED],
+        bump,
+    )]
+    pub poi_authority: AccountInfo<'info>,
+
+    /// Gameplay authority PDA from gameplay-state for CPI into map-generator.
+    /// CHECK: PDA derived from gameplay-state program.
+    #[account(
+        seeds = [b"gameplay_authority"],
+        bump,
+        seeds::program = gameplay_state::ID,
+    )]
+    pub gameplay_authority: AccountInfo<'info>,
+
+    /// Gameplay state program for CPI (refresh_discovered_enemies_authorized)
+    pub gameplay_state_program: Program<'info, gameplay_state::program::GameplayState>,
 
     pub map_generator_program: Program<'info, map_generator::program::MapGenerator>,
 
@@ -3687,6 +3793,33 @@ pub struct InteractSeismicScanner<'info> {
 
     /// CHECK: Session PDA reference validated by generated_map and game_state seeds.
     pub session: UncheckedAccount<'info>,
+
+    #[account(
+        seeds = [gameplay_state::state::MapEnemies::SEED_PREFIX, map_pois.session.as_ref()],
+        bump = map_enemies.bump,
+        seeds::program = gameplay_state::ID,
+    )]
+    pub map_enemies: Account<'info, gameplay_state::state::MapEnemies>,
+
+    /// POI authority PDA for signing CPI calls.
+    /// CHECK: PDA derived from this program, used as signer in CPI.
+    #[account(
+        seeds = [POI_AUTHORITY_SEED],
+        bump,
+    )]
+    pub poi_authority: AccountInfo<'info>,
+
+    /// Gameplay authority PDA from gameplay-state for CPI into map-generator.
+    /// CHECK: PDA derived from gameplay-state program.
+    #[account(
+        seeds = [b"gameplay_authority"],
+        bump,
+        seeds::program = gameplay_state::ID,
+    )]
+    pub gameplay_authority: AccountInfo<'info>,
+
+    /// Gameplay state program for CPI (refresh_discovered_enemies_authorized)
+    pub gameplay_state_program: Program<'info, gameplay_state::program::GameplayState>,
 
     pub map_generator_program: Program<'info, map_generator::program::MapGenerator>,
 
@@ -3885,22 +4018,6 @@ pub struct ToolOilApplied {
 }
 
 #[event]
-pub struct TilesRevealed {
-    pub session: Pubkey,
-    pub count: u16,
-    pub center_x: u8,
-    pub center_y: u8,
-}
-
-#[event]
-pub struct PoiRevealed {
-    pub session: Pubkey,
-    pub poi_type: u8,
-    pub x: u8,
-    pub y: u8,
-}
-
-#[event]
 pub struct ScannerOfferGenerated {
     pub session: Pubkey,
     pub poi_index: u8,
@@ -3908,22 +4025,6 @@ pub struct ScannerOfferGenerated {
     pub poi_type0: u8,
     pub poi_type1: u8,
     pub poi_type2: u8,
-}
-
-#[event]
-pub struct WaypointDiscovered {
-    pub session: Pubkey,
-    pub x: u8,
-    pub y: u8,
-}
-
-#[event]
-pub struct FastTravelCompleted {
-    pub session: Pubkey,
-    pub from_x: u8,
-    pub from_y: u8,
-    pub to_x: u8,
-    pub to_y: u8,
 }
 
 #[event]
@@ -3983,17 +4084,6 @@ pub struct PoiDefinitionQueried {
     pub active_condition: u8,
     pub interaction_type: u8,
     pub category: u8,
-}
-
-#[event]
-pub struct RestCompleted {
-    pub session: Pubkey,
-    pub poi_type: u8,
-    pub x: u8,
-    pub y: u8,
-    /// Heal amount (u16 to support max_hp > 255)
-    pub heal_amount: u16,
-    pub full_heal: bool,
 }
 
 /// Emitted when a cache offer is generated for pick-item POIs.

@@ -337,6 +337,52 @@ pub mod gameplay_state {
             let mgp_info = ctx.accounts.map_generator_program.to_account_info();
             let ga_bump = ctx.bumps.gameplay_authority;
 
+            let map_pois_data = ctx.accounts.map_pois.try_borrow_data()?;
+            const MAP_POIS_HEADER_LEN: usize = 8 + 32 + 1 + 1 + 1 + 1 + 8;
+            const POI_INSTANCE_LEN: usize = 6;
+            if map_pois_data.len() >= MAP_POIS_HEADER_LEN + 4 {
+                let pois_len_offset = MAP_POIS_HEADER_LEN;
+                let pois_len = u32::from_le_bytes(
+                    map_pois_data[pois_len_offset..pois_len_offset + 4]
+                        .try_into()
+                        .unwrap_or([0u8; 4]),
+                ) as usize;
+                let pois_start = pois_len_offset + 4;
+
+                let mut mole_den: Option<(u8, u8, u8, u8)> = None;
+                for index in 0..pois_len {
+                    let base = pois_start + index * POI_INSTANCE_LEN;
+                    if base + POI_INSTANCE_LEN > map_pois_data.len() {
+                        break;
+                    }
+
+                    let poi_type = map_pois_data[base];
+                    let x = map_pois_data[base + 1];
+                    let y = map_pois_data[base + 2];
+                    if poi_type == 1 {
+                        mole_den = Some((index as u8, poi_type, x, y));
+                        break;
+                    }
+                }
+
+                if let Some((mole_den_index, mole_den_type, mole_den_x, mole_den_y)) = mole_den {
+                map_generator::cpi::record_discovered_poi(
+                    CpiContext::new(
+                        mgp_info.clone(),
+                        map_generator::cpi::accounts::RecordDiscoveredPoi {
+                            session_discovery: sd_info.clone(),
+                            session: session_info.clone(),
+                            session_signer: ctx.accounts.session_signer.to_account_info(),
+                        },
+                    ),
+                    mole_den_type,
+                    mole_den_x,
+                    mole_den_y,
+                    mole_den_index,
+                )?;
+            }
+            }
+
             // Boss ID for week 1
             let boss_id = if game_state.run_mode == RunMode::Gauntlet {
                 [0u8; 12]
@@ -390,9 +436,32 @@ pub mod gameplay_state {
     }
 
     /// Refreshes discovered enemies in SessionDiscovery from MapEnemies + GeneratedMap.
-    /// Called by the frontend after tile-revealing POIs (survey beacon, seismic scanner)
-    /// since those run in poi_system and can't CPI to update_discovered_enemies.
+    /// Legacy fallback for clients that have not yet moved POI reveal flows to the
+    /// inline authorized path.
     pub fn refresh_discovered_enemies(ctx: Context<RefreshDiscoveredEnemies>) -> Result<()> {
+        if let Some(ref sd) = ctx.accounts.session_discovery {
+            let visible = compute_visible_enemies(
+                &ctx.accounts.map_enemies,
+                &ctx.accounts.generated_map.discovered_tiles,
+                ctx.accounts.generated_map.width,
+            );
+            update_discovered_enemies_cpi(
+                &sd.to_account_info(),
+                &ctx.accounts.session.to_account_info(),
+                &ctx.accounts.gameplay_authority.to_account_info(),
+                &ctx.accounts.map_generator_program.to_account_info(),
+                ctx.bumps.gameplay_authority,
+                visible,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Refreshes discovered enemies in SessionDiscovery, authorized by poi-system CPI.
+    /// Used by reveal-heavy POIs so the frontend does not need a follow-up tx.
+    pub fn refresh_discovered_enemies_authorized(
+        ctx: Context<RefreshDiscoveredEnemiesAuthorized>,
+    ) -> Result<()> {
         if let Some(ref sd) = ctx.accounts.session_discovery {
             let visible = compute_visible_enemies(
                 &ctx.accounts.map_enemies,
@@ -1989,18 +2058,8 @@ pub mod gameplay_state {
             GameplayStateError::OutOfBounds
         );
 
-        let from_x = game_state.position_x;
-        let from_y = game_state.position_y;
         game_state.position_x = target_x;
         game_state.position_y = target_y;
-
-        emit!(PositionSetAuthorized {
-            player: game_state.player,
-            from_x,
-            from_y,
-            to_x: target_x,
-            to_y: target_y,
-        });
 
         Ok(())
     }
@@ -2079,9 +2138,6 @@ pub mod gameplay_state {
 
         let is_last_move_of_week =
             game_state.phase.is_night3() && game_state.moves_remaining == move_cost;
-        let from_x = game_state.position_x;
-        let from_y = game_state.position_y;
-
         let mut enemies_moved: u8 = 0;
         let mut combat_triggered = false;
 
@@ -2151,14 +2207,6 @@ pub mod gameplay_state {
                         map_enemies.enemies[enemy_idx].x = new_x;
                         map_enemies.enemies[enemy_idx].y = new_y;
                         enemies_moved = enemies_moved.saturating_add(1);
-
-                        emit!(EnemyMoved {
-                            enemy_index: enemy_idx as u8,
-                            from_x: old_x,
-                            from_y: old_y,
-                            to_x: new_x,
-                            to_y: new_y,
-                        });
 
                         if new_x == chase_x && new_y == chase_y {
                             combat_triggered = true;
@@ -2273,18 +2321,6 @@ pub mod gameplay_state {
                 visible,
             )?;
         }
-
-        emit!(PlayerMoved {
-            player: game_state.player,
-            from_x,
-            from_y,
-            to_x: target_x,
-            to_y: target_y,
-            moves_remaining: game_state.moves_remaining,
-            is_dig: is_wall,
-            combat_triggered,
-            enemies_moved,
-        });
 
         if game_state.moves_remaining == 0 {
             if game_state.phase.is_night3() {
@@ -4605,6 +4641,56 @@ pub struct RefreshDiscoveredEnemies<'info> {
     pub session_discovery: Option<UncheckedAccount<'info>>,
 }
 
+/// Read-only context for refreshing discovered enemies in SessionDiscovery,
+/// authorized by poi-system CPI after tile-revealing POIs.
+#[derive(Accounts)]
+pub struct RefreshDiscoveredEnemiesAuthorized<'info> {
+    /// POI authority PDA from poi-system that must sign.
+    #[account(
+        seeds = [b"poi_authority"],
+        bump,
+        seeds::program = POI_SYSTEM_PROGRAM_ID,
+    )]
+    pub poi_authority: Signer<'info>,
+
+    /// CHECK: Session PDA owned by session-manager.
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID @ GameplayStateError::InvalidSessionOwner)]
+    pub session: UncheckedAccount<'info>,
+
+    /// Generated map (read-only) for discovered_tiles bitmap.
+    #[account(
+        seeds = [map_generator::state::GeneratedMap::SEED_PREFIX, session.key().as_ref()],
+        bump = generated_map.bump,
+        has_one = session @ GameplayStateError::InvalidSession,
+        seeds::program = map_generator::ID,
+    )]
+    pub generated_map: Box<Account<'info, map_generator::state::GeneratedMap>>,
+
+    /// Enemy instances (read-only).
+    #[account(
+        seeds = [MapEnemies::SEED_PREFIX, session.key().as_ref()],
+        bump = map_enemies.bump,
+        has_one = session @ GameplayStateError::InvalidSession,
+    )]
+    pub map_enemies: Account<'info, MapEnemies>,
+
+    /// Gameplay authority PDA for signing CPI calls to map-generator.
+    /// CHECK: PDA derived from gameplay_state program, validated by seeds.
+    #[account(
+        seeds = [GAMEPLAY_AUTHORITY_SEED],
+        bump,
+    )]
+    pub gameplay_authority: AccountInfo<'info>,
+
+    /// Map generator program for CPI (update_discovered_enemies).
+    pub map_generator_program: Program<'info, map_generator::program::MapGenerator>,
+
+    /// SessionDiscovery to write enemy data into.
+    /// CHECK: Passed through to map-generator CPI; validated there.
+    #[account(mut)]
+    pub session_discovery: Option<UncheckedAccount<'info>>,
+}
+
 #[derive(Accounts)]
 pub struct InitializePitDraft<'info> {
     #[account(
@@ -5748,19 +5834,6 @@ pub struct GameStateInitialized {
 }
 
 #[event]
-pub struct PlayerMoved {
-    pub player: Pubkey,
-    pub from_x: u8,
-    pub from_y: u8,
-    pub to_x: u8,
-    pub to_y: u8,
-    pub moves_remaining: u8,
-    pub is_dig: bool,
-    pub combat_triggered: bool,
-    pub enemies_moved: u8,
-}
-
-#[event]
 pub struct PhaseAdvanced {
     pub player: Pubkey,
     pub new_phase: Phase,
@@ -5830,16 +5903,6 @@ pub struct GoldModifiedAuthorized {
     pub delta: i16,
 }
 
-/// Emitted when position is updated via authorized CPI from poi-system.
-#[event]
-pub struct PositionSetAuthorized {
-    pub player: Pubkey,
-    pub from_x: u8,
-    pub from_y: u8,
-    pub to_x: u8,
-    pub to_y: u8,
-}
-
 /// Emitted when combat starts (either player walked into enemy or enemy walked into player)
 #[event]
 pub struct CombatStarted {
@@ -5860,16 +5923,6 @@ pub struct CombatEnded {
     pub final_enemy_hp: i16,
     pub gold_earned: u16,
     pub turns_taken: u8,
-}
-
-/// Emitted when an enemy moves during night phase
-#[event]
-pub struct EnemyMoved {
-    pub enemy_index: u8,
-    pub from_x: u8,
-    pub from_y: u8,
-    pub to_x: u8,
-    pub to_y: u8,
 }
 
 /// Emitted when boss combat starts

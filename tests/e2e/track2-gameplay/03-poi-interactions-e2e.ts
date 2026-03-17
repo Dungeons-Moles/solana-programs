@@ -187,6 +187,15 @@ const fetchMapPois = async (mapPoisPda: PublicKey): Promise<any> => {
   );
 };
 
+const fetchSessionDiscovery = async (sessionDiscoveryPda: PublicKey): Promise<any> => {
+  const info = await connection.getAccountInfo(sessionDiscoveryPda, "confirmed");
+  if (!info) throw new Error("SessionDiscovery account missing");
+  return (programs.mapGenerator as any).coder.accounts.decode(
+    "sessionDiscovery",
+    info.data
+  );
+};
+
 /**
  * Decode PlayerInventory from raw account data.
  */
@@ -559,11 +568,13 @@ const buildInteractRest = async (
   ctx: SessionCtx,
   poiIndex: number
 ): Promise<TransactionInstruction> => {
+  const [sessionDiscoveryPda] = getSessionDiscoveryPda(ctx.sessionPda);
   return programs.poiSystem.methods
     .interactRest(poiIndex)
     .accounts({
       mapPois: ctx.mapPoisPda,
       gameState: ctx.gameStatePda,
+      mapEnemies: ctx.mapEnemiesPda,
       inventory: ctx.inventoryPda,
       generatedMap: ctx.generatedMapPda,
       poiAuthority: poiAuthorityPda,
@@ -573,6 +584,9 @@ const buildInteractRest = async (
       gameplayVrfState: null,
       gauntletEchoes: null,
       player: ctx.sessionSigner.publicKey,
+      sessionDiscovery: sessionDiscoveryPda,
+      session: ctx.sessionPda,
+      mapGeneratorProgram: PROGRAM_IDS.mapGenerator,
     } as any)
     .instruction();
 };
@@ -690,12 +704,20 @@ const buildInteractSurveyBeacon = async (
   ctx: SessionCtx,
   poiIndex: number
 ): Promise<TransactionInstruction> => {
+  const [sessionDiscoveryPda] = getSessionDiscoveryPda(ctx.sessionPda);
   return programs.poiSystem.methods
     .interactSurveyBeacon(poiIndex)
     .accountsPartial({
       mapPois: ctx.mapPoisPda,
       gameState: ctx.gameStatePda,
-      sessionDiscovery: null,
+      generatedMap: ctx.generatedMapPda,
+      session: ctx.sessionPda,
+      mapEnemies: ctx.mapEnemiesPda,
+      poiAuthority: poiAuthorityPda,
+      gameplayAuthority: gameplayAuthorityPda,
+      gameplayStateProgram: PROGRAM_IDS.gameplayState,
+      mapGeneratorProgram: PROGRAM_IDS.mapGenerator,
+      sessionDiscovery: sessionDiscoveryPda,
       player: ctx.sessionSigner.publicKey,
     } as any)
     .instruction();
@@ -706,12 +728,20 @@ const buildInteractSeismicScanner = async (
   poiIndex: number,
   category: number
 ): Promise<TransactionInstruction> => {
+  const [sessionDiscoveryPda] = getSessionDiscoveryPda(ctx.sessionPda);
   return programs.poiSystem.methods
     .interactSeismicScanner(poiIndex, category)
     .accountsPartial({
       mapPois: ctx.mapPoisPda,
       gameState: ctx.gameStatePda,
-      sessionDiscovery: null,
+      generatedMap: ctx.generatedMapPda,
+      session: ctx.sessionPda,
+      mapEnemies: ctx.mapEnemiesPda,
+      poiAuthority: poiAuthorityPda,
+      gameplayAuthority: gameplayAuthorityPda,
+      gameplayStateProgram: PROGRAM_IDS.gameplayState,
+      mapGeneratorProgram: PROGRAM_IDS.mapGenerator,
+      sessionDiscovery: sessionDiscoveryPda,
       player: ctx.sessionSigner.publicKey,
     } as any)
     .instruction();
@@ -736,6 +766,7 @@ const buildFastTravel = async (
   fromPoiIndex: number,
   toPoiIndex: number
 ): Promise<TransactionInstruction> => {
+  const [sessionDiscoveryPda] = getSessionDiscoveryPda(ctx.sessionPda);
   return programs.poiSystem.methods
     .fastTravel(fromPoiIndex, toPoiIndex)
     .accountsPartial({
@@ -743,7 +774,12 @@ const buildFastTravel = async (
       gameState: ctx.gameStatePda,
       poiAuthority: poiAuthorityPda,
       gameplayStateProgram: PROGRAM_IDS.gameplayState,
-      sessionDiscovery: null,
+      gameplayAuthority: gameplayAuthorityPda,
+      mapEnemies: ctx.mapEnemiesPda,
+      generatedMap: ctx.generatedMapPda,
+      session: ctx.sessionPda,
+      mapGeneratorProgram: PROGRAM_IDS.mapGenerator,
+      sessionDiscovery: sessionDiscoveryPda,
       player: ctx.sessionSigner.publicKey,
     } as any)
     .instruction();
@@ -1226,8 +1262,14 @@ const runPoiTests = (
       return this.skip();
     }
 
+    const [sessionDiscoveryPda] = getSessionDiscoveryPda(ctx.sessionPda);
+    const discoveryBefore = await fetchSessionDiscovery(sessionDiscoveryPda);
     const ix = await buildInteractSurveyBeacon(ctx, found.index);
     await executePoi("L6-survey-beacon", [ix], ctx.sessionSigner);
+    const discoveryAfter = await fetchSessionDiscovery(sessionDiscoveryPda);
+    expect(Number(discoveryAfter.discoveredEnemyCount)).to.be.gte(
+      Number(discoveryBefore.discoveredEnemyCount)
+    );
   });
 
   // ── L7 Seismic Scanner (no prereqs, lightweight) ────────────────────────

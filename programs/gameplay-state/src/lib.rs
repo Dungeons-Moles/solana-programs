@@ -1789,6 +1789,16 @@ pub mod gameplay_state {
         Ok(())
     }
 
+    /// Closes an orphaned GauntletEchoes account whose session PDA no longer exists.
+    pub fn close_orphaned_gauntlet_echoes(
+        ctx: Context<CloseOrphanedGauntletEchoes>,
+    ) -> Result<()> {
+        emit!(GauntletEchoesClosed {
+            session: ctx.accounts.gauntlet_echoes.session,
+        });
+        Ok(())
+    }
+
     /// Heals the player by a specified amount, authorized by poi-system.
     ///
     /// This instruction can only be called via CPI from poi-system using
@@ -5412,6 +5422,34 @@ pub struct CloseOrphanedMapEnemies<'info> {
     /// CHECK: Address must match map_enemies.session, and lamports must be 0.
     #[account(
         constraint = session_pda.key() == map_enemies.session @ GameplayStateError::InvalidSession,
+        constraint = session_pda.lamports() == 0 @ GameplayStateError::SessionNotActive,
+    )]
+    pub session_pda: UncheckedAccount<'info>,
+
+    /// Receives the lamports from the closed account.
+    #[account(mut)]
+    /// CHECK: Any destination is fine since the session is dead.
+    pub destination: AccountInfo<'info>,
+
+    pub payer: Signer<'info>,
+}
+
+/// Close an orphaned GauntletEchoes account with valid data, whose session PDA no longer exists.
+/// Validates that the session PDA (from gauntlet_echoes.session) has 0 lamports (doesn't exist).
+#[derive(Accounts)]
+pub struct CloseOrphanedGauntletEchoes<'info> {
+    #[account(
+        mut,
+        seeds = [GAUNTLET_ECHOES_SEED, gauntlet_echoes.session.as_ref()],
+        bump = gauntlet_echoes.bump,
+        close = destination,
+    )]
+    pub gauntlet_echoes: Account<'info, GauntletEchoes>,
+
+    /// Session PDA must not exist (proves the account is orphaned).
+    /// CHECK: Address must match gauntlet_echoes.session, and lamports must be 0.
+    #[account(
+        constraint = session_pda.key() == gauntlet_echoes.session @ GameplayStateError::InvalidSession,
         constraint = session_pda.lamports() == 0 @ GameplayStateError::SessionNotActive,
     )]
     pub session_pda: UncheckedAccount<'info>,

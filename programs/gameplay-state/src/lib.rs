@@ -1494,6 +1494,38 @@ pub mod gameplay_state {
         Ok(())
     }
 
+    /// Resets an orphaned duel entry whose session PDA no longer exists.
+    /// This recovers players stuck in the duel queue after an interrupted abandon flow.
+    pub fn reset_orphaned_duel_entry(ctx: Context<ResetOrphanedDuelEntry>) -> Result<()> {
+        let duel_entry = &mut ctx.accounts.duel_entry;
+
+        if duel_entry.entry_lamports == 0 {
+            return Ok(());
+        }
+
+        if !duel_entry.finalized {
+            transfer_lamports_from_vault(
+                &ctx.accounts.duel_vault.to_account_info(),
+                &ctx.accounts.player.to_account_info(),
+                duel_entry.entry_lamports,
+            )?;
+
+            if let Some(creator) = duel_entry.matched_creator.take() {
+                let open_queue = &mut ctx.accounts.duel_open_queue;
+                if open_queue.entries.len() < constants::DUEL_OPEN_QUEUE_CAPACITY {
+                    open_queue.entries.push(creator);
+                }
+            }
+        }
+
+        duel_entry.entry_lamports = 0;
+        duel_entry.finalized = false;
+        duel_entry.settled = false;
+        duel_entry.outcome = DuelRunOutcome::Pending;
+
+        Ok(())
+    }
+
     /// Enters Pit Draft.
     ///
     /// Behavior:
@@ -5229,6 +5261,42 @@ pub struct ResetDuelEntry<'info> {
     pub player: AccountInfo<'info>,
 
     pub session_signer: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct ResetOrphanedDuelEntry<'info> {
+    #[account(
+        mut,
+        seeds = [DUEL_ENTRY_SEED, session_pda.key().as_ref()],
+        bump = duel_entry.bump,
+        constraint = duel_entry.player == player.key() @ GameplayStateError::Unauthorized,
+        constraint = duel_entry.session == session_pda.key() @ GameplayStateError::InvalidSession,
+    )]
+    pub duel_entry: Box<Account<'info, DuelEntry>>,
+
+    /// Session PDA must not exist (proves the entry is orphaned).
+    /// CHECK: Address must match duel_entry.session, and lamports must be 0.
+    #[account(
+        constraint = session_pda.lamports() == 0 @ GameplayStateError::SessionNotActive,
+    )]
+    pub session_pda: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        seeds = [DUEL_VAULT_SEED],
+        bump = duel_vault.bump,
+    )]
+    pub duel_vault: Account<'info, DuelVault>,
+
+    #[account(
+        mut,
+        seeds = [DUEL_OPEN_QUEUE_SEED],
+        bump = duel_open_queue.bump,
+    )]
+    pub duel_open_queue: Box<Account<'info, DuelOpenQueue>>,
+
+    #[account(mut)]
+    pub player: Signer<'info>,
 }
 
 #[derive(Accounts)]

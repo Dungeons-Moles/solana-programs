@@ -4144,10 +4144,10 @@ mod discriminator_tests {
     }
 
     #[test]
-    fn test_authorized_waypoint_visibility_radius_allows_only_day_or_night() {
+    fn test_authorized_waypoint_visibility_radius_allows_spawn_day_and_night() {
         assert!(is_valid_authorized_waypoint_visibility_radius(DAY_VISION_RADIUS));
         assert!(is_valid_authorized_waypoint_visibility_radius(NIGHT_VISION_RADIUS));
-        assert!(!is_valid_authorized_waypoint_visibility_radius(SPAWN_VISION_RADIUS));
+        assert!(is_valid_authorized_waypoint_visibility_radius(SPAWN_VISION_RADIUS));
         assert!(!is_valid_authorized_waypoint_visibility_radius(1));
         assert!(!is_valid_authorized_waypoint_visibility_radius(13));
     }

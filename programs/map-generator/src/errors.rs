@@ -54,4 +54,12 @@ pub enum MapGeneratorError {
     /// VRF state is not in requested status (cannot fulfill)
     #[msg("VRF not requested")]
     VrfNotRequested,
+
+    /// SessionDiscovery discovered_pois array is full
+    #[msg("Discovered POIs full")]
+    DiscoveredPoisFull,
+
+    /// Invalid offer data passed to update_active_offer
+    #[msg("Invalid offer data")]
+    InvalidOfferData,
 }

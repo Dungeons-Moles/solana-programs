@@ -1,0 +1,15 @@
+################################################################
+# Deploy poi_system only
+################################################################
+
+addon "svm" {
+    rpc_api_url = input.rpc_api_url
+    network_id = input.network_id
+}
+
+action "deploy_poi_system" "svm::deploy_program" {
+    description = "Deploy poi_system program"
+    program = svm::get_program_from_anchor_project("poi_system")
+    authority = signer.authority
+    payer = signer.payer
+}

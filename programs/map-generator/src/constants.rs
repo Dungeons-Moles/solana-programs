@@ -45,5 +45,11 @@ pub const MAX_ENEMIES: usize = 48;
 /// Maximum number of POIs that can be spawned on a map
 pub const MAX_POIS: usize = 64;
 
+/// Maximum number of discovered POIs tracked in SessionDiscovery
+pub const MAX_DISCOVERED_POIS: usize = 64;
+
 /// Total tiles in the map (50 * 50 = 2500)
 pub const TOTAL_TILES: usize = (MAP_WIDTH as usize) * (MAP_HEIGHT as usize);
+
+/// Size of serialized GauntletEchoSnapshot in bytes
+pub const ECHO_DATA_SIZE: usize = 179;

@@ -1,0 +1,9 @@
+// For mainnet deployment, use web wallets, hardware wallets or multisig to improve key security.
+
+signer "payer" "svm::web_wallet" {
+    description = "Pays fees for program deployments and operations"
+}
+
+signer "authority" "svm::web_wallet" {
+    description = "Can upgrade programs and manage critical ops"
+}

@@ -57,10 +57,10 @@ Base-layer wallet transactions are only for **out-of-session** actions:
 
 This rule is non-negotiable across programs and frontend integration.
 
-- **Localnet only:** `*Rng` flows are allowed for local deterministic testing.
+- **Localnet:** use the same `*Vrf` flows as other clusters, backed by a local VRF oracle/queue when testing locally.
 - **Devnet/Mainnet:** all session-critical randomness must use `*Vrf` flows and on-chain fulfillment/callbacks.
 - **VRF oracle queue:** All programs must use the ER oracle queue (`5hBR571xnXppuCPveTrctfTU7tJLSN94nq7kv7FRK5Tc`). Never use the base-layer `DEFAULT_QUEUE` (`Cuj97ggrhhidhbu39TijNVqE74xvKJ69gDervRUXAxGh`) in any VRF instruction (`oracle_queue` accounts must be `UncheckedAccount` — not constrained to a specific address).
-- **VRF timing:** `init_*_vrf_state` and `request_*_vrf` MUST run on the Ephemeral Rollup **after** delegation, never on the base chain. The frontend must send these transactions via the routed ER connection (`sendRoutedErTransaction`).
+- **VRF timing:** `request_*_vrf` MUST run on the Ephemeral Rollup **after** delegation via the routed ER connection (`sendRoutedErTransaction`). `init_*_vrf_state` may be pre-created on base before delegation when the flow needs the PDA to exist ahead of ER requests.
 - Programs must not rely on client-generated randomness on devnet/mainnet for gameplay-critical decisions.
 - Frontend must gate gameplay until required VRF state accounts are fulfilled on ER.
 

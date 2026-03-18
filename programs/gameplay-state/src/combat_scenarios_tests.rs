@@ -1,15 +1,17 @@
-use super::{build_player_combatant, preprocess_enemy_effects, strip_baked_battle_start_stat_effects};
+use super::{
+    build_player_combatant, preprocess_enemy_effects, strip_baked_battle_start_stat_effects,
+};
 use crate::state::RunMode;
 use crate::stats::calculate_stats;
 use anchor_lang::prelude::Pubkey;
 use boss_system::{
-    get_boss_annotated_item_effects, scale_boss, to_combatant_input, BossDefinition, Week,
-    BOSSES, CRYSTAL_MIMIC_A, GREEDKEEPER_A, OBSIDIAN_GOLEM_A, POWDER_KEG_BARON_A,
+    get_boss_annotated_item_effects, scale_boss, to_combatant_input, BossDefinition, Week, BOSSES,
+    CRYSTAL_MIMIC_A, GREEDKEEPER_A, OBSIDIAN_GOLEM_A, POWDER_KEG_BARON_A,
 };
 use combat_system::{
     resolve_boss_combat_annotated_with_player_gold, resolve_combat_annotated_with_both_gold,
-    CombatLogEntry, CombatOutcome, LogAction,
-    STATUS_BLEED, STATUS_CHILL, STATUS_RUST, STATUS_SHRAPNEL,
+    CombatLogEntry, CombatOutcome, LogAction, STATUS_BLEED, STATUS_CHILL, STATUS_RUST,
+    STATUS_SHRAPNEL,
 };
 use field_enemies::archetypes::{get_enemy_combatant_input, ids, ARCHETYPE_COUNT};
 use player_inventory::effects::generate_annotated_combat_effects;
@@ -52,12 +54,23 @@ fn tool_id(tag: &[u8; 2], variant: u8) -> [u8; 8] {
 }
 
 fn gear_id(tag: &[u8; 2], index: u8) -> [u8; 8] {
-    [b'G', b'-', tag[0], tag[1], b'-', b'0' + (index / 10), b'0' + (index % 10), 0]
+    [
+        b'G',
+        b'-',
+        tag[0],
+        tag[1],
+        b'-',
+        b'0' + (index / 10),
+        b'0' + (index % 10),
+        0,
+    ]
 }
 
 fn all_tool_instances() -> Vec<ItemInstance> {
     let mut tools = vec![ItemInstance::new(*BASIC_PICKAXE.id, Tier::I)];
-    for tag in [*b"ST", *b"SC", *b"GR", *b"BL", *b"FR", *b"RU", *b"BO", *b"TE"] {
+    for tag in [
+        *b"ST", *b"SC", *b"GR", *b"BL", *b"FR", *b"RU", *b"BO", *b"TE",
+    ] {
         for variant in 1..=2 {
             tools.push(ItemInstance::new(tool_id(&tag, variant), Tier::I));
         }
@@ -67,7 +80,9 @@ fn all_tool_instances() -> Vec<ItemInstance> {
 
 fn all_gear_instances() -> Vec<ItemInstance> {
     let mut gear = Vec::new();
-    for tag in [*b"ST", *b"SC", *b"GR", *b"BL", *b"FR", *b"RU", *b"BO", *b"TE"] {
+    for tag in [
+        *b"ST", *b"SC", *b"GR", *b"BL", *b"FR", *b"RU", *b"BO", *b"TE",
+    ] {
         for index in 1..=8 {
             gear.push(ItemInstance::new(gear_id(&tag, index), Tier::I));
         }
@@ -239,7 +254,11 @@ fn assert_log_contains<F: Fn(&CombatLogEntry) -> bool>(
 fn is_valid_status_id(extra: u8) -> bool {
     matches!(
         extra,
-        STATUS_CHILL | STATUS_SHRAPNEL | STATUS_RUST | STATUS_BLEED | combat_system::STATUS_REFLECTION
+        STATUS_CHILL
+            | STATUS_SHRAPNEL
+            | STATUS_RUST
+            | STATUS_BLEED
+            | combat_system::STATUS_REFLECTION
     )
 }
 
@@ -265,8 +284,10 @@ fn assert_no_fake_baked_player_stat_gain_logs(log: &[CombatLogEntry], context: &
 fn assert_status_log_extras_are_valid(log: &[CombatLogEntry], context: &str) {
     assert!(
         log.iter().all(|entry| {
-            !matches!(entry.action, LogAction::ApplyStatus | LogAction::StatusDamage)
-                || is_valid_status_id(entry.extra)
+            !matches!(
+                entry.action,
+                LogAction::ApplyStatus | LogAction::StatusDamage
+            ) || is_valid_status_id(entry.extra)
         }),
         "{}: found status log entry with invalid status id",
         context
@@ -279,7 +300,10 @@ fn assert_contributions_are_well_formed(log: &[CombatLogEntry], context: &str) {
             && !entry.contributions.is_empty()
         {
             assert!(
-                entry.contributions.iter().all(|contribution| contribution.value > 0),
+                entry
+                    .contributions
+                    .iter()
+                    .all(|contribution| contribution.value > 0),
                 "{}: found non-positive contribution value in {:?}",
                 context,
                 entry
@@ -794,13 +818,12 @@ fn test_baked_tool_stats_do_not_emit_battle_start_logs() {
     );
 
     assert!(
-        !outcome
-            .log
-            .iter()
-            .any(|entry| matches!(entry.action, LogAction::AtkChange | LogAction::ArmorChange)
-                && entry.is_player
-                && entry.turn == 1
-                && entry.value > 0),
+        !outcome.log.iter().any(|entry| matches!(
+            entry.action,
+            LogAction::AtkChange | LogAction::ArmorChange
+        ) && entry.is_player
+            && entry.turn == 1
+            && entry.value > 0),
         "baked Tool/Oil combat stats should not replay as battle-start gain logs"
     );
 }
@@ -863,7 +886,12 @@ fn test_corrosive_pick_gloves_buckler_vs_blood_mosquito_regression() {
     assert_log_contains(
         &outcome.log,
         "blood_mosquito_first_hit_hits_armor_not_hp",
-        |entry| entry.action == LogAction::ArmorChange && entry.is_player && entry.turn == 1 && entry.value < 0,
+        |entry| {
+            entry.action == LogAction::ArmorChange
+                && entry.is_player
+                && entry.turn == 1
+                && entry.value < 0
+        },
     );
 
     assert!(
@@ -882,7 +910,10 @@ fn test_corrosive_pick_gloves_buckler_vs_blood_mosquito_regression() {
         player_attack_entries.iter().any(|entry| {
             entry.value == 2
                 && entry.contributions.len() == 2
-                && entry.contributions.iter().all(|contribution| contribution.value == 1)
+                && entry
+                    .contributions
+                    .iter()
+                    .all(|contribution| contribution.value == 1)
         }),
         "player attack should preserve split 1-damage contributions on the aggregated attack log"
     );
@@ -982,13 +1013,13 @@ fn test_rime_pike_frost_lantern_rust_engine_vs_powder_tick_t3_finishes_at_20_hp(
     let self_countdown_index = outcome
         .log
         .iter()
-        .position(|entry| !entry.is_player && entry.action == LogAction::NonWeaponDamage && entry.value == 3)
+        .position(|entry| {
+            !entry.is_player && entry.action == LogAction::NonWeaponDamage && entry.value == 3
+        })
         .expect("powder tick should damage itself on countdown");
-    let enemy_attack_after_countdown = outcome
-        .log
-        .iter()
-        .enumerate()
-        .find(|(index, entry)| *index > self_countdown_index && !entry.is_player && entry.action == LogAction::Attack);
+    let enemy_attack_after_countdown = outcome.log.iter().enumerate().find(|(index, entry)| {
+        *index > self_countdown_index && !entry.is_player && entry.action == LogAction::Attack
+    });
     assert!(
         enemy_attack_after_countdown.is_none(),
         "Powder Tick should not attack after dying to its own countdown"
@@ -1044,10 +1075,7 @@ fn test_powder_keg_baron_countdown_hits_both_sides() {
     let outcome = run_boss_combat(
         19,
         basic_pickaxe_with_oils(&[]),
-        vec![
-            ItemInstance::new(*b"G-FR-02\0", Tier::I),
-            work_vest(),
-        ],
+        vec![ItemInstance::new(*b"G-FR-02\0", Tier::I), work_vest()],
         &POWDER_KEG_BARON_A,
         12,
         Week::Two,
@@ -1101,8 +1129,7 @@ fn test_all_field_enemies_with_baked_stats_have_clean_replay_shape() {
 
             let player_stats = calculate_stats(&inventory, 20, RunMode::Campaign);
             let all_player_effects = generate_annotated_combat_effects(&inventory);
-            let player_effects =
-                strip_baked_battle_start_stat_effects(all_player_effects.clone());
+            let player_effects = strip_baked_battle_start_stat_effects(all_player_effects.clone());
             let player_input = build_player_combatant(15, &player_stats, &all_player_effects);
 
             let enemy_input =
@@ -1162,7 +1189,11 @@ fn test_all_field_enemies_with_status_and_non_weapon_builds_have_valid_status_lo
 #[test]
 fn test_all_bosses_have_clean_baked_stat_replay_shape() {
     for boss in BOSSES.iter().copied() {
-        let stage = if boss.biome == boss_system::Biome::A { 12 } else { 32 };
+        let stage = if boss.biome == boss_system::Biome::A {
+            12
+        } else {
+            32
+        };
         let mut inventory = make_inventory();
         inventory.tool = Some(ItemInstance::new(*b"T-RU-01\0", Tier::I));
         inventory.gear[0] = Some(ItemInstance::new(*b"G-SC-02\0", Tier::I));

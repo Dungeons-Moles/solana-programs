@@ -196,7 +196,7 @@ pub static POWDER_KEG_BARON_TRAITS: &[BossTrait] = &[
     ),
 ];
 
-/// Greedkeeper: Steal 10 Gold, ARM = stolen/5 (cap 6)
+/// Greedkeeper: Steal 16 Gold, ARM = stolen/4 (cap 4)
 pub static GREEDKEEPER_TRAITS: &[BossTrait] = &[
     // Toll Collector: Steal 16 Gold at Battle Start
     BossTrait::new(TriggerType::BattleStart, EffectType::StealGold, 16),
@@ -213,8 +213,7 @@ pub static GREEDKEEPER_TRAITS: &[BossTrait] = &[
 // Week 3 Biome A Final Boss Traits
 // ============================================================================
 
-/// The Eldritch Mole: Three phases (75%: +10 ARM, 50%: 2 strikes, 25%: 2 Bleed/turn)
-/// Deep Dig: Player DIG > boss DIG reduces Phase 1 armor by 10
+/// The Eldritch Mole: Three phases (75%: +6 ARM, 50%: 2 strikes, 25%: 2 Bleed/turn)
 pub static ELDRITCH_MOLE_TRAITS: &[BossTrait] = &[
     // Phase 1 (75%): +6 Armor
     BossTrait::new(TriggerType::TurnStart, EffectType::GainArmor, 6)
@@ -227,7 +226,7 @@ pub static ELDRITCH_MOLE_TRAITS: &[BossTrait] = &[
         .with_special(SpecialMechanic::Phase { threshold: 25 }),
 ];
 
-/// The Gilded Devourer: Gold→ARM (+1/5 cap 10), Wounded: 3 Bleed
+/// The Gilded Devourer: Gold→ARM (+1/3 cap 12), Wounded: 2 Bleed
 pub static GILDED_DEVOURER_TRAITS: &[BossTrait] = &[
     // Tax Feast: Gold to ARM conversion at Battle Start
     BossTrait::new(TriggerType::BattleStart, EffectType::GoldToArmor, 3).with_special(
@@ -244,7 +243,7 @@ pub static GILDED_DEVOURER_TRAITS: &[BossTrait] = &[
 // Week 3 Biome B Final Boss Traits
 // ============================================================================
 
-/// The Frostbound Leviathan: 3 Chill start, +4 ARM/2 turns, Exposed: clear Chill +2 SPD
+/// The Frostbound Leviathan: 2 Chill start, +3 ARM/2 turns, first-time Exposed: clear Chill +2 SPD
 pub static FROSTBOUND_LEVIATHAN_TRAITS: &[BossTrait] = &[
     // Whiteout: 2 Chill at Battle Start
     BossTrait::new(TriggerType::BattleStart, EffectType::ApplyChill, 2),
@@ -254,7 +253,7 @@ pub static FROSTBOUND_LEVIATHAN_TRAITS: &[BossTrait] = &[
     BossTrait::new(TriggerType::FirstTimeExposed, EffectType::GainSpd, 2),
 ];
 
-/// The Rusted Chronomancer: 2 strikes T1, 1 Rust/turn, Wounded: 4 Bleed
+/// The Rusted Chronomancer: 2 strikes T1, 1 Rust/turn, Wounded: 3 Bleed
 pub static RUSTED_CHRONOMANCER_TRAITS: &[BossTrait] = &[
     // Time Shear: +1 strike on Turn 1 (total 2)
     BossTrait::new(TriggerType::FirstTurn, EffectType::GainStrikes, 1),

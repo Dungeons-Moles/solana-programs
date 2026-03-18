@@ -138,7 +138,7 @@ mod tests {
         let inventory = make_inventory();
         let stats = calculate_stats(&inventory, 20, RunMode::Campaign);
 
-        assert_eq!(stats.max_hp, 15);
+        assert_eq!(stats.max_hp, 18);
         assert_eq!(stats.dig, BASE_DIG);
         assert_eq!(stats.atk, 0);
         assert_eq!(stats.arm, 0);
@@ -153,17 +153,17 @@ mod tests {
         assert_eq!(stats_low.max_hp, 25, "levels 1-9 should start at 25 HP");
 
         let stats_mid = calculate_stats(&inventory, 10, RunMode::Campaign);
-        assert_eq!(stats_mid.max_hp, 20, "levels 10-19 should start at 20 HP");
+        assert_eq!(stats_mid.max_hp, 22, "levels 10-19 should start at 22 HP");
 
         let stats_high = calculate_stats(&inventory, 20, RunMode::Campaign);
-        assert_eq!(stats_high.max_hp, 15, "levels 20+ should start at 15 HP");
+        assert_eq!(stats_high.max_hp, 18, "levels 20+ should start at 18 HP");
     }
 
     #[test]
     fn test_stats_with_max_hp_item() {
         let inventory = make_inventory();
         let stats = calculate_stats(&inventory, 20, RunMode::Campaign);
-        assert_eq!(stats.max_hp, 15);
+        assert_eq!(stats.max_hp, 18);
     }
 
     #[test]
@@ -185,7 +185,7 @@ mod tests {
 
         let stats = calculate_stats(&inventory, 20, RunMode::Campaign);
 
-        assert_eq!(stats.max_hp, 15);
+        assert_eq!(stats.max_hp, 18);
         assert_eq!(stats.dig, BASE_DIG + 1);
         assert_eq!(stats.atk, 2);
         assert_eq!(stats.arm, 8);
@@ -204,7 +204,7 @@ mod tests {
         // Miner Helmet contributes +3 ARM, Work Vest contributes +1 ARM and +4 max HP,
         // Miner Boots contributes +1 SPD, and the Union Standard itemset bonus remains
         // dynamic rather than baked into the starting combatant.
-        assert_eq!(stats.max_hp, 19);
+        assert_eq!(stats.max_hp, 22);
         assert_eq!(stats.arm, 4);
         assert_eq!(stats.spd, 1);
     }

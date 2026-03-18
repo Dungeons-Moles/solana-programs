@@ -963,6 +963,7 @@ mod tests {
             mole_den_y: 0,
             walkable_count: 0,
             packed_tiles: [0xFF; PACKED_TILES_SIZE],
+            discovered_tiles: [0; PACKED_TILES_SIZE],
             enemy_count: 0,
             enemies: [crate::state::EnemySpawn::default(); 48],
             poi_count: 0,

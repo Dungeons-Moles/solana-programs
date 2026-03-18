@@ -28,6 +28,7 @@ use constants::{
     base_hp, BASE_ARM, BASE_ATK, BASE_SPD, COMPANY_TREASURY_ADDRESS, DAY_MOVES,
     DUEL_ENTRY_LAMPORTS, DUEL_ENTRY_SEED, DUEL_OPEN_QUEUE_SEED, DUEL_QUEUE_SEED, DUEL_VAULT_SEED,
     GAME_STATE_SEED, GAUNTLET_BOOTSTRAP_ECHOES_PER_WEEK, GAUNTLET_CAMPAIGN_LEVEL,
+    GAUNTLET_ECHOES_SEED,
     GAUNTLET_COMPANY_FEE_BPS, GAUNTLET_CONFIG_SEED, GAUNTLET_ENTRY_LAMPORTS,
     GAUNTLET_EPOCH_DURATION_SECONDS, GAUNTLET_EPOCH_POOL_SEED, GAUNTLET_MAX_WEEKLY_ECHOES,
     GAUNTLET_PLAYER_SCORE_SEED, GAUNTLET_POOL_FEE_BPS, GAUNTLET_POOL_VAULT_SEED,
@@ -41,10 +42,10 @@ use errors::GameplayStateError;
 pub const GAMEPLAY_AUTHORITY_SEED: &[u8] = b"gameplay_authority";
 pub const SESSION_MANAGER_RUNMODE_AUTHORITY_SEED: &[u8] = b"session_manager_authority";
 use movement::{
-    calculate_move_cost, chebyshev_distance, get_boss_for_combat, get_boss_id,
-    get_duel_boss_for_combat, get_duel_boss_id, get_duel_boss_for_combat_vrf,
-    get_duel_boss_id_vrf, is_adjacent, is_within_bounds,
-    should_process_night_enemy_movement, should_process_target_enemy_combat,
+    calculate_move_cost, chebyshev_distance, compute_visible_enemies, get_boss_for_combat,
+    get_boss_id, get_duel_boss_for_combat, get_duel_boss_for_combat_vrf, get_duel_boss_id,
+    get_duel_boss_id_vrf, is_adjacent, is_within_bounds, should_process_night_enemy_movement,
+    should_process_target_enemy_combat,
 };
 use player_inventory::effects::{generate_annotated_combat_effects, generate_combat_effects};
 use player_inventory::items::ITEMS;
@@ -53,12 +54,12 @@ use player_profile::state::PlayerProfile;
 use state::{
     DuelCreatorEntry, DuelEntry, DuelLoadoutSnapshot, DuelOpenQueue, DuelQueue, DuelRunOutcome,
     DuelVault, GameState, GameplayVrfState, GauntletConfig, GauntletDefenderCredit,
-    GauntletEchoSnapshot, GauntletEchoSource, GauntletEpochPool, GauntletLoadoutSnapshot,
-    GauntletPendingPoints, GauntletPlayerScore, GauntletPoolVault, GauntletWeekPool, MapEnemies,
-    Phase, PitDraftQueue, PitDraftVault, RunMode,
+    GauntletEchoSnapshot, GauntletEchoSource, GauntletEchoes, GauntletEpochPool,
+    GauntletLoadoutSnapshot, GauntletPendingPoints, GauntletPlayerScore, GauntletPoolVault,
+    GauntletWeekPool, MapEnemies, Phase, PitDraftQueue, PitDraftVault, RunMode,
 };
-use vrf_rng::VrfStatus;
 use stats::{calculate_stats, PlayerStats};
+use vrf_rng::VrfStatus;
 
 fn compute_gold_gain_multiplier(effects: &[ItemEffect]) -> i16 {
     effects
@@ -182,6 +183,8 @@ pub const DAY_VISION_RADIUS: u8 = 4;
 pub const PIT_DRAFT_MAX_START_GOLD: u16 = 30;
 pub const DISCOVER_VISIBLE_WAYPOINTS_DISCRIMINATOR: [u8; 8] =
     [0x3b, 0x26, 0x6a, 0x00, 0x3a, 0xb1, 0x50, 0xfc];
+pub const DISCOVER_VISIBLE_WAYPOINTS_AUTHORIZED_DISCRIMINATOR: [u8; 8] =
+    [0xe8, 0x21, 0x93, 0x9c, 0x32, 0x7a, 0x1e, 0x8f];
 /// Player inventory program ID for authorized HP modifications via CPI
 pub const PLAYER_INVENTORY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     0x8b, 0x77, 0xfe, 0x0c, 0xa3, 0x5f, 0x22, 0x83, 0xa1, 0x7c, 0x15, 0x8e, 0x3e, 0x68, 0xbd, 0x0e,
@@ -312,6 +315,168 @@ pub mod gameplay_state {
         }
         map_enemies.count = map_enemies.enemies.len() as u8;
 
+        discover_visible_waypoints_authorized_cpi(
+            &ctx.accounts.map_pois,
+            &ctx.accounts.gameplay_authority.to_account_info(),
+            &ctx.accounts.poi_system_program.to_account_info(),
+            ctx.bumps.gameplay_authority,
+            generated_map.spawn_x,
+            generated_map.spawn_y,
+            6, // SPAWN_VISION_RADIUS
+            ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info()).as_ref(),
+            Some(&ctx.accounts.session.to_account_info()),
+            Some(&ctx.accounts.session_signer.to_account_info()),
+            Some(&ctx.accounts.map_generator_program.to_account_info()),
+        )?;
+
+        // Sync boss ID, echo, and visible enemies to SessionDiscovery
+        if let Some(ref sd) = ctx.accounts.session_discovery {
+            let sd_info = sd.to_account_info();
+            let session_info = ctx.accounts.session.to_account_info();
+            let ga_info = ctx.accounts.gameplay_authority.to_account_info();
+            let mgp_info = ctx.accounts.map_generator_program.to_account_info();
+            let ga_bump = ctx.bumps.gameplay_authority;
+
+            let map_pois_data = ctx.accounts.map_pois.try_borrow_data()?;
+            const MAP_POIS_HEADER_LEN: usize = 8 + 32 + 1 + 1 + 1 + 1 + 8;
+            const POI_INSTANCE_LEN: usize = 6;
+            if map_pois_data.len() >= MAP_POIS_HEADER_LEN + 4 {
+                let pois_len_offset = MAP_POIS_HEADER_LEN;
+                let pois_len = u32::from_le_bytes(
+                    map_pois_data[pois_len_offset..pois_len_offset + 4]
+                        .try_into()
+                        .unwrap_or([0u8; 4]),
+                ) as usize;
+                let pois_start = pois_len_offset + 4;
+
+                let mut mole_den: Option<(u8, u8, u8, u8)> = None;
+                for index in 0..pois_len {
+                    let base = pois_start + index * POI_INSTANCE_LEN;
+                    if base + POI_INSTANCE_LEN > map_pois_data.len() {
+                        break;
+                    }
+
+                    let poi_type = map_pois_data[base];
+                    let x = map_pois_data[base + 1];
+                    let y = map_pois_data[base + 2];
+                    if poi_type == 1 {
+                        mole_den = Some((index as u8, poi_type, x, y));
+                        break;
+                    }
+                }
+
+                if let Some((mole_den_index, mole_den_type, mole_den_x, mole_den_y)) = mole_den {
+                map_generator::cpi::record_discovered_poi(
+                    CpiContext::new(
+                        mgp_info.clone(),
+                        map_generator::cpi::accounts::RecordDiscoveredPoi {
+                            session_discovery: sd_info.clone(),
+                            session: session_info.clone(),
+                            session_signer: ctx.accounts.session_signer.to_account_info(),
+                        },
+                    ),
+                    mole_den_type,
+                    mole_den_x,
+                    mole_den_y,
+                    mole_den_index,
+                )?;
+            }
+            }
+
+            // Boss ID for week 1
+            let boss_id = if game_state.run_mode == RunMode::Gauntlet {
+                [0u8; 12]
+            } else if game_state.run_mode == RunMode::Duel {
+                let vrf = extract_gameplay_vrf(
+                    &ctx.accounts.gameplay_vrf_state,
+                    &game_state.session,
+                )?;
+                let vrf_ref = vrf.as_ref().map(|(r, n)| (r, *n));
+                get_duel_boss_id_vrf(vrf_ref, generated_map.seed, 1)?
+            } else {
+                get_boss_id(game_state.campaign_level, 1)?
+            };
+            update_boss_id_cpi(&sd_info, &session_info, &ga_info, &mgp_info, ga_bump, boss_id)?;
+
+            // Echo for gauntlet mode (week 1)
+            if game_state.run_mode == RunMode::Gauntlet {
+                let ge_echo = ctx.accounts.gauntlet_echoes.as_ref()
+                    .and_then(|ge| ge.echoes[0].as_ref());
+                if let Some(echo) = ge_echo {
+                    let echo_bytes = echo.try_to_vec().unwrap_or_default();
+                    let mut echo_data = [0u8; 179];
+                    let copy_len = echo_bytes.len().min(179);
+                    echo_data[..copy_len].copy_from_slice(&echo_bytes[..copy_len]);
+                    update_current_echo_cpi(
+                        &sd_info, &session_info, &ga_info, &mgp_info, ga_bump, 1, echo_data,
+                    )?;
+                } else {
+                    update_current_echo_cpi(
+                        &sd_info, &session_info, &ga_info, &mgp_info, ga_bump, 0, [0u8; 179],
+                    )?;
+                }
+            } else {
+                update_current_echo_cpi(
+                    &sd_info, &session_info, &ga_info, &mgp_info, ga_bump, 0, [0u8; 179],
+                )?;
+            }
+
+            // Visible enemies (from spawn radius)
+            let visible = compute_visible_enemies(
+                map_enemies,
+                &generated_map.discovered_tiles,
+                generated_map.width,
+            );
+            update_discovered_enemies_cpi(
+                &sd_info, &session_info, &ga_info, &mgp_info, ga_bump, visible,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Refreshes discovered enemies in SessionDiscovery from MapEnemies + GeneratedMap.
+    /// Legacy fallback for clients that have not yet moved POI reveal flows to the
+    /// inline authorized path.
+    pub fn refresh_discovered_enemies(ctx: Context<RefreshDiscoveredEnemies>) -> Result<()> {
+        if let Some(ref sd) = ctx.accounts.session_discovery {
+            let visible = compute_visible_enemies(
+                &ctx.accounts.map_enemies,
+                &ctx.accounts.generated_map.discovered_tiles,
+                ctx.accounts.generated_map.width,
+            );
+            update_discovered_enemies_cpi(
+                &sd.to_account_info(),
+                &ctx.accounts.session.to_account_info(),
+                &ctx.accounts.gameplay_authority.to_account_info(),
+                &ctx.accounts.map_generator_program.to_account_info(),
+                ctx.bumps.gameplay_authority,
+                visible,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Refreshes discovered enemies in SessionDiscovery, authorized by poi-system CPI.
+    /// Used by reveal-heavy POIs so the frontend does not need a follow-up tx.
+    pub fn refresh_discovered_enemies_authorized(
+        ctx: Context<RefreshDiscoveredEnemiesAuthorized>,
+    ) -> Result<()> {
+        if let Some(ref sd) = ctx.accounts.session_discovery {
+            let visible = compute_visible_enemies(
+                &ctx.accounts.map_enemies,
+                &ctx.accounts.generated_map.discovered_tiles,
+                ctx.accounts.generated_map.width,
+            );
+            update_discovered_enemies_cpi(
+                &sd.to_account_info(),
+                &ctx.accounts.session.to_account_info(),
+                &ctx.accounts.gameplay_authority.to_account_info(),
+                &ctx.accounts.map_generator_program.to_account_info(),
+                ctx.bumps.gameplay_authority,
+                visible,
+            )?;
+        }
         Ok(())
     }
 
@@ -349,6 +514,30 @@ pub mod gameplay_state {
         ctx.accounts.delegate_map_enemies(
             &ctx.accounts.player,
             map_enemies_seeds,
+            local_delegate_config(validator),
+        )?;
+        Ok(())
+    }
+
+    /// Delegates GauntletEchoes PDA to MagicBlock (gauntlet sessions only).
+    pub fn delegate_gauntlet_echoes(
+        ctx: Context<DelegateGauntletEchoes>,
+        validator: Option<Pubkey>,
+    ) -> Result<()> {
+        let session_key = ctx.accounts.game_session.key();
+        let (expected_ge, _) = Pubkey::find_program_address(
+            &[GauntletEchoes::SEED_PREFIX, session_key.as_ref()],
+            &crate::ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.gauntlet_echoes.key(),
+            expected_ge,
+            GameplayStateError::Unauthorized
+        );
+        let ge_seeds: &[&[u8]] = &[GauntletEchoes::SEED_PREFIX, session_key.as_ref()];
+        ctx.accounts.delegate_gauntlet_echoes(
+            &ctx.accounts.player,
+            ge_seeds,
             local_delegate_config(validator),
         )?;
         Ok(())
@@ -394,6 +583,28 @@ pub mod gameplay_state {
         commit_and_undelegate_accounts(
             &ctx.accounts.session_signer.to_account_info(),
             vec![&game_state_info, &map_enemies_info],
+            &ctx.accounts.magic_context,
+            &ctx.accounts.magic_program.to_account_info(),
+        )?;
+        Ok(())
+    }
+
+    /// Commits and undelegates GauntletEchoes from ER (gauntlet sessions only).
+    pub fn undelegate_gauntlet_echoes(ctx: Context<UndelegateGauntletEchoes>) -> Result<()> {
+        let session_key = ctx.accounts.game_session.key();
+        let (expected_ge, _) = Pubkey::find_program_address(
+            &[GauntletEchoes::SEED_PREFIX, session_key.as_ref()],
+            &crate::ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.gauntlet_echoes.key(),
+            expected_ge,
+            GameplayStateError::Unauthorized
+        );
+        let ge_info = ctx.accounts.gauntlet_echoes.to_account_info();
+        commit_and_undelegate_accounts(
+            &ctx.accounts.session_signer.to_account_info(),
+            vec![&ge_info],
             &ctx.accounts.magic_context,
             &ctx.accounts.magic_program.to_account_info(),
         )?;
@@ -630,10 +841,7 @@ pub mod gameplay_state {
             !game_state.is_dead && !game_state.completed,
             GameplayStateError::GauntletRunEnded
         );
-        require!(
-            game_state.gauntlet_echoes[0].is_none(),
-            GameplayStateError::GauntletAlreadyEntered
-        );
+        // GauntletEchoes is created via `init` — Anchor prevents double-init automatically.
         require!(
             ctx.accounts.gauntlet_config.current_epoch_id == epoch_id,
             GameplayStateError::GauntletScoreMismatch
@@ -691,17 +899,12 @@ pub mod gameplay_state {
             player_score.bump = ctx.bumps.gauntlet_player_score;
         }
 
-        let vrf = extract_gameplay_vrf(
-            &ctx.accounts.gameplay_vrf_state,
-            &game_state.session,
-        )?;
-        let vrf_ref = vrf.as_ref().map(|(r, n)| (r, *n));
-        draw_gauntlet_echoes_from_remaining_vrf(
-            game_state,
-            ctx.accounts.player.key(),
-            ctx.remaining_accounts,
-            vrf_ref,
-        )?;
+        let gauntlet_echoes = &mut ctx.accounts.gauntlet_echoes;
+        gauntlet_echoes.session = game_state.session;
+        gauntlet_echoes.bump = ctx.bumps.gauntlet_echoes;
+        // Echo draw deferred to redraw_gauntlet_echoes (on ER, after VRF fulfillment).
+        // VRF is not available at enter_gauntlet time because it runs on base layer
+        // before delegation. Echoes remain None until redraw populates them.
 
         emit!(GauntletEntered {
             player: ctx.accounts.player.key(),
@@ -710,6 +913,33 @@ pub mod gameplay_state {
             company_fee,
             pool_fee,
         });
+        Ok(())
+    }
+
+    /// Draws gauntlet echoes using VRF randomness.
+    /// Called on ER after VRF fulfillment. enter_gauntlet only inits the
+    /// GauntletEchoes account — this instruction populates it with VRF-random draws.
+    pub fn redraw_gauntlet_echoes(ctx: Context<RedrawGauntletEchoes>) -> Result<()> {
+        let game_state = &ctx.accounts.game_state;
+        require!(
+            game_state.run_mode == RunMode::Gauntlet,
+            GameplayStateError::GauntletRunNotActive
+        );
+
+        let vrf = extract_gameplay_vrf(&ctx.accounts.gameplay_vrf_state, &game_state.session)?;
+        // VRF must be present for redraw — that's the whole point
+        require!(vrf.is_some(), GameplayStateError::VrfNotFulfilled);
+
+        let vrf_ref = vrf.as_ref().map(|(r, n)| (r, *n));
+        let gauntlet_echoes = &mut ctx.accounts.gauntlet_echoes;
+        draw_gauntlet_echoes_from_remaining_vrf(
+            gauntlet_echoes,
+            game_state.session,
+            game_state.player,
+            ctx.remaining_accounts,
+            vrf_ref,
+        )?;
+
         Ok(())
     }
 
@@ -896,10 +1126,7 @@ pub mod gameplay_state {
 
         let highest_week_won = game_state.gauntlet_highest_week_won;
         if highest_week_won > 0 && highest_week_won <= 5 {
-            let vrf = extract_gameplay_vrf(
-                &ctx.accounts.gameplay_vrf_state,
-                &game_state.session,
-            )?;
+            let vrf = extract_gameplay_vrf(&ctx.accounts.gameplay_vrf_state, &game_state.session)?;
             let vrf_ref = vrf.as_ref().map(|(r, n)| (r, *n));
             let week_pool = match highest_week_won {
                 1 => &mut ctx.accounts.gauntlet_week1,
@@ -1267,6 +1494,38 @@ pub mod gameplay_state {
         Ok(())
     }
 
+    /// Resets an orphaned duel entry whose session PDA no longer exists.
+    /// This recovers players stuck in the duel queue after an interrupted abandon flow.
+    pub fn reset_orphaned_duel_entry(ctx: Context<ResetOrphanedDuelEntry>) -> Result<()> {
+        let duel_entry = &mut ctx.accounts.duel_entry;
+
+        if duel_entry.entry_lamports == 0 {
+            return Ok(());
+        }
+
+        if !duel_entry.finalized {
+            transfer_lamports_from_vault(
+                &ctx.accounts.duel_vault.to_account_info(),
+                &ctx.accounts.player.to_account_info(),
+                duel_entry.entry_lamports,
+            )?;
+
+            if let Some(creator) = duel_entry.matched_creator.take() {
+                let open_queue = &mut ctx.accounts.duel_open_queue;
+                if open_queue.entries.len() < constants::DUEL_OPEN_QUEUE_CAPACITY {
+                    open_queue.entries.push(creator);
+                }
+            }
+        }
+
+        duel_entry.entry_lamports = 0;
+        duel_entry.finalized = false;
+        duel_entry.settled = false;
+        duel_entry.outcome = DuelRunOutcome::Pending;
+
+        Ok(())
+    }
+
     /// Enters Pit Draft.
     ///
     /// Behavior:
@@ -1359,7 +1618,9 @@ pub mod gameplay_state {
         // Require VRF for pit draft — real SOL stakes demand fair randomness
         // Extract VRF randomness as owned data (if available and fulfilled).
         // Falls back to slot-based deterministic randomness when VRF is absent or not yet fulfilled.
-        let vrf_data: Option<([u8; 32], u64)> = ctx.accounts.gameplay_vrf_state
+        let vrf_data: Option<([u8; 32], u64)> = ctx
+            .accounts
+            .gameplay_vrf_state
             .as_ref()
             .filter(|v| v.status == vrf_rng::VrfStatus::Fulfilled)
             .map(|v| (v.randomness, v.nonce));
@@ -1392,7 +1653,9 @@ pub mod gameplay_state {
         let (waiting_start_gold, entrant_start_gold) = match &vrf_data {
             Some((randomness, nonce)) => {
                 let mut gold_rng = vrf_rng::GameRng::from_vrf(
-                    randomness, *nonce, vrf_rng::domains::PIT_DRAFT_GOLD,
+                    randomness,
+                    *nonce,
+                    vrf_rng::domains::PIT_DRAFT_GOLD,
                 );
                 let w = gold_rng.next_bounded(u64::from(PIT_DRAFT_MAX_START_GOLD) + 1) as u16;
                 let e = gold_rng.next_bounded(u64::from(PIT_DRAFT_MAX_START_GOLD) + 1) as u16;
@@ -1548,6 +1811,26 @@ pub mod gameplay_state {
         Ok(())
     }
 
+    /// Closes the GauntletEchoes account via session key signer authorization.
+    /// Used by session-manager CPI during end_session to clean up.
+    /// Rent is returned to the player wallet.
+    pub fn close_gauntlet_echoes(ctx: Context<CloseGauntletEchoes>) -> Result<()> {
+        emit!(GauntletEchoesClosed {
+            session: ctx.accounts.gauntlet_echoes.session,
+        });
+        Ok(())
+    }
+
+    /// Closes an orphaned GauntletEchoes account whose session PDA no longer exists.
+    pub fn close_orphaned_gauntlet_echoes(
+        ctx: Context<CloseOrphanedGauntletEchoes>,
+    ) -> Result<()> {
+        emit!(GauntletEchoesClosed {
+            session: ctx.accounts.gauntlet_echoes.session,
+        });
+        Ok(())
+    }
+
     /// Heals the player by a specified amount, authorized by poi-system.
     ///
     /// This instruction can only be called via CPI from poi-system using
@@ -1623,10 +1906,8 @@ pub mod gameplay_state {
             });
 
             if should_resolve_weekly_boss(game_state.run_mode, game_state.week) {
-                let vrf = extract_gameplay_vrf(
-                    &ctx.accounts.gameplay_vrf_state,
-                    &game_state.session,
-                )?;
+                let vrf =
+                    extract_gameplay_vrf(&ctx.accounts.gameplay_vrf_state, &game_state.session)?;
                 let vrf_ref = vrf.as_ref().map(|(r, n)| (r, *n));
                 // Resolve boss fight inline (same as move_player does)
                 let player_won = resolve_boss_fight(
@@ -1638,15 +1919,21 @@ pub mod gameplay_state {
                     player_inventory_program,
                     ctx.bumps.gameplay_authority,
                     vrf_ref,
+                    None,
+                    None,
+                    None,
+                    None,
                 )?;
 
                 if !player_won {
                     return Ok(());
                 }
             } else if game_state.run_mode == RunMode::Gauntlet {
-                // Resolve gauntlet echo inline (same as move_player does)
+                let ge = ctx.accounts.gauntlet_echoes.as_ref()
+                    .ok_or(GameplayStateError::GauntletNotInitialized)?;
                 let player_won = resolve_gauntlet_echo_inline(
                     game_state,
+                    ge,
                     inventory,
                     inventory_info,
                     &ctx.accounts.gameplay_authority,
@@ -1813,18 +2100,8 @@ pub mod gameplay_state {
             GameplayStateError::OutOfBounds
         );
 
-        let from_x = game_state.position_x;
-        let from_y = game_state.position_y;
         game_state.position_x = target_x;
         game_state.position_y = target_y;
-
-        emit!(PositionSetAuthorized {
-            player: game_state.player,
-            from_x,
-            from_y,
-            to_x: target_x,
-            to_y: target_y,
-        });
 
         Ok(())
     }
@@ -1872,12 +2149,6 @@ pub mod gameplay_state {
             GameplayStateError::NotAdjacent
         );
 
-        let is_night_move = game_state.phase.is_night();
-        let visibility_radius = if is_night_move {
-            NIGHT_VISION_RADIUS
-        } else {
-            DAY_VISION_RADIUS
-        };
         let is_wall = !generated_map.is_walkable(target_x, target_y);
         let player_stats =
             calculate_stats(inventory, game_state.campaign_level, game_state.run_mode);
@@ -1902,11 +2173,13 @@ pub mod gameplay_state {
             );
         }
 
+        let original_phase = game_state.phase;
+        let (post_move_phase, post_move_moves_remaining) =
+            resolve_post_move_phase_and_moves(original_phase, game_state.moves_remaining, move_cost)?;
+        let visibility_radius = visibility_radius_for_phase(post_move_phase);
+
         let is_last_move_of_week =
             game_state.phase.is_night3() && game_state.moves_remaining == move_cost;
-        let from_x = game_state.position_x;
-        let from_y = game_state.position_y;
-
         let mut enemies_moved: u8 = 0;
         let mut combat_triggered = false;
 
@@ -1977,14 +2250,6 @@ pub mod gameplay_state {
                         map_enemies.enemies[enemy_idx].y = new_y;
                         enemies_moved = enemies_moved.saturating_add(1);
 
-                        emit!(EnemyMoved {
-                            enemy_index: enemy_idx as u8,
-                            from_x: old_x,
-                            from_y: old_y,
-                            to_x: new_x,
-                            to_y: new_y,
-                        });
-
                         if new_x == chase_x && new_y == chase_y {
                             combat_triggered = true;
                             let player_won = resolve_enemy_combat(
@@ -2016,45 +2281,48 @@ pub mod gameplay_state {
                 ctx.bumps.gameplay_authority,
                 target_x,
                 target_y,
+                ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info()).as_ref(),
             )?;
         }
 
         game_state.position_x = target_x;
         game_state.position_y = target_y;
-        discover_visible_waypoints_cpi(
-            &ctx.accounts.map_pois,
-            &game_state.to_account_info(),
+        game_state.phase = post_move_phase;
+        game_state.moves_remaining = post_move_moves_remaining;
+        reveal_radius_cpi(
+            &ctx.accounts.generated_map.to_account_info(),
+            &ctx.accounts.game_session,
             &ctx.accounts.player.to_account_info(),
-            &ctx.accounts.poi_system_program.to_account_info(),
+            &ctx.accounts.map_generator_program.to_account_info(),
+            target_x,
+            target_y,
             visibility_radius,
+            ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info()).as_ref(),
+        )?;
+        // Reload generated_map after CPI so discovered_tiles reflects newly revealed area.
+        // Without this, compute_visible_enemies reads stale pre-reveal data.
+        ctx.accounts.generated_map.reload()?;
+        discover_visible_waypoints_authorized_cpi(
+            &ctx.accounts.map_pois,
+            &ctx.accounts.gameplay_authority,
+            &ctx.accounts.poi_system_program.to_account_info(),
+            ctx.bumps.gameplay_authority,
+            target_x,
+            target_y,
+            visibility_radius,
+            ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info()).as_ref(),
+            Some(&ctx.accounts.game_session),
+            Some(&ctx.accounts.player.to_account_info()),
+            Some(&ctx.accounts.map_generator_program.to_account_info()),
         )?;
 
-        // Handle move cost consumption, potentially spanning phases
         if needs_phase_span {
-            // Consume all moves from current phase
-            let moves_from_current = game_state.moves_remaining;
-            let remaining_cost = move_cost - moves_from_current;
-
-            // Advance to next phase
-            let next_phase = game_state.phase.next().unwrap();
-            game_state.phase = next_phase;
-            game_state.moves_remaining = next_phase
-                .moves_allowed()
-                .checked_sub(remaining_cost)
-                .ok_or(GameplayStateError::ArithmeticOverflow)?;
-
             emit!(PhaseAdvanced {
                 player: game_state.player,
-                new_phase: next_phase,
+                new_phase: post_move_phase,
                 new_week: game_state.week,
                 moves_remaining: game_state.moves_remaining,
             });
-        } else {
-            // Simple subtraction within same phase
-            game_state.moves_remaining = game_state
-                .moves_remaining
-                .checked_sub(move_cost)
-                .ok_or(GameplayStateError::ArithmeticOverflow)?;
         }
 
         game_state.total_moves = game_state
@@ -2079,17 +2347,22 @@ pub mod gameplay_state {
             combat_triggered = combat_triggered || is_last_move_of_week;
         }
 
-        emit!(PlayerMoved {
-            player: game_state.player,
-            from_x,
-            from_y,
-            to_x: target_x,
-            to_y: target_y,
-            moves_remaining: game_state.moves_remaining,
-            is_dig: is_wall,
-            combat_triggered,
-            enemies_moved,
-        });
+        // Sync visible enemies to SessionDiscovery (AFTER combat so defeated enemies are excluded)
+        if let Some(ref sd) = ctx.accounts.session_discovery {
+            let visible = compute_visible_enemies(
+                map_enemies,
+                &ctx.accounts.generated_map.discovered_tiles,
+                ctx.accounts.generated_map.width,
+            );
+            update_discovered_enemies_cpi(
+                &sd.to_account_info(),
+                &ctx.accounts.game_session,
+                &ctx.accounts.gameplay_authority,
+                &ctx.accounts.map_generator_program.to_account_info(),
+                ctx.bumps.gameplay_authority,
+                visible,
+            )?;
+        }
 
         if game_state.moves_remaining == 0 {
             if game_state.phase.is_night3() {
@@ -2106,6 +2379,7 @@ pub mod gameplay_state {
                         &game_state.session,
                     )?;
                     let vrf_ref = vrf.as_ref().map(|(r, n)| (r, *n));
+                    let ge_ref = ctx.accounts.gauntlet_echoes.as_deref();
                     let player_won = resolve_boss_fight(
                         game_state,
                         ctx.accounts.generated_map.seed,
@@ -2115,13 +2389,20 @@ pub mod gameplay_state {
                         player_inventory_program,
                         ctx.bumps.gameplay_authority,
                         vrf_ref,
+                        ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info()).as_ref(),
+                        Some(&ctx.accounts.game_session),
+                        Some(&ctx.accounts.map_generator_program.to_account_info()),
+                        ge_ref,
                     )?;
                     if !player_won {
                         return Ok(());
                     }
                 } else if game_state.run_mode == RunMode::Gauntlet {
+                    let ge = ctx.accounts.gauntlet_echoes.as_ref()
+                        .ok_or(GameplayStateError::GauntletNotInitialized)?;
                     let player_won = resolve_gauntlet_echo_inline(
                         game_state,
+                        ge,
                         inventory,
                         inventory_info,
                         &ctx.accounts.gameplay_authority,
@@ -2181,10 +2462,7 @@ pub mod gameplay_state {
             GameplayStateError::GauntletRunNotActive
         );
 
-        let vrf = extract_gameplay_vrf(
-            &ctx.accounts.gameplay_vrf_state,
-            &game_state.session,
-        )?;
+        let vrf = extract_gameplay_vrf(&ctx.accounts.gameplay_vrf_state, &game_state.session)?;
         let vrf_ref = vrf.as_ref().map(|(r, n)| (r, *n));
         let player_won = resolve_boss_fight(
             game_state,
@@ -2195,6 +2473,10 @@ pub mod gameplay_state {
             player_inventory_program,
             ctx.bumps.gameplay_authority,
             vrf_ref,
+            ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info()).as_ref(),
+            Some(&ctx.accounts.game_session.to_account_info()),
+            ctx.accounts.map_generator_program.as_ref().map(|p| p.to_account_info()).as_ref(),
+            None, // gauntlet_echoes — trigger_boss_fight rejects gauntlet mode
         )?;
         if !player_won {
             return Ok(());
@@ -2283,10 +2565,8 @@ pub mod gameplay_state {
             ..Default::default()
         });
 
-        let (_, identity_bump) = Pubkey::find_program_address(
-            &[ephemeral_vrf_sdk::consts::IDENTITY],
-            &crate::ID,
-        );
+        let (_, identity_bump) =
+            Pubkey::find_program_address(&[ephemeral_vrf_sdk::consts::IDENTITY], &crate::ID);
         anchor_lang::solana_program::program::invoke_signed(
             &ix,
             &[
@@ -2301,36 +2581,11 @@ pub mod gameplay_state {
         Ok(())
     }
 
-    /// LOCALNET ONLY: request local RNG (same lifecycle as request_gameplay_vrf).
-    #[cfg(feature = "local-rng")]
-    pub fn request_gameplay_rng(ctx: Context<RequestGameplayRng>) -> Result<()> {
-        let vrf = &mut ctx.accounts.vrf_state;
-        vrf.session = ctx.accounts.session.key();
-        vrf.randomness = [0u8; 32];
-        vrf.nonce = 1;
-        vrf.status = VrfStatus::Requested;
-        vrf.bump = ctx.bumps.vrf_state;
-        Ok(())
-    }
-
     /// Oracle callback: writes randomness into VrfState and sets status = Fulfilled.
     /// In production, the signer must be the VRF oracle program identity.
     /// Under `mock-vrf` feature, any signer is accepted for testing.
-    pub fn fulfill_gameplay_vrf(ctx: Context<FulfillGameplayVrf>, randomness: [u8; 32]) -> Result<()> {
-        let vrf = &mut ctx.accounts.vrf_state;
-        require!(
-            vrf.status == VrfStatus::Requested,
-            GameplayStateError::VrfNotRequested
-        );
-        vrf.randomness = randomness;
-        vrf.status = VrfStatus::Fulfilled;
-        Ok(())
-    }
-
-    /// LOCALNET ONLY: self-fulfill local RNG (same lifecycle as fulfill_gameplay_vrf).
-    #[cfg(feature = "local-rng")]
-    pub fn fulfill_gameplay_rng(
-        ctx: Context<FulfillGameplayRng>,
+    pub fn fulfill_gameplay_vrf(
+        ctx: Context<FulfillGameplayVrf>,
         randomness: [u8; 32],
     ) -> Result<()> {
         let vrf = &mut ctx.accounts.vrf_state;
@@ -2459,6 +2714,17 @@ pub struct DelegateGameplayAccounts<'info> {
     pub player: Signer<'info>,
 }
 
+#[delegate]
+#[derive(Accounts)]
+pub struct DelegateGauntletEchoes<'info> {
+    #[account(mut, del)]
+    /// CHECK: PDA is validated in handler.
+    pub gauntlet_echoes: AccountInfo<'info>,
+    /// CHECK: Session PDA owned by session-manager; used only for seed derivation.
+    pub game_session: UncheckedAccount<'info>,
+    pub player: Signer<'info>,
+}
+
 #[commit]
 #[derive(Accounts)]
 pub struct UndelegateGameplayAccounts<'info> {
@@ -2468,6 +2734,18 @@ pub struct UndelegateGameplayAccounts<'info> {
     #[account(mut)]
     /// CHECK: PDA is validated and deserialized in handler.
     pub map_enemies: AccountInfo<'info>,
+    /// CHECK: Session PDA used only for deterministic PDA validation.
+    pub game_session: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub session_signer: Signer<'info>,
+}
+
+#[commit]
+#[derive(Accounts)]
+pub struct UndelegateGauntletEchoes<'info> {
+    #[account(mut)]
+    /// CHECK: PDA is validated in handler.
+    pub gauntlet_echoes: AccountInfo<'info>,
     /// CHECK: Session PDA used only for deterministic PDA validation.
     pub game_session: UncheckedAccount<'info>,
     #[account(mut)]
@@ -2664,7 +2942,11 @@ fn build_pit_draft_inventory_vrf(
         None => return build_pit_draft_inventory(player, active_pool, seed_tag, slot),
     };
 
-    let mut rng = vrf_rng::GameRng::from_vrf(vrf_data.0, vrf_data.1, vrf_rng::domains::PIT_DRAFT_INVENTORY);
+    let mut rng = vrf_rng::GameRng::from_vrf(
+        vrf_data.0,
+        vrf_data.1,
+        vrf_rng::domains::PIT_DRAFT_INVENTORY,
+    );
 
     let mut tool_candidates = Vec::new();
     let mut gear_candidates = Vec::new();
@@ -2768,14 +3050,15 @@ fn gauntlet_final_tie_player_wins(map_seed: u64) -> bool {
 /// VRF-aware gauntlet echo draw.
 /// Falls back to legacy `derive_u64_random` path when `vrf` is None.
 fn draw_gauntlet_echoes_from_remaining_vrf(
-    game_state: &mut GameState,
+    gauntlet_echoes: &mut GauntletEchoes,
+    session_key: Pubkey,
     player_key: Pubkey,
     remaining: &[AccountInfo],
     vrf: Option<(&[u8; 32], u64)>,
 ) -> Result<()> {
     let vrf_data = match vrf {
         Some(v) => v,
-        None => return draw_gauntlet_echoes_from_remaining(game_state, player_key, remaining),
+        None => return draw_gauntlet_echoes_from_remaining(gauntlet_echoes, session_key, player_key, remaining),
     };
 
     require!(
@@ -2794,34 +3077,23 @@ fn draw_gauntlet_echoes_from_remaining_vrf(
             GameplayStateError::GauntletNotInitialized
         );
 
-        let (expected_pda, _) = Pubkey::find_program_address(
-            &[GAUNTLET_WEEK_POOL_SEED, &[week]],
-            &program_id,
-        );
+        let (expected_pda, _) =
+            Pubkey::find_program_address(&[GAUNTLET_WEEK_POOL_SEED, &[week]], &program_id);
         require!(
             info.key() == expected_pda,
             GameplayStateError::InvalidGauntletWeek
         );
 
         let data = info.try_borrow_data()?;
-        require!(
-            data.len() >= 24,
-            GameplayStateError::GauntletNotInitialized
-        );
+        require!(data.len() >= 24, GameplayStateError::GauntletNotInitialized);
         require!(
             data[..8] == *expected_disc,
             GameplayStateError::GauntletNotInitialized
         );
-        require!(
-            data[8] == week,
-            GameplayStateError::InvalidGauntletWeek
-        );
+        require!(data[8] == week, GameplayStateError::InvalidGauntletWeek);
 
         let vec_len = u32::from_le_bytes(data[20..24].try_into().unwrap()) as usize;
-        require!(
-            vec_len > 0,
-            GameplayStateError::GauntletNotInitialized
-        );
+        require!(vec_len > 0, GameplayStateError::GauntletNotInitialized);
 
         // VRF-backed: per-week sub-domain for independent streams
         let sub_domain = vrf_rng::domains::GAUNTLET_ECHO_DRAW ^ (week as u64);
@@ -2836,7 +3108,7 @@ fn draw_gauntlet_echoes_from_remaining_vrf(
         let echo = GauntletEchoSnapshot::deserialize(&mut cursor)
             .map_err(|_| error!(GameplayStateError::GauntletNotInitialized))?;
 
-        game_state.gauntlet_echoes[week_idx as usize] = Some(echo);
+        gauntlet_echoes.echoes[week_idx as usize] = Some(echo);
     }
     Ok(())
 }
@@ -2907,7 +3179,8 @@ fn maybe_insert_player_echo_vrf(
 /// Read echoes from week pool accounts passed as remaining_accounts.
 /// Uses raw byte reads + Borsh cursor to avoid heap-allocating 5 full Vec<GauntletEchoSnapshot>.
 fn draw_gauntlet_echoes_from_remaining(
-    game_state: &mut GameState,
+    gauntlet_echoes: &mut GauntletEchoes,
+    session_key: Pubkey,
     player_key: Pubkey,
     remaining: &[AccountInfo],
 ) -> Result<()> {
@@ -2915,7 +3188,6 @@ fn draw_gauntlet_echoes_from_remaining(
         remaining.len() >= 5,
         GameplayStateError::GauntletNotInitialized
     );
-    let session_key = game_state.session;
     let slot = Clock::get()?.slot;
     let slot_bytes = slot.to_le_bytes();
     let program_id = crate::ID;
@@ -2978,7 +3250,7 @@ fn draw_gauntlet_echoes_from_remaining(
         let echo = GauntletEchoSnapshot::deserialize(&mut cursor)
             .map_err(|_| error!(GameplayStateError::GauntletNotInitialized))?;
 
-        game_state.gauntlet_echoes[week_idx as usize] = Some(echo);
+        gauntlet_echoes.echoes[week_idx as usize] = Some(echo);
     }
     Ok(())
 }
@@ -3242,7 +3514,7 @@ fn preprocess_enemy_effects(
                 if matches!(effect.effect.effect_type, EffectType::GainArmor) {
                     combat_system::state::AnnotatedItemEffect {
                         effect: ItemEffect {
-                        value: armor_from_gold,
+                            value: armor_from_gold,
                             ..effect.effect
                         },
                         source: effect.source,
@@ -3350,6 +3622,7 @@ fn resolve_enemy_combat(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_boss_fight<'info>(
     game_state: &mut GameState,
     map_seed: u64,
@@ -3359,6 +3632,10 @@ fn resolve_boss_fight<'info>(
     player_inventory_program: &AccountInfo<'info>,
     gameplay_authority_bump: u8,
     vrf: Option<(&[u8; 32], u64)>,
+    session_discovery: Option<&AccountInfo<'info>>,
+    session: Option<&AccountInfo<'info>>,
+    map_generator_program: Option<&AccountInfo<'info>>,
+    gauntlet_echoes: Option<&GauntletEchoes>,
 ) -> Result<bool> {
     let stage = game_state.campaign_level;
     let (boss_input, boss_id) = if game_state.run_mode == RunMode::Duel {
@@ -3455,6 +3732,52 @@ fn resolve_boss_fight<'info>(
                 new_week: game_state.week,
                 moves_remaining: game_state.moves_remaining,
             });
+
+            // Update boss ID for next week in SessionDiscovery
+            if let (Some(sd), Some(sess), Some(mgp)) =
+                (session_discovery, session, map_generator_program)
+            {
+                let next_boss_id = if game_state.run_mode == RunMode::Duel {
+                    get_duel_boss_id_vrf(vrf, map_seed, game_state.week)?
+                } else if game_state.run_mode == RunMode::Gauntlet {
+                    [0u8; 12]
+                } else {
+                    get_boss_id(stage, game_state.week)?
+                };
+                update_boss_id_cpi(sd, sess, gameplay_authority, mgp, gameplay_authority_bump, next_boss_id)?;
+
+                // Update echo for gauntlet mode
+                if game_state.run_mode == RunMode::Gauntlet {
+                    let echo_idx = (game_state.week as usize).saturating_sub(1);
+                    if let Some(Some(echo)) = gauntlet_echoes.and_then(|ge| ge.echoes.get(echo_idx)) {
+                        let echo_bytes = echo.try_to_vec().unwrap_or_default();
+                        let mut echo_data = [0u8; 179];
+                        let copy_len = echo_bytes.len().min(179);
+                        echo_data[..copy_len].copy_from_slice(&echo_bytes[..copy_len]);
+                        update_current_echo_cpi(sd, sess, gameplay_authority, mgp, gameplay_authority_bump, 1, echo_data)?;
+                    } else {
+                        update_current_echo_cpi(
+                            sd,
+                            sess,
+                            gameplay_authority,
+                            mgp,
+                            gameplay_authority_bump,
+                            0,
+                            [0u8; 179],
+                        )?;
+                    }
+                } else {
+                    update_current_echo_cpi(
+                        sd,
+                        sess,
+                        gameplay_authority,
+                        mgp,
+                        gameplay_authority_bump,
+                        0,
+                        [0u8; 179],
+                    )?;
+                }
+            }
         }
 
         // Process Victory trigger effects (e.g., Lucky Coin, Blood Chalice)
@@ -3479,6 +3802,7 @@ fn resolve_boss_fight<'info>(
 
 fn resolve_gauntlet_echo_inline<'info>(
     game_state: &mut GameState,
+    gauntlet_echoes: &GauntletEchoes,
     inventory: &PlayerInventory,
     inventory_info: &AccountInfo<'info>,
     gameplay_authority: &AccountInfo<'info>,
@@ -3492,7 +3816,7 @@ fn resolve_gauntlet_echo_inline<'info>(
         GameplayStateError::InvalidGauntletWeek
     );
 
-    let echo = match game_state.gauntlet_echoes[(week - 1) as usize] {
+    let echo = match gauntlet_echoes.echoes[(week - 1) as usize] {
         Some(e) => e,
         None => return Err(GameplayStateError::GauntletNotInitialized.into()),
     };
@@ -3636,6 +3960,7 @@ fn set_tile_floor_cpi<'info>(
     gameplay_authority_bump: u8,
     x: u8,
     y: u8,
+    session_discovery: Option<&AccountInfo<'info>>,
 ) -> Result<()> {
     let signer_seeds: &[&[&[u8]]] = &[&[GAMEPLAY_AUTHORITY_SEED, &[gameplay_authority_bump]]];
 
@@ -3646,11 +3971,40 @@ fn set_tile_floor_cpi<'info>(
                 generated_map: generated_map.clone(),
                 session: session.clone(),
                 gameplay_authority: gameplay_authority.clone(),
+                session_discovery: session_discovery.cloned(),
             },
             signer_seeds,
         ),
         x,
         y,
+    )?;
+
+    Ok(())
+}
+
+fn reveal_radius_cpi<'info>(
+    generated_map: &AccountInfo<'info>,
+    session: &AccountInfo<'info>,
+    session_signer: &AccountInfo<'info>,
+    map_generator_program: &AccountInfo<'info>,
+    center_x: u8,
+    center_y: u8,
+    radius: u8,
+    session_discovery: Option<&AccountInfo<'info>>,
+) -> Result<()> {
+    map_generator::cpi::reveal_radius(
+        CpiContext::new(
+            map_generator_program.clone(),
+            map_generator::cpi::accounts::RevealRadius {
+                generated_map: generated_map.clone(),
+                session: session.clone(),
+                session_signer: session_signer.clone(),
+                session_discovery: session_discovery.cloned(),
+            },
+        ),
+        center_x,
+        center_y,
+        radius,
     )?;
 
     Ok(())
@@ -3662,10 +4016,17 @@ fn discover_visible_waypoints_cpi<'info>(
     player: &AccountInfo<'info>,
     poi_system_program: &AccountInfo<'info>,
     visibility_radius: u8,
+    session_discovery: Option<&AccountInfo<'info>>,
+    session: Option<&AccountInfo<'info>>,
+    map_generator_program: Option<&AccountInfo<'info>>,
 ) -> Result<()> {
     let mut data = [0u8; 9];
     data[..8].copy_from_slice(&DISCOVER_VISIBLE_WAYPOINTS_DISCRIMINATOR);
     data[8] = visibility_radius;
+
+    let sd_key = session_discovery.map(|a| a.key()).unwrap_or(POI_SYSTEM_PROGRAM_ID);
+    let sess_key = session.map(|a| a.key()).unwrap_or(POI_SYSTEM_PROGRAM_ID);
+    let mgp_key = map_generator_program.map(|a| a.key()).unwrap_or(POI_SYSTEM_PROGRAM_ID);
 
     let instruction = Instruction {
         program_id: POI_SYSTEM_PROGRAM_ID,
@@ -3673,18 +4034,171 @@ fn discover_visible_waypoints_cpi<'info>(
             AccountMeta::new(map_pois.key(), false),
             AccountMeta::new_readonly(game_state.key(), false),
             AccountMeta::new_readonly(player.key(), true),
+            // Optional accounts: real PDA or program ID sentinel for None
+            AccountMeta::new(sd_key, false),
+            AccountMeta::new_readonly(sess_key, false),
+            AccountMeta::new_readonly(mgp_key, false),
         ],
         data: data.to_vec(),
     };
 
-    invoke(
+    let mut account_infos = vec![
+        map_pois.clone(),
+        game_state.clone(),
+        player.clone(),
+        poi_system_program.clone(),
+    ];
+    if let Some(sd) = session_discovery {
+        account_infos.push(sd.clone());
+    }
+    if let Some(sess) = session {
+        account_infos.push(sess.clone());
+    }
+    if let Some(mgp) = map_generator_program {
+        account_infos.push(mgp.clone());
+    }
+
+    invoke(&instruction, &account_infos)?;
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn discover_visible_waypoints_authorized_cpi<'info>(
+    map_pois: &AccountInfo<'info>,
+    gameplay_authority: &AccountInfo<'info>,
+    poi_system_program: &AccountInfo<'info>,
+    gameplay_authority_bump: u8,
+    center_x: u8,
+    center_y: u8,
+    visibility_radius: u8,
+    session_discovery: Option<&AccountInfo<'info>>,
+    session: Option<&AccountInfo<'info>>,
+    session_signer: Option<&AccountInfo<'info>>,
+    map_generator_program: Option<&AccountInfo<'info>>,
+) -> Result<()> {
+    let mut data = [0u8; 11];
+    data[..8].copy_from_slice(&DISCOVER_VISIBLE_WAYPOINTS_AUTHORIZED_DISCRIMINATOR);
+    data[8] = center_x;
+    data[9] = center_y;
+    data[10] = visibility_radius;
+
+    let mut accounts = vec![
+        AccountMeta::new(map_pois.key(), false),
+        AccountMeta::new_readonly(gameplay_authority.key(), true),
+    ];
+    let mut account_infos = vec![
+        map_pois.clone(),
+        gameplay_authority.clone(),
+        poi_system_program.clone(),
+    ];
+
+    // Append optional accounts for SessionDiscovery waypoint recording
+    if let (Some(sd), Some(sess), Some(signer), Some(mgp)) =
+        (session_discovery, session, session_signer, map_generator_program)
+    {
+        accounts.push(AccountMeta::new(sd.key(), false));
+        accounts.push(AccountMeta::new_readonly(sess.key(), false));
+        accounts.push(AccountMeta::new_readonly(signer.key(), true));
+        accounts.push(AccountMeta::new_readonly(mgp.key(), false));
+        account_infos.push(sd.clone());
+        account_infos.push(sess.clone());
+        account_infos.push(signer.clone());
+        account_infos.push(mgp.clone());
+    }
+
+    let instruction = Instruction {
+        program_id: POI_SYSTEM_PROGRAM_ID,
+        accounts,
+        data: data.to_vec(),
+    };
+
+    let signer_seeds: &[&[&[u8]]] = &[&[GAMEPLAY_AUTHORITY_SEED, &[gameplay_authority_bump]]];
+
+    anchor_lang::solana_program::program::invoke_signed(
         &instruction,
-        &[
-            map_pois.clone(),
-            game_state.clone(),
-            player.clone(),
-            poi_system_program.clone(),
-        ],
+        &account_infos,
+        signer_seeds,
+    )?;
+
+    Ok(())
+}
+
+fn update_discovered_enemies_cpi<'info>(
+    session_discovery: &AccountInfo<'info>,
+    session: &AccountInfo<'info>,
+    gameplay_authority: &AccountInfo<'info>,
+    map_generator_program: &AccountInfo<'info>,
+    gameplay_authority_bump: u8,
+    enemies: Vec<map_generator::state::DiscoveredEnemy>,
+) -> Result<()> {
+    let signer_seeds: &[&[&[u8]]] = &[&[GAMEPLAY_AUTHORITY_SEED, &[gameplay_authority_bump]]];
+
+    map_generator::cpi::update_discovered_enemies(
+        CpiContext::new_with_signer(
+            map_generator_program.clone(),
+            map_generator::cpi::accounts::UpdateDiscoveredEnemies {
+                session_discovery: session_discovery.clone(),
+                session: session.clone(),
+                gameplay_authority: gameplay_authority.clone(),
+            },
+            signer_seeds,
+        ),
+        enemies,
+    )?;
+
+    Ok(())
+}
+
+fn update_boss_id_cpi<'info>(
+    session_discovery: &AccountInfo<'info>,
+    session: &AccountInfo<'info>,
+    gameplay_authority: &AccountInfo<'info>,
+    map_generator_program: &AccountInfo<'info>,
+    gameplay_authority_bump: u8,
+    boss_id: [u8; 12],
+) -> Result<()> {
+    let signer_seeds: &[&[&[u8]]] = &[&[GAMEPLAY_AUTHORITY_SEED, &[gameplay_authority_bump]]];
+
+    map_generator::cpi::update_boss_id(
+        CpiContext::new_with_signer(
+            map_generator_program.clone(),
+            map_generator::cpi::accounts::UpdateBossId {
+                session_discovery: session_discovery.clone(),
+                session: session.clone(),
+                gameplay_authority: gameplay_authority.clone(),
+            },
+            signer_seeds,
+        ),
+        boss_id,
+    )?;
+
+    Ok(())
+}
+
+fn update_current_echo_cpi<'info>(
+    session_discovery: &AccountInfo<'info>,
+    session: &AccountInfo<'info>,
+    gameplay_authority: &AccountInfo<'info>,
+    map_generator_program: &AccountInfo<'info>,
+    gameplay_authority_bump: u8,
+    echo_present: u8,
+    echo_data: [u8; 179],
+) -> Result<()> {
+    let signer_seeds: &[&[&[u8]]] = &[&[GAMEPLAY_AUTHORITY_SEED, &[gameplay_authority_bump]]];
+
+    map_generator::cpi::update_current_echo(
+        CpiContext::new_with_signer(
+            map_generator_program.clone(),
+            map_generator::cpi::accounts::UpdateCurrentEcho {
+                session_discovery: session_discovery.clone(),
+                session: session.clone(),
+                gameplay_authority: gameplay_authority.clone(),
+            },
+            signer_seeds,
+        ),
+        echo_present,
+        echo_data,
     )?;
 
     Ok(())
@@ -3864,6 +4378,37 @@ fn should_resolve_weekly_boss(run_mode: RunMode, week: u8) -> bool {
     }
 }
 
+fn resolve_post_move_phase_and_moves(
+    phase: Phase,
+    moves_remaining: u8,
+    move_cost: u8,
+) -> Result<(Phase, u8)> {
+    if moves_remaining >= move_cost {
+        let updated_moves = moves_remaining
+            .checked_sub(move_cost)
+            .ok_or(GameplayStateError::ArithmeticOverflow)?;
+        return Ok((phase, updated_moves));
+    }
+
+    let next_phase = phase.next().ok_or(GameplayStateError::InsufficientMoves)?;
+    let remaining_cost = move_cost
+        .checked_sub(moves_remaining)
+        .ok_or(GameplayStateError::ArithmeticOverflow)?;
+    let updated_moves = next_phase
+        .moves_allowed()
+        .checked_sub(remaining_cost)
+        .ok_or(GameplayStateError::ArithmeticOverflow)?;
+    Ok((next_phase, updated_moves))
+}
+
+fn visibility_radius_for_phase(phase: Phase) -> u8 {
+    if phase.is_night() {
+        NIGHT_VISION_RADIUS
+    } else {
+        DAY_VISION_RADIUS
+    }
+}
+
 #[cfg(test)]
 fn gauntlet_week_resolution_ready(game_state: &GameState) -> bool {
     game_state.boss_fight_ready && game_state.phase.is_night3() && game_state.moves_remaining == 0
@@ -3977,59 +4522,6 @@ fn take_pending_defender_points(
     }
 }
 
-fn maybe_insert_player_echo(
-    week_pool: &mut Account<GauntletWeekPool>,
-    week: u8,
-    inventory: &PlayerInventory,
-    gold: u16,
-    player: Pubkey,
-) -> Result<()> {
-    let capacity = gauntlet_gear_capacity(week);
-    let mut capped_gear = inventory.gear;
-    for gear_slot in &mut capped_gear[capacity..] {
-        *gear_slot = None;
-    }
-    let snapshot = GauntletEchoSnapshot {
-        week,
-        source: GauntletEchoSource::Player(player),
-        loadout: GauntletLoadoutSnapshot {
-            tool: inventory.tool,
-            gear: capped_gear,
-            gold_at_battle_start: gold,
-        },
-    };
-
-    week_pool.seen_player_echoes = week_pool
-        .seen_player_echoes
-        .checked_add(1)
-        .ok_or(GameplayStateError::ArithmeticOverflow)?;
-    week_pool.player_echoes_added = week_pool.player_echoes_added.saturating_add(1);
-
-    if week_pool.entries.len() < GAUNTLET_MAX_WEEKLY_ECHOES {
-        week_pool.entries.push(snapshot);
-    } else {
-        let rand = derive_u64_random(&[
-            b"gauntlet_reservoir",
-            &week.to_le_bytes(),
-            &week_pool.seen_player_echoes.to_le_bytes(),
-            player.as_ref(),
-        ]);
-        let replace_idx = (rand % week_pool.seen_player_echoes) as usize;
-        if replace_idx < GAUNTLET_MAX_WEEKLY_ECHOES {
-            week_pool.entries[replace_idx] = snapshot;
-        }
-    }
-
-    if week_pool.bootstrap_active && week_pool.player_echoes_added >= 10 {
-        week_pool
-            .entries
-            .retain(|e| e.source != GauntletEchoSource::Bootstrap);
-        week_pool.bootstrap_active = false;
-    }
-
-    Ok(())
-}
-
 #[derive(Accounts)]
 pub struct InitializeGameState<'info> {
     #[account(
@@ -4110,6 +4602,135 @@ pub struct SyncMapEnemies<'info> {
         has_one = session_signer @ GameplayStateError::Unauthorized,
     )]
     pub game_state: Box<Account<'info, GameState>>,
+
+    /// CHECK: Validated by POI system during CPI discovery.
+    #[account(mut)]
+    pub map_pois: AccountInfo<'info>,
+
+    /// CHECK: Must be the poi-system program.
+    #[account(address = POI_SYSTEM_PROGRAM_ID)]
+    pub poi_system_program: AccountInfo<'info>,
+
+    /// Gameplay authority PDA for signing CPI calls to map-generator
+    /// CHECK: This is a PDA derived from gameplay_state program, validated by seeds
+    #[account(
+        seeds = [GAMEPLAY_AUTHORITY_SEED],
+        bump,
+    )]
+    pub gameplay_authority: AccountInfo<'info>,
+
+    /// Map generator program for CPI (update_boss_id, update_current_echo, update_discovered_enemies)
+    pub map_generator_program: Program<'info, map_generator::program::MapGenerator>,
+
+    /// Optional SessionDiscovery for boss/echo/enemy sync.
+    /// CHECK: Passed through to map-generator CPI; validated there.
+    #[account(mut)]
+    pub session_discovery: Option<UncheckedAccount<'info>>,
+
+    /// Optional GameplayVrfState for VRF-backed duel boss selection.
+    pub gameplay_vrf_state: Option<Account<'info, GameplayVrfState>>,
+
+    /// Optional GauntletEchoes for echo sync to SessionDiscovery.
+    #[account(
+        seeds = [GAUNTLET_ECHOES_SEED, session.key().as_ref()],
+        bump = gauntlet_echoes.bump,
+    )]
+    pub gauntlet_echoes: Option<Account<'info, GauntletEchoes>>,
+}
+
+/// Read-only context for refreshing discovered enemies in SessionDiscovery.
+/// Unlike SyncMapEnemies, game_state and map_enemies are NOT mut to avoid
+/// re-serialization that could overwrite position updates from fast_travel.
+#[derive(Accounts)]
+pub struct RefreshDiscoveredEnemies<'info> {
+    pub session_signer: Signer<'info>,
+
+    /// CHECK: Session PDA owned by session-manager.
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID @ GameplayStateError::InvalidSessionOwner)]
+    pub session: UncheckedAccount<'info>,
+
+    /// Generated map (read-only) for discovered_tiles bitmap.
+    #[account(
+        seeds = [map_generator::state::GeneratedMap::SEED_PREFIX, session.key().as_ref()],
+        bump = generated_map.bump,
+        has_one = session @ GameplayStateError::InvalidSession,
+        seeds::program = map_generator::ID,
+    )]
+    pub generated_map: Box<Account<'info, map_generator::state::GeneratedMap>>,
+
+    /// Enemy instances (read-only).
+    #[account(
+        seeds = [MapEnemies::SEED_PREFIX, session.key().as_ref()],
+        bump = map_enemies.bump,
+        has_one = session @ GameplayStateError::InvalidSession,
+    )]
+    pub map_enemies: Account<'info, MapEnemies>,
+
+    /// Gameplay authority PDA for signing CPI calls to map-generator.
+    /// CHECK: PDA derived from gameplay_state program, validated by seeds.
+    #[account(
+        seeds = [GAMEPLAY_AUTHORITY_SEED],
+        bump,
+    )]
+    pub gameplay_authority: AccountInfo<'info>,
+
+    /// Map generator program for CPI (update_discovered_enemies).
+    pub map_generator_program: Program<'info, map_generator::program::MapGenerator>,
+
+    /// SessionDiscovery to write enemy data into.
+    /// CHECK: Passed through to map-generator CPI; validated there.
+    #[account(mut)]
+    pub session_discovery: Option<UncheckedAccount<'info>>,
+}
+
+/// Read-only context for refreshing discovered enemies in SessionDiscovery,
+/// authorized by poi-system CPI after tile-revealing POIs.
+#[derive(Accounts)]
+pub struct RefreshDiscoveredEnemiesAuthorized<'info> {
+    /// POI authority PDA from poi-system that must sign.
+    #[account(
+        seeds = [b"poi_authority"],
+        bump,
+        seeds::program = POI_SYSTEM_PROGRAM_ID,
+    )]
+    pub poi_authority: Signer<'info>,
+
+    /// CHECK: Session PDA owned by session-manager.
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID @ GameplayStateError::InvalidSessionOwner)]
+    pub session: UncheckedAccount<'info>,
+
+    /// Generated map (read-only) for discovered_tiles bitmap.
+    #[account(
+        seeds = [map_generator::state::GeneratedMap::SEED_PREFIX, session.key().as_ref()],
+        bump = generated_map.bump,
+        has_one = session @ GameplayStateError::InvalidSession,
+        seeds::program = map_generator::ID,
+    )]
+    pub generated_map: Box<Account<'info, map_generator::state::GeneratedMap>>,
+
+    /// Enemy instances (read-only).
+    #[account(
+        seeds = [MapEnemies::SEED_PREFIX, session.key().as_ref()],
+        bump = map_enemies.bump,
+        has_one = session @ GameplayStateError::InvalidSession,
+    )]
+    pub map_enemies: Account<'info, MapEnemies>,
+
+    /// Gameplay authority PDA for signing CPI calls to map-generator.
+    /// CHECK: PDA derived from gameplay_state program, validated by seeds.
+    #[account(
+        seeds = [GAMEPLAY_AUTHORITY_SEED],
+        bump,
+    )]
+    pub gameplay_authority: AccountInfo<'info>,
+
+    /// Map generator program for CPI (update_discovered_enemies).
+    pub map_generator_program: Program<'info, map_generator::program::MapGenerator>,
+
+    /// SessionDiscovery to write enemy data into.
+    /// CHECK: Passed through to map-generator CPI; validated there.
+    #[account(mut)]
+    pub session_discovery: Option<UncheckedAccount<'info>>,
 }
 
 #[derive(Accounts)]
@@ -4323,12 +4944,39 @@ pub struct EnterGauntlet<'info> {
     )]
     pub gauntlet_player_score: Account<'info, GauntletPlayerScore>,
 
-    /// Optional GameplayVrfState for VRF-backed echo draw (required for gauntlet).
-    pub gameplay_vrf_state: Option<Account<'info, GameplayVrfState>>,
+    #[account(
+        init,
+        payer = player,
+        space = 8 + GauntletEchoes::INIT_SPACE,
+        seeds = [GAUNTLET_ECHOES_SEED, game_state.session.as_ref()],
+        bump
+    )]
+    pub gauntlet_echoes: Account<'info, GauntletEchoes>,
 
     pub system_program: Program<'info, System>,
-    // Week pools 1-5 passed as remaining_accounts to avoid deserializing 5 large Vec accounts.
-    // Manual PDA + owner + discriminator checks performed in draw_gauntlet_echoes_from_remaining().
+}
+
+/// Re-draws gauntlet echoes using VRF randomness on ER.
+/// Called after VRF fulfillment to replace the deterministic fallback from enter_gauntlet.
+#[derive(Accounts)]
+pub struct RedrawGauntletEchoes<'info> {
+    #[account(
+        has_one = session_signer @ GameplayStateError::Unauthorized,
+    )]
+    pub game_state: Box<Account<'info, GameState>>,
+
+    pub session_signer: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [GAUNTLET_ECHOES_SEED, game_state.session.as_ref()],
+        bump = gauntlet_echoes.bump,
+    )]
+    pub gauntlet_echoes: Account<'info, GauntletEchoes>,
+
+    /// GameplayVrfState with fulfilled randomness (required).
+    pub gameplay_vrf_state: Option<Account<'info, GameplayVrfState>>,
+    // Week pools 1-5 passed as remaining_accounts.
 }
 
 #[derive(Accounts)]
@@ -4616,6 +5264,42 @@ pub struct ResetDuelEntry<'info> {
 }
 
 #[derive(Accounts)]
+pub struct ResetOrphanedDuelEntry<'info> {
+    #[account(
+        mut,
+        seeds = [DUEL_ENTRY_SEED, session_pda.key().as_ref()],
+        bump = duel_entry.bump,
+        constraint = duel_entry.player == player.key() @ GameplayStateError::Unauthorized,
+        constraint = duel_entry.session == session_pda.key() @ GameplayStateError::InvalidSession,
+    )]
+    pub duel_entry: Box<Account<'info, DuelEntry>>,
+
+    /// Session PDA must not exist (proves the entry is orphaned).
+    /// CHECK: Address must match duel_entry.session, and lamports must be 0.
+    #[account(
+        constraint = session_pda.lamports() == 0 @ GameplayStateError::SessionNotActive,
+    )]
+    pub session_pda: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        seeds = [DUEL_VAULT_SEED],
+        bump = duel_vault.bump,
+    )]
+    pub duel_vault: Account<'info, DuelVault>,
+
+    #[account(
+        mut,
+        seeds = [DUEL_OPEN_QUEUE_SEED],
+        bump = duel_open_queue.bump,
+    )]
+    pub duel_open_queue: Box<Account<'info, DuelOpenQueue>>,
+
+    #[account(mut)]
+    pub player: Signer<'info>,
+}
+
+#[derive(Accounts)]
 pub struct EnterPitDraft<'info> {
     #[account(
         mut,
@@ -4724,6 +5408,33 @@ pub struct CloseMapEnemies<'info> {
     pub session_signer: Signer<'info>,
 }
 
+/// Context for closing GauntletEchoes account via session key signer.
+#[derive(Accounts)]
+pub struct CloseGauntletEchoes<'info> {
+    #[account(
+        mut,
+        seeds = [GauntletEchoes::SEED_PREFIX, game_state.session.as_ref()],
+        bump = gauntlet_echoes.bump,
+        constraint = gauntlet_echoes.session == game_state.session @ GameplayStateError::InvalidSession,
+        close = player,
+    )]
+    pub gauntlet_echoes: Account<'info, GauntletEchoes>,
+
+    /// GameState to verify session_signer authorization
+    #[account(
+        has_one = session_signer @ GameplayStateError::Unauthorized,
+    )]
+    pub game_state: Account<'info, GameState>,
+
+    /// Player wallet receives the rent refund (not a signer)
+    /// CHECK: Validated via game_state.player
+    #[account(mut, address = game_state.player @ GameplayStateError::Unauthorized)]
+    pub player: AccountInfo<'info>,
+
+    /// Session key signer must sign to authorize closure
+    pub session_signer: Signer<'info>,
+}
+
 /// Close a corrupted/empty GameState account (0-byte data after ER reset + force-undelegate).
 /// Only works on accounts owned by this program with exactly 0 bytes of data.
 #[derive(Accounts)]
@@ -4779,6 +5490,34 @@ pub struct CloseOrphanedMapEnemies<'info> {
     /// CHECK: Address must match map_enemies.session, and lamports must be 0.
     #[account(
         constraint = session_pda.key() == map_enemies.session @ GameplayStateError::InvalidSession,
+        constraint = session_pda.lamports() == 0 @ GameplayStateError::SessionNotActive,
+    )]
+    pub session_pda: UncheckedAccount<'info>,
+
+    /// Receives the lamports from the closed account.
+    #[account(mut)]
+    /// CHECK: Any destination is fine since the session is dead.
+    pub destination: AccountInfo<'info>,
+
+    pub payer: Signer<'info>,
+}
+
+/// Close an orphaned GauntletEchoes account with valid data, whose session PDA no longer exists.
+/// Validates that the session PDA (from gauntlet_echoes.session) has 0 lamports (doesn't exist).
+#[derive(Accounts)]
+pub struct CloseOrphanedGauntletEchoes<'info> {
+    #[account(
+        mut,
+        seeds = [GAUNTLET_ECHOES_SEED, gauntlet_echoes.session.as_ref()],
+        bump = gauntlet_echoes.bump,
+        close = destination,
+    )]
+    pub gauntlet_echoes: Account<'info, GauntletEchoes>,
+
+    /// Session PDA must not exist (proves the account is orphaned).
+    /// CHECK: Address must match gauntlet_echoes.session, and lamports must be 0.
+    #[account(
+        constraint = session_pda.key() == gauntlet_echoes.session @ GameplayStateError::InvalidSession,
         constraint = session_pda.lamports() == 0 @ GameplayStateError::SessionNotActive,
     )]
     pub session_pda: UncheckedAccount<'info>,
@@ -4861,6 +5600,14 @@ pub struct SkipToDay<'info> {
 
     /// Optional GameplayVrfState for VRF-backed duel boss selection in skip_to_day.
     pub gameplay_vrf_state: Option<Account<'info, GameplayVrfState>>,
+
+    /// Optional GauntletEchoes for gauntlet echo resolution in skip_to_day.
+    #[account(
+        mut,
+        seeds = [GAUNTLET_ECHOES_SEED, game_state.session.as_ref()],
+        bump = gauntlet_echoes.bump,
+    )]
+    pub gauntlet_echoes: Option<Account<'info, GauntletEchoes>>,
 }
 
 /// Context for adding HP bonus when equipping +HP gear, authorized by player-inventory CPI.
@@ -4986,8 +5733,21 @@ pub struct Move<'info> {
     #[account(address = POI_SYSTEM_PROGRAM_ID)]
     pub poi_system_program: AccountInfo<'info>,
 
+    /// Optional SessionDiscovery for fog-of-war dual-write.
+    /// CHECK: Passed through to map-generator CPI; validated there.
+    #[account(mut)]
+    pub session_discovery: Option<UncheckedAccount<'info>>,
+
     /// Optional GameplayVrfState for VRF-backed duel boss selection during movement.
     pub gameplay_vrf_state: Option<Account<'info, GameplayVrfState>>,
+
+    /// Optional GauntletEchoes for gauntlet echo resolution.
+    #[account(
+        mut,
+        seeds = [GAUNTLET_ECHOES_SEED, game_state.session.as_ref()],
+        bump = gauntlet_echoes.bump,
+    )]
+    pub gauntlet_echoes: Option<Account<'info, GauntletEchoes>>,
 
     pub player: Signer<'info>,
 }
@@ -5042,6 +5802,14 @@ pub struct TriggerBossFight<'info> {
 
     /// Optional GameplayVrfState for VRF-backed duel boss selection.
     pub gameplay_vrf_state: Option<Account<'info, GameplayVrfState>>,
+
+    /// Optional SessionDiscovery for boss ID update at week transition.
+    /// CHECK: Passed through to map-generator CPI; validated there.
+    #[account(mut)]
+    pub session_discovery: Option<UncheckedAccount<'info>>,
+
+    /// Optional map-generator program for SessionDiscovery CPI.
+    pub map_generator_program: Option<Program<'info, map_generator::program::MapGenerator>>,
 
     pub player: Signer<'info>,
 }
@@ -5119,27 +5887,6 @@ pub struct RequestGameplayVrf<'info> {
     pub system_program: Program<'info, System>,
 }
 
-#[cfg(feature = "local-rng")]
-#[derive(Accounts)]
-pub struct RequestGameplayRng<'info> {
-    #[account(mut)]
-    pub payer: Signer<'info>,
-
-    /// CHECK: Session PDA; used only for VRF state seed derivation.
-    pub session: UncheckedAccount<'info>,
-
-    #[account(
-        init,
-        payer = payer,
-        space = 8 + GameplayVrfState::SPACE,
-        seeds = [GameplayVrfState::SEED_PREFIX, session.key().as_ref()],
-        bump,
-    )]
-    pub vrf_state: Account<'info, GameplayVrfState>,
-
-    pub system_program: Program<'info, System>,
-}
-
 #[derive(Accounts)]
 pub struct FulfillGameplayVrf<'info> {
     /// In production: oracle program identity signer.
@@ -5148,19 +5895,6 @@ pub struct FulfillGameplayVrf<'info> {
         not(feature = "mock-vrf"),
         account(address = ephemeral_vrf_sdk::consts::VRF_PROGRAM_IDENTITY)
     )]
-    pub vrf_program_identity: Signer<'info>,
-
-    #[account(
-        mut,
-        seeds = [GameplayVrfState::SEED_PREFIX, vrf_state.session.as_ref()],
-        bump = vrf_state.bump,
-    )]
-    pub vrf_state: Account<'info, GameplayVrfState>,
-}
-
-#[cfg(feature = "local-rng")]
-#[derive(Accounts)]
-pub struct FulfillGameplayRng<'info> {
     pub vrf_program_identity: Signer<'info>,
 
     #[account(
@@ -5206,19 +5940,6 @@ pub struct GameStateInitialized {
 }
 
 #[event]
-pub struct PlayerMoved {
-    pub player: Pubkey,
-    pub from_x: u8,
-    pub from_y: u8,
-    pub to_x: u8,
-    pub to_y: u8,
-    pub moves_remaining: u8,
-    pub is_dig: bool,
-    pub combat_triggered: bool,
-    pub enemies_moved: u8,
-}
-
-#[event]
 pub struct PhaseAdvanced {
     pub player: Pubkey,
     pub new_phase: Phase,
@@ -5242,6 +5963,11 @@ pub struct GameStateClosed {
 
 #[event]
 pub struct MapEnemiesClosed {
+    pub session: Pubkey,
+}
+
+#[event]
+pub struct GauntletEchoesClosed {
     pub session: Pubkey,
 }
 
@@ -5283,16 +6009,6 @@ pub struct GoldModifiedAuthorized {
     pub delta: i16,
 }
 
-/// Emitted when position is updated via authorized CPI from poi-system.
-#[event]
-pub struct PositionSetAuthorized {
-    pub player: Pubkey,
-    pub from_x: u8,
-    pub from_y: u8,
-    pub to_x: u8,
-    pub to_y: u8,
-}
-
 /// Emitted when combat starts (either player walked into enemy or enemy walked into player)
 #[event]
 pub struct CombatStarted {
@@ -5313,16 +6029,6 @@ pub struct CombatEnded {
     pub final_enemy_hp: i16,
     pub gold_earned: u16,
     pub turns_taken: u8,
-}
-
-/// Emitted when an enemy moves during night phase
-#[event]
-pub struct EnemyMoved {
-    pub enemy_index: u8,
-    pub from_x: u8,
-    pub from_y: u8,
-    pub to_x: u8,
-    pub to_y: u8,
 }
 
 /// Emitted when boss combat starts
@@ -5526,6 +6232,7 @@ pub struct GauntletSessionSettled {
 #[cfg(test)]
 mod hp_logic_tests {
     use super::*;
+    use crate::constants::{DAY_MOVES, NIGHT_MOVES};
 
     fn make_base_stats() -> PlayerStats {
         PlayerStats {
@@ -5705,9 +6412,9 @@ mod hp_logic_tests {
 
         // Non-Coin Slug enemies should not be affected
         let effects = preprocess_enemy_effects(0, 100); // Tunnel Rat
-        assert!(!effects
-            .iter()
-            .any(|e| { matches!(e.effect.effect_type, EffectType::GainArmor) && e.effect.value == 3 }));
+        assert!(!effects.iter().any(|e| {
+            matches!(e.effect.effect_type, EffectType::GainArmor) && e.effect.value == 3
+        }));
     }
 
     #[test]
@@ -5853,7 +6560,6 @@ mod hp_logic_tests {
             max_weeks: 5,
             is_dead: false,
             completed: false,
-            gauntlet_echoes: [None; 5],
             gauntlet_epoch_id: 0,
             gauntlet_points_earned: 0,
             gauntlet_defender_credit: None,
@@ -5881,6 +6587,23 @@ mod hp_logic_tests {
         state = make_gauntlet_gate_state();
         state.moves_remaining = 1;
         assert!(!gauntlet_week_resolution_ready(&state));
+    }
+
+    #[test]
+    fn test_phase_spanning_day_move_uses_night_phase_and_radius() {
+        let (phase, moves_remaining) = resolve_post_move_phase_and_moves(Phase::Day1, 1, 2).unwrap();
+        assert_eq!(phase, Phase::Night1);
+        assert_eq!(moves_remaining, NIGHT_MOVES - 1);
+        assert_eq!(visibility_radius_for_phase(phase), NIGHT_VISION_RADIUS);
+    }
+
+    #[test]
+    fn test_phase_spanning_night_move_uses_next_day_phase_and_radius() {
+        let (phase, moves_remaining) =
+            resolve_post_move_phase_and_moves(Phase::Night1, 1, 2).unwrap();
+        assert_eq!(phase, Phase::Day2);
+        assert_eq!(moves_remaining, DAY_MOVES - 1);
+        assert_eq!(visibility_radius_for_phase(phase), DAY_VISION_RADIUS);
     }
 }
 

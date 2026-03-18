@@ -41,9 +41,11 @@ tests/
 ## Tooling
 
 - Rust `1.75+` (edition `2021`, Solana BPF target)
-- Anchor `0.32.1`
+- Anchor `0.32.x`
 - Solana CLI `2.3+`
 - Node.js `>=18` (TypeScript tests)
+- Surfpool
+- MagicBlock Ephemeral Validator CLI
 
 ## Build, Test, Lint
 
@@ -56,46 +58,119 @@ cargo clippy
 
 ## Local Testing
 
-There are two local validator setups depending on what you need to test. You cannot run both simultaneously yet.
+There are two options for running the local validator stack. Both require the Ephemeral Validator CLI and VRF oracle.
 
-### Option A: MagicBlock Ephemeral Rollups (gameplay + session lifecycle)
-
-1. Start the MagicBlock local validator:
+### Prerequisites
 
 ```bash
-mb-test-validator --reset --ledger .mb-ledger --rpc-port 8899 --faucet-port 9901
+# Ephemeral Validator CLI
+npm install -g @magicblock-labs/ephemeral-validator@latest
+
+# Surfpool (only needed for Option B)
+curl -sL https://run.surfpool.run/ | bash
 ```
 
-2. Start the ephemeral validator:
+### Option A: mb-test-validator with --bpf-program (recommended)
 
-```bash
-ephemeral-validator --remotes http://127.0.0.1:8899 --remotes ws://127.0.0.1:8900 --listen 127.0.0.1:7799 --storage /tmp/mb-er-storage --reset
-```
+Loads programs at genesis — no deploy step needed. Faster and more reliable than `anchor deploy`.
 
-3. Build, deploy, and initialize:
+> **Note:** This method does not load Metaplex programs, so NFT marketplace features (minting, listing, buying skins/items) cannot be tested. Use Option B if you need Metaplex/NFT flows.
+
+1. Build the programs:
 
 ```bash
 anchor build
-anchor deploy
+```
+
+2. Start the base validator with all programs pre-loaded:
+
+```bash
+mb-test-validator --reset --ledger .mb-ledger --rpc-port 8899 --faucet-port 9902 \
+  --bpf-program C8hK4qsqsSYQeqyXuTPTUUS3T7N74WnZCuzvChTpK1Mo target/deploy/gameplay_state.so \
+  --bpf-program GCy5GqvnJN99rgGtV6fMn8NtL9E7RoAyHDGzQv8me65j target/deploy/map_generator.so \
+  --bpf-program KiT25b86BSAF8yErcWwyuuWNaoXMpNf859NjH41TpSj target/deploy/poi_system.so \
+  --bpf-program 6w1XVMSTRmZU9AWCKVvKohGAHSFMENhda7vqhKPQ8TPn target/deploy/session_manager.so \
+  --bpf-program APRnvp41jEYnT1EnrdBTim7bodqE6v2RSgzv1CG7Qv7u target/deploy/player_inventory.so \
+  --bpf-program Ch3bbL1oQk2z5rX1jiun3KuSWZqnXZ1MnrfrtKj4MKun target/deploy/player_profile.so
+```
+
+3. Initialize the on-chain program state:
+
+```bash
 anchor run init
 ```
 
-### Option B: Surfpool (NFT marketplace + Metaplex integrations)
+### Option B: Surfpool with anchor deploy
 
-Surfpool clones devnet state locally, which is required for Metaplex program availability.
+Surfpool stays local while using Solana Devnet as the upstream base layer. Supports all features including Metaplex/NFT marketplace.
 
-1. Start Surfpool pointing at devnet:
+1. Build the programs:
+
+```bash
+anchor build
+```
+
+2. Start Surfpool (programs are deployed on devnet via runbooks):
 
 ```bash
 surfpool start --rpc-url https://api.devnet.solana.com
 ```
 
-2. Build, deploy, and initialize collections:
+### Start the Ephemeral Rollup validator and VRF oracle
+
+Both options require the ER validator and VRF oracle running in separate terminals:
 
 ```bash
-anchor build
-anchor deploy
-anchor run init-collections
+ephemeral-validator --remotes "http://localhost:8899" --remotes "ws://localhost:8900" -l "7799" --lifecycle replica
 ```
 
-> **Note:** Surfpool mode does not include the MagicBlock ephemeral validator, so delegation/undelegation flows cannot be tested in this setup.
+```bash
+VRF_ORACLE_SKIP_PREFLIGHT="true" RPC_URL="http://localhost:8899" WEBSOCKET_URL="ws://localhost:8999" RUST_LOG=info vrf-oracle
+```
+
+At this point the local stack is ready for gameplay and session lifecycle testing. NFT flows are only available with Option B.
+
+## Minting NFTs
+
+This repository includes a CLI helper at [scripts/mint-nft.ts](/home/ailton/Work/dungeons-and-moles/solana-programs/scripts/mint-nft.ts). It mints through the `nft-marketplace` program, which performs the Metaplex Core CPI on-chain.
+
+### Mint a skin NFT
+
+Mint to your current wallet:
+
+```bash
+MINT_TYPE=skin MINT_NAME="Your Skin Name" anchor run mint-nft
+```
+
+Mint to a specific wallet:
+
+```bash
+MINT_TYPE=skin MINT_NAME="Your Skin Name" OWNER=<wallet_pubkey> anchor run mint-nft
+```
+
+Mint with a custom metadata URI:
+
+```bash
+MINT_TYPE=skin MINT_NAME="Your Skin Name" MINT_URI="https://your-metadata-uri.json" OWNER=<wallet_pubkey> anchor run mint-nft
+```
+
+### Mint an NFT item
+
+```bash
+MINT_TYPE=item MINT_NAME="Your Item Name" NFT_ITEM_ID="S-XX-01" anchor run mint-nft
+```
+
+Mint an NFT item to a specific wallet:
+
+```bash
+MINT_TYPE=item MINT_NAME="Your Item Name" NFT_ITEM_ID="S-XX-01" OWNER=<wallet_pubkey> anchor run mint-nft
+```
+
+### Minting notes
+
+- `MINT_TYPE` must be `skin` or `item`.
+- `MINT_NAME` is required.
+- `OWNER` is optional. If omitted, the NFT is minted to the wallet in `ANCHOR_WALLET` or `~/.config/solana/id.json`.
+- `MINT_URI` is optional. If omitted, the script uses `https://arweave.net/placeholder`.
+- `NFT_ITEM_ID` is required for item mints.
+- The signer wallet must be the marketplace authority configured by `anchor run init-collections`.

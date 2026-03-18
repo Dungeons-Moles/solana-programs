@@ -5,6 +5,27 @@ runbooks:
   - name: deployment
     description: Deploy programs
     location: runbooks/deployment
+  - name: deployment-gameplay-state
+    description: Deploy gameplay_state only
+    location: runbooks/deployment-gameplay-state
+  - name: deployment-poi-system
+    description: Deploy poi_system only
+    location: runbooks/deployment-poi-system
+  - name: deployment-map-generator
+    description: Deploy map_generator only
+    location: runbooks/deployment-map-generator
+  - name: deployment-session-manager
+    description: Deploy session_manager only
+    location: runbooks/deployment-session-manager
+  - name: deployment-player-inventory
+    description: Deploy player_inventory only
+    location: runbooks/deployment-player-inventory
+  - name: deployment-player-profile
+    description: Deploy player_profile only
+    location: runbooks/deployment-player-profile
+  - name: deployment-nft-marketplace
+    description: Deploy nft_marketplace only
+    location: runbooks/deployment-nft-marketplace
 environments:
   localnet:
       network_id: localnet
@@ -14,4 +35,3 @@ environments:
       rpc_api_url: https://api.devnet.solana.com
       payer_keypair_json: ~/.config/solana/id.json
       authority_keypair_json: ~/.config/solana/id.json
-

@@ -511,7 +511,7 @@ describe("session-manager", () => {
 
       try {
         await program.methods
-          .delegateSession(campaignLevel + 1)
+          .delegateSession(campaignLevel + 1, null)
           .accounts({
             gameSession: sessionPDA,
             player: user.publicKey,
@@ -565,7 +565,7 @@ describe("session-manager", () => {
       });
 
       await program.methods
-        .delegateSession(campaignLevel)
+        .delegateSession(campaignLevel, null)
         .accounts({
           gameSession: sessionPDA,
           player: user.publicKey,

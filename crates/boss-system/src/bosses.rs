@@ -595,7 +595,9 @@ pub fn get_boss_weaknesses_internal(stage: u8, week: Week) -> [ItemTag; 2] {
 
 /// Convert boss traits to ItemEffect array for combat system
 pub fn get_boss_item_effects(boss: &BossDefinition) -> Vec<ItemEffect> {
-    const GILDED_DEVOURER_ID: [u8; 12] = [b'B', b'-', b'A', b'-', b'W', b'3', b'-', b'0', b'2', 0, 0, 0];
+    const GILDED_DEVOURER_ID: [u8; 12] = [
+        b'B', b'-', b'A', b'-', b'W', b'3', b'-', b'0', b'2', 0, 0, 0,
+    ];
     boss.traits
         .iter()
         .filter(|trait_def| {

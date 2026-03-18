@@ -1492,6 +1492,7 @@ dependencies = [
  "ephemeral-rollups-sdk",
  "ephemeral-vrf-sdk",
  "gameplay-state",
+ "map-generator",
  "player-inventory",
  "session-manager",
  "sha2 0.10.9",

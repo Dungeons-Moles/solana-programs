@@ -1,5 +1,5 @@
 use crate::constants::{MAX_TURNS, SUDDEN_DEATH_RAMP_TURN, SUDDEN_DEATH_TURN};
-use crate::effects::process_shrapnel_retaliation;
+use crate::effects::{chill_damage_bonus, process_shrapnel_retaliation};
 use crate::state::{
     AnnotatedItemEffect, CombatContribution, CombatLogEntry, CombatSourceKind, CombatSourceRef,
     EffectType, StatusEffects, TriggerType,
@@ -111,9 +111,16 @@ pub fn execute_strike(
     attacker_armor_piercing: i16,
     defender_arm: i16,
     defender_hp: i16,
-    _defender_chill: u8,
+    defender_chill: u8,
+    defender_weapon_damage_reduction_while_armored: i16,
 ) -> (i16, i16, i16, i16) {
-    let raw_damage = calculate_weapon_damage(attacker_atk);
+    let mut raw_damage =
+        calculate_weapon_damage(attacker_atk).saturating_add(chill_damage_bonus(defender_chill));
+    if defender_arm > 0 && defender_weapon_damage_reduction_while_armored > 0 {
+        raw_damage = raw_damage
+            .saturating_sub(defender_weapon_damage_reduction_while_armored)
+            .max(1);
+    }
 
     if raw_damage <= 0 {
         return (defender_hp, defender_arm, 0, 0);
@@ -138,7 +145,10 @@ fn shrapnel_source() -> CombatSourceRef {
     }
 }
 
-fn attack_contributions(attacker_stats: &CombatantStats, strike_value: i16) -> Vec<CombatContribution> {
+fn attack_contributions(
+    attacker_stats: &CombatantStats,
+    strike_value: i16,
+) -> Vec<CombatContribution> {
     if strike_value <= 0 {
         return Vec::new();
     }
@@ -158,7 +168,10 @@ fn attack_contributions(attacker_stats: &CombatantStats, strike_value: i16) -> V
     let total: i16 = contributions.iter().map(|entry| entry.value).sum();
     if total < strike_value {
         if let Some(source) = attacker_stats.attack_source {
-            if let Some(existing) = contributions.iter_mut().find(|entry| entry.source == source) {
+            if let Some(existing) = contributions
+                .iter_mut()
+                .find(|entry| entry.source == source)
+            {
                 existing.value = existing.value.saturating_add(strike_value - total);
             } else {
                 contributions.push(CombatContribution {
@@ -269,6 +282,7 @@ pub fn execute_strikes_with_armor_override(
             },
             defender_stats.hp,
             defender_status.chill,
+            defender_stats.weapon_damage_reduction_while_armored,
         );
         defender_stats.hp = new_hp;
         defender_stats.arm = new_arm;
@@ -304,6 +318,18 @@ pub fn execute_strikes_with_armor_override(
 
         // Trigger OnHit effects if any damage was dealt (armor or HP)
         if arm_damage > 0 || hp_damage > 0 {
+            if attacker_stats.on_hit_per_strike && strike_index > 0 {
+                for (index, annotated) in on_hit_effects.iter().enumerate() {
+                    if annotated.effect.trigger == TriggerType::OnHit
+                        && annotated.effect.once_per_turn
+                    {
+                        if let Some(flag) = triggered_flags.get_mut(index) {
+                            *flag = false;
+                        }
+                    }
+                }
+            }
+
             // Track status before OnHit effects to detect rust/shrapnel applications
             let attacker_shrapnel_before = attacker_status.shrapnel;
             let defender_rust_before = defender_status.rust;
@@ -489,18 +515,26 @@ pub fn execute_strikes_with_armor_override(
         }
 
         // Shrapnel: defender retaliates with damage when struck
-        let old_attacker_hp = attacker_stats.hp;
-        attacker_stats.hp = process_shrapnel_retaliation(
-            defender_status.shrapnel,
-            attacker_stats.hp,
-        );
-        let shrapnel_damage = old_attacker_hp - attacker_stats.hp;
-        if shrapnel_damage > 0 {
-            log.push(CombatLogEntry::shrapnel_retaliation(
-                turn,
-                is_player_attacking, // The attacker takes the damage
-                shrapnel_damage,
-            ).with_source(shrapnel_source()));
+        if defender_status.shrapnel > 0 {
+            let old_attacker_hp = attacker_stats.hp;
+            defender_status.shrapnel = defender_status.shrapnel.saturating_sub(1);
+            attacker_stats.hp = process_shrapnel_retaliation(
+                strike_atk,
+                defender_stats.shrapnel_reflect_bonus,
+                attacker_status.chill,
+                attacker_stats.hp,
+            );
+            let shrapnel_damage = old_attacker_hp - attacker_stats.hp;
+            if shrapnel_damage > 0 {
+                log.push(
+                    CombatLogEntry::shrapnel_retaliation(
+                        turn,
+                        is_player_attacking, // The attacker takes the damage
+                        shrapnel_damage,
+                    )
+                    .with_source(shrapnel_source()),
+                );
+            }
         }
 
         if defender_stats.hp <= 0 {
@@ -539,45 +573,6 @@ mod tests {
         }
     }
 
-    fn run_test_strikes(
-        attacker_stats: &mut CombatantStats,
-        defender_stats: &mut CombatantStats,
-        strikes: u8,
-        turn: u8,
-        is_player_attacking: bool,
-    ) -> Vec<CombatLogEntry> {
-        let mut attacker_status = StatusEffects::default();
-        let mut defender_status = StatusEffects::default();
-        let mut on_hit_effects: Vec<AnnotatedItemEffect> = Vec::new();
-        let mut triggered_flags: Vec<bool> = Vec::new();
-        let mut defender_effects: Vec<AnnotatedItemEffect> = Vec::new();
-        let mut defender_triggered_flags: Vec<bool> = Vec::new();
-        let mut player_gold: u16 = 0;
-        let mut enemy_gold: u16 = 0;
-        let mut gold_change: i16 = 0;
-        let mut log: Vec<CombatLogEntry> = Vec::new();
-
-        execute_strikes(
-            strikes,
-            attacker_stats,
-            &mut attacker_status,
-            defender_stats,
-            &mut defender_status,
-            &mut on_hit_effects,
-            &mut triggered_flags,
-            &mut defender_effects,
-            &mut defender_triggered_flags,
-            turn,
-            is_player_attacking,
-            &mut player_gold,
-            &mut enemy_gold,
-            &mut gold_change,
-            &mut log,
-        );
-
-        log
-    }
-
     #[test]
     fn test_multi_strike_damage_accumulates() {
         // ARM is now "HP before HP" - damage hits ARM first, excess to HP
@@ -585,7 +580,7 @@ mod tests {
         let mut arm = 1;
         let mut total_hp_damage = 0;
         for _ in 0..2 {
-            let (new_hp, new_arm, hp_damage, _arm_damage) = execute_strike(2, 0, arm, hp, 0);
+            let (new_hp, new_arm, hp_damage, _arm_damage) = execute_strike(2, 0, arm, hp, 0, 0);
             hp = new_hp;
             arm = new_arm;
             total_hp_damage += hp_damage;
@@ -867,7 +862,7 @@ mod tests {
     fn test_arm_as_hp_pool() {
         // ARM is "HP before HP" - damage depletes ARM first, excess to HP
         // 5 ATK vs 3 ARM, 10 HP -> ARM 0, HP 8
-        let (new_hp, new_arm, hp_damage, arm_damage) = execute_strike(5, 0, 3, 10, 0);
+        let (new_hp, new_arm, hp_damage, arm_damage) = execute_strike(5, 0, 3, 10, 0, 0);
         assert_eq!(new_arm, 0, "ARM should be depleted");
         assert_eq!(arm_damage, 3, "Should deal 3 ARM damage");
         assert_eq!(hp_damage, 2, "Excess 2 damage should hit HP");
@@ -877,7 +872,7 @@ mod tests {
     #[test]
     fn test_arm_fully_blocks_small_damage() {
         // 2 ATK vs 5 ARM, 10 HP -> ARM 3, HP 10 (armor absorbs all damage)
-        let (new_hp, new_arm, hp_damage, arm_damage) = execute_strike(2, 0, 5, 10, 0);
+        let (new_hp, new_arm, hp_damage, arm_damage) = execute_strike(2, 0, 5, 10, 0, 0);
         assert_eq!(new_arm, 3, "ARM should absorb the full strike");
         assert_eq!(arm_damage, 2, "Should deal 2 ARM damage");
         assert_eq!(hp_damage, 0, "No HP damage when armor fully absorbs");
@@ -887,7 +882,7 @@ mod tests {
     #[test]
     fn test_no_arm_all_damage_to_hp() {
         // 3 ATK vs 0 ARM, 10 HP -> ARM 0, HP 7
-        let (new_hp, new_arm, hp_damage, arm_damage) = execute_strike(3, 0, 0, 10, 0);
+        let (new_hp, new_arm, hp_damage, arm_damage) = execute_strike(3, 0, 0, 10, 0, 0);
         assert_eq!(new_arm, 0, "ARM should remain 0");
         assert_eq!(arm_damage, 0, "No ARM to damage");
         assert_eq!(hp_damage, 3, "All damage goes to HP");
@@ -1060,5 +1055,14 @@ mod tests {
     fn test_failsafe_enemy_wins_on_tie() {
         let result = check_failsafe(50, 5, 10, 5, 10);
         assert_eq!(result, Some(false));
+    }
+
+    #[test]
+    fn test_execute_strike_adds_chill_bonus_capped_at_three() {
+        let (new_hp, new_arm, hp_damage, arm_damage) = execute_strike(2, 0, 0, 10, 4, 0);
+        assert_eq!(new_hp, 5);
+        assert_eq!(new_arm, 0);
+        assert_eq!(hp_damage, 5);
+        assert_eq!(arm_damage, 0);
     }
 }

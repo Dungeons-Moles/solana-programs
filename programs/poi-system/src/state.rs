@@ -177,6 +177,20 @@ pub struct OilOffer {
     pub generated_at_seed: u64,
 }
 
+/// Offer for Seismic Scanner (L7).
+/// Stores up to 3 unseen POI types generated from VRF-backed randomness.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, InitSpace, Default)]
+pub struct ScannerOffer {
+    /// Which scanner POI this offer belongs to
+    pub poi_index: u8,
+    /// Number of valid entries in `poi_types`
+    pub count: u8,
+    /// Up to 3 POI types offered to the user
+    pub poi_types: [u8; 3],
+    /// Seed used to generate this offer (for verification)
+    pub generated_at_seed: u64,
+}
+
 /// Runtime POI placed on the map
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, InitSpace, Default)]
 pub struct PoiInstance {
@@ -245,6 +259,9 @@ pub struct MapPois {
     /// Persisted oil offers for Tool Oil Rack POIs (L4).
     #[max_len(8)]
     pub oil_offers: Vec<OilOffer>,
+    /// Persisted scanner offers for Seismic Scanner POIs (L7).
+    #[max_len(8)]
+    pub scanner_offers: Vec<ScannerOffer>,
 }
 
 impl MapPois {

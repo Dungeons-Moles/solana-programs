@@ -2,7 +2,9 @@ use anchor_lang::prelude::*;
 use player_inventory::state::ItemInstance;
 use vrf_rng::{VrfStatus, VRF_STATE_SPACE};
 
-use crate::constants::{DAY_MOVES, DUEL_OPEN_QUEUE_CAPACITY, GAME_STATE_SEED, NIGHT_MOVES};
+use crate::constants::{
+    DAY_MOVES, DUEL_OPEN_QUEUE_CAPACITY, GAME_STATE_SEED, GAUNTLET_ECHOES_SEED, NIGHT_MOVES,
+};
 
 /// VRF state account for gameplay-state program.
 /// PDA Seeds: ["gameplay_vrf", session.key()]
@@ -159,9 +161,6 @@ pub struct GameState {
     /// Used by session_manager to validate end_session calls
     pub completed: bool,
 
-    /// Pre-drawn gauntlet echo opponents (cached at entry, resolved during ER gameplay).
-    pub gauntlet_echoes: [Option<GauntletEchoSnapshot>; 5],
-
     /// Epoch ID at gauntlet entry, used for settlement validation.
     pub gauntlet_epoch_id: u64,
 
@@ -184,19 +183,18 @@ impl GameState {
         [GAME_STATE_SEED, session.as_ref()]
     }
 
-    // Manual INIT_SPACE because GauntletEchoSnapshot uses manual INIT_SPACE (not derive).
+    // Manual INIT_SPACE.
     //
     // Base fields: 3×Pubkey(32) + 8×u8 + i16 + Phase(1) + u8 + u32 + bool + u16 + u8 + u8
     //              + RunMode(1) + u8 + bool + bool = 119
-    // Gauntlet fields:
-    //   gauntlet_echoes: 5 × (1 + GauntletEchoSnapshot::INIT_SPACE) = 5 × 180 = 900
+    // Gauntlet fields (echoes moved to GauntletEchoes account):
     //   gauntlet_epoch_id: 8
     //   gauntlet_points_earned: 8
     //   gauntlet_defender_credit: 1 + GauntletDefenderCredit::INIT_SPACE = 41
     //   gauntlet_highest_week_won: 1
     //   gauntlet_settled: 1
-    // Total new: 959
-    pub const INIT_SPACE: usize = 119 + 959;
+    // Total gauntlet: 59
+    pub const INIT_SPACE: usize = 119 + 59;
 }
 
 /// A spawned enemy instance on the map
@@ -236,6 +234,25 @@ pub struct MapEnemies {
 impl MapEnemies {
     /// PDA seed prefix
     pub const SEED_PREFIX: &'static [u8] = b"map_enemies";
+}
+
+/// Per-session gauntlet echo opponents, separated from GameState for PER privacy.
+/// Delegated to ER alongside GameState so echoes are hidden until each week.
+/// PDA Seeds: ["gauntlet_echoes", session.key()]
+#[account]
+pub struct GauntletEchoes {
+    /// Linked session PDA.
+    pub session: Pubkey,
+    /// Pre-drawn echo opponents for weeks 1-5.
+    pub echoes: [Option<GauntletEchoSnapshot>; 5],
+    /// PDA bump seed.
+    pub bump: u8,
+}
+
+impl GauntletEchoes {
+    pub const SEED_PREFIX: &'static [u8] = GAUNTLET_ECHOES_SEED;
+    // session(32) + echoes(5 × (1 + 179)) + bump(1) = 933
+    pub const INIT_SPACE: usize = 32 + 5 * (1 + GauntletEchoSnapshot::INIT_SPACE) + 1;
 }
 
 /// Global queue for pit draft matchmaking.
@@ -659,6 +676,32 @@ mod tests {
             "GauntletEpochPool INIT_SPACE mismatch: serialized={}, init_space={}",
             serialized_len,
             GauntletEpochPool::INIT_SPACE
+        );
+    }
+
+    #[test]
+    fn gauntlet_echoes_init_space_matches_max_serialized_size() {
+        let echo = GauntletEchoSnapshot {
+            week: 5,
+            source: GauntletEchoSource::Player(Pubkey::new_from_array([0xAA; 32])),
+            loadout: sample_gauntlet_loadout(0xBB),
+        };
+        let ge = GauntletEchoes {
+            session: Pubkey::new_from_array([0xFF; 32]),
+            echoes: [Some(echo); 5],
+            bump: 255,
+        };
+        let serialized_len = ge
+            .try_to_vec()
+            .expect("gauntlet echoes should serialize")
+            .len();
+
+        assert_eq!(
+            serialized_len,
+            GauntletEchoes::INIT_SPACE,
+            "GauntletEchoes INIT_SPACE mismatch: serialized={}, init_space={}",
+            serialized_len,
+            GauntletEchoes::INIT_SPACE
         );
     }
 }

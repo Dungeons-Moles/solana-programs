@@ -1,16 +1,28 @@
 use crate::state::StatusEffects;
 
+pub fn chill_damage_bonus(chill_stacks: u8) -> i16 {
+    i16::from(chill_stacks.min(3))
+}
+
 pub fn apply_chill_to_strikes(base_strikes: u8, chill_stacks: u8) -> u8 {
     let reduced = base_strikes.saturating_sub(chill_stacks);
     reduced.max(1)
 }
 
-pub fn process_shrapnel_retaliation(shrapnel_stacks: u8, attacker_hp: i16) -> i16 {
-    if shrapnel_stacks == 0 {
+pub fn process_shrapnel_retaliation(
+    strike_atk: i16,
+    shrapnel_reflect_bonus: i16,
+    attacker_chill: u8,
+    attacker_hp: i16,
+) -> i16 {
+    if strike_atk <= 0 && shrapnel_reflect_bonus <= 0 {
         return attacker_hp;
     }
 
-    let damage = i16::from(shrapnel_stacks);
+    let damage = strike_atk
+        .max(0)
+        .saturating_add(shrapnel_reflect_bonus.max(0))
+        .saturating_add(chill_damage_bonus(attacker_chill));
     attacker_hp.checked_sub(damage).unwrap_or(i16::MIN)
 }
 
@@ -24,19 +36,18 @@ pub fn process_rust_decay(rust_stacks: u8, current_arm: i16) -> i16 {
     reduced.max(0)
 }
 
-pub fn process_bleed_damage(bleed_stacks: u8, current_hp: i16) -> i16 {
+pub fn process_bleed_damage(bleed_stacks: u8, chill_stacks: u8, current_hp: i16) -> i16 {
     if bleed_stacks == 0 {
         return current_hp;
     }
 
-    let damage = i16::from(bleed_stacks);
+    let damage = i16::from(bleed_stacks).saturating_add(chill_damage_bonus(chill_stacks));
     current_hp.checked_sub(damage).unwrap_or(i16::MIN)
 }
 
 pub fn decay_status_effects(status: &mut StatusEffects) {
     status.chill = status.chill.saturating_sub(1);
     status.bleed = status.bleed.saturating_sub(1);
-    status.shrapnel = 0;
     // Reflection does not decay - it consumes stacks when triggered
 }
 
@@ -50,7 +61,6 @@ pub fn decay_status_effects_preserving_late_chill(
     *preserved_late_chill = 0;
 
     status.bleed = status.bleed.saturating_sub(1);
-    status.shrapnel = 0;
     // Reflection does not decay - it consumes stacks when triggered
 }
 
@@ -92,16 +102,19 @@ mod tests {
     }
 
     #[test]
-    fn test_shrapnel_retaliation_and_clear() {
-        let hp = process_shrapnel_retaliation(3, 10);
+    fn test_shrapnel_retaliation_persists() {
+        let hp = process_shrapnel_retaliation(3, 0, 0, 10);
         assert_eq!(hp, 7);
+
+        let hp_with_chill = process_shrapnel_retaliation(3, 1, 4, 10);
+        assert_eq!(hp_with_chill, 3);
 
         let mut status = StatusEffects {
             shrapnel: 4,
             ..StatusEffects::default()
         };
         decay_status_effects(&mut status);
-        assert_eq!(status.shrapnel, 0);
+        assert_eq!(status.shrapnel, 4);
     }
 
     #[test]
@@ -119,7 +132,7 @@ mod tests {
 
     #[test]
     fn test_bleed_damage_and_decay() {
-        let hp = process_bleed_damage(2, 10);
+        let hp = process_bleed_damage(2, 0, 10);
         assert_eq!(hp, 8);
 
         let mut status = StatusEffects {
@@ -128,5 +141,14 @@ mod tests {
         };
         decay_status_effects(&mut status);
         assert_eq!(status.bleed, 2);
+    }
+
+    #[test]
+    fn test_bleed_damage_includes_chill_bonus_capped_at_three() {
+        let hp = process_bleed_damage(2, 0, 10);
+        assert_eq!(hp, 8);
+
+        let hp_with_chill = process_bleed_damage(2, 4, 10);
+        assert_eq!(hp_with_chill, 5);
     }
 }

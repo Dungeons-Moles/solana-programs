@@ -168,6 +168,22 @@ pub mod session_manager {
             campaign_level,
         )?;
 
+        // 1b. Allocate empty SessionDiscovery (populated on ER during map generation).
+        // Optional: when omitted, the frontend must call init_session_discovery separately.
+        if let Some(ref sd) = ctx.accounts.session_discovery {
+            map_generator::cpi::init_session_discovery(
+                CpiContext::new(
+                    ctx.accounts.map_generator_program.to_account_info(),
+                    map_generator::cpi::accounts::InitSessionDiscovery {
+                        payer: ctx.accounts.player.to_account_info(),
+                        session: ctx.accounts.game_session.to_account_info(),
+                        session_discovery: sd.to_account_info(),
+                        system_program: ctx.accounts.system_program.to_account_info(),
+                    },
+                ),
+            )?;
+        }
+
         // 2. Initialize Game State with placeholder map dimensions (50x50, spawn 0,0).
         // Map dimensions and spawn position will be synced by sync_map_enemies on ER
         // after fill_map_with_seed populates the GeneratedMap with actual maze content.
@@ -225,15 +241,6 @@ pub mod session_manager {
             poi_seed,
         )?;
 
-        // Apply spawn-time waypoint discovery using radius 6 around initial position.
-        discover_visible_waypoints_cpi(
-            &ctx.accounts.poi_system_program,
-            &ctx.accounts.map_pois,
-            &ctx.accounts.game_state.to_account_info(),
-            &ctx.accounts.session_signer.to_account_info(),
-            6,
-        )?;
-
         // TODO(VRF): When ephemeral-vrf-sdk is available, optionally CPI into
         // map_generator::request_map_vrf and poi_system::request_poi_vrf if the
         // frontend passes VRF oracle accounts via remaining_accounts.
@@ -276,7 +283,11 @@ pub mod session_manager {
         // Derive session PDA key for VRF lookup (duel uses fixed seed prefix + nonce)
         let duel_nonce_bytes = ctx.accounts.session_nonces.duel_nonce.to_le_bytes();
         let (session_pda, _) = Pubkey::find_program_address(
-            &[GameSession::DUEL_SEED_PREFIX, session_player.as_ref(), &duel_nonce_bytes],
+            &[
+                GameSession::DUEL_SEED_PREFIX,
+                session_player.as_ref(),
+                &duel_nonce_bytes,
+            ],
             &crate::ID,
         );
 
@@ -295,11 +306,9 @@ pub mod session_manager {
             }
             None => {
                 let pda_bytes = session_pda.to_bytes();
-                u64::from_le_bytes(
-                    pda_bytes[8..16].try_into().unwrap_or([0u8; 8]),
-                )
-                .wrapping_add(clock.slot)
-                .wrapping_mul(6364136223846793005u64)
+                u64::from_le_bytes(pda_bytes[8..16].try_into().unwrap_or([0u8; 8]))
+                    .wrapping_add(clock.slot)
+                    .wrapping_mul(6364136223846793005u64)
             }
         };
 
@@ -333,6 +342,22 @@ pub mod session_manager {
             ),
             campaign_level,
         )?;
+
+        // Allocate empty SessionDiscovery (populated on ER during map generation).
+        // Optional: when omitted, the frontend must call init_session_discovery separately.
+        if let Some(ref sd) = ctx.accounts.session_discovery {
+            map_generator::cpi::init_session_discovery(
+                CpiContext::new(
+                    ctx.accounts.map_generator_program.to_account_info(),
+                    map_generator::cpi::accounts::InitSessionDiscovery {
+                        payer: ctx.accounts.player.to_account_info(),
+                        session: ctx.accounts.game_session.to_account_info(),
+                        session_discovery: sd.to_account_info(),
+                        system_program: ctx.accounts.system_program.to_account_info(),
+                    },
+                ),
+            )?;
+        }
 
         // Initialize Game State with placeholder dimensions; actual spawn set by sync_map_enemies on ER.
         gameplay_state::cpi::initialize_game_state(
@@ -400,14 +425,6 @@ pub mod session_manager {
             week,
             poi_seed,
         )?;
-        discover_visible_waypoints_cpi(
-            &ctx.accounts.poi_system_program,
-            &ctx.accounts.map_pois,
-            &ctx.accounts.game_state.to_account_info(),
-            &ctx.accounts.session_signer.to_account_info(),
-            6,
-        )?;
-
         // CPI to consume_map_vrf to mark VRF as consumed (if VRF was used)
         if vrf_data.is_some() {
             if let Some(ref vrf_account) = ctx.accounts.map_vrf_state {
@@ -453,7 +470,11 @@ pub mod session_manager {
         // Derive session PDA key for VRF lookup (gauntlet uses prefix + nonce)
         let gauntlet_nonce_bytes = ctx.accounts.session_nonces.gauntlet_nonce.to_le_bytes();
         let (session_pda, _) = Pubkey::find_program_address(
-            &[GameSession::GAUNTLET_SEED_PREFIX, session_player.as_ref(), &gauntlet_nonce_bytes],
+            &[
+                GameSession::GAUNTLET_SEED_PREFIX,
+                session_player.as_ref(),
+                &gauntlet_nonce_bytes,
+            ],
             &crate::ID,
         );
 
@@ -472,11 +493,9 @@ pub mod session_manager {
             }
             None => {
                 let pda_bytes = session_pda.to_bytes();
-                u64::from_le_bytes(
-                    pda_bytes[8..16].try_into().unwrap_or([0u8; 8]),
-                )
-                .wrapping_add(clock.slot)
-                .wrapping_mul(6364136223846793005u64)
+                u64::from_le_bytes(pda_bytes[8..16].try_into().unwrap_or([0u8; 8]))
+                    .wrapping_add(clock.slot)
+                    .wrapping_mul(6364136223846793005u64)
             }
         };
 
@@ -510,6 +529,22 @@ pub mod session_manager {
             ),
             campaign_level,
         )?;
+
+        // Allocate empty SessionDiscovery (populated on ER during map generation).
+        // Optional: when omitted, the frontend must call init_session_discovery separately.
+        if let Some(ref sd) = ctx.accounts.session_discovery {
+            map_generator::cpi::init_session_discovery(
+                CpiContext::new(
+                    ctx.accounts.map_generator_program.to_account_info(),
+                    map_generator::cpi::accounts::InitSessionDiscovery {
+                        payer: ctx.accounts.player.to_account_info(),
+                        session: ctx.accounts.game_session.to_account_info(),
+                        session_discovery: sd.to_account_info(),
+                        system_program: ctx.accounts.system_program.to_account_info(),
+                    },
+                ),
+            )?;
+        }
 
         // Initialize Game State with placeholder dimensions; actual spawn set by sync_map_enemies on ER.
         gameplay_state::cpi::initialize_game_state(
@@ -577,14 +612,6 @@ pub mod session_manager {
             week,
             poi_seed,
         )?;
-        discover_visible_waypoints_cpi(
-            &ctx.accounts.poi_system_program,
-            &ctx.accounts.map_pois,
-            &ctx.accounts.game_state.to_account_info(),
-            &ctx.accounts.session_signer.to_account_info(),
-            6,
-        )?;
-
         // CPI to consume_map_vrf to mark VRF as consumed (if VRF was used)
         if vrf_data.is_some() {
             if let Some(ref vrf_account) = ctx.accounts.map_vrf_state {
@@ -611,8 +638,11 @@ pub mod session_manager {
 
     /// Delegates gameplay-state account to the MagicBlock delegation program.
     pub fn delegate_game_state(ctx: Context<DelegateGameState>, campaign_level: u8) -> Result<()> {
-        let game_session_key =
-            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level, ctx.accounts.session_nonces.campaign_nonce);
+        let game_session_key = derive_campaign_session_pda(
+            &ctx.accounts.player.key(),
+            campaign_level,
+            ctx.accounts.session_nonces.campaign_nonce,
+        );
         let (expected_game_state, _) = Pubkey::find_program_address(
             &[b"game_state", game_session_key.as_ref()],
             &gameplay_state::ID,
@@ -636,8 +666,11 @@ pub mod session_manager {
         ctx: Context<DelegateMapEnemies>,
         campaign_level: u8,
     ) -> Result<()> {
-        let game_session_key =
-            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level, ctx.accounts.session_nonces.campaign_nonce);
+        let game_session_key = derive_campaign_session_pda(
+            &ctx.accounts.player.key(),
+            campaign_level,
+            ctx.accounts.session_nonces.campaign_nonce,
+        );
         let (expected_map_enemies, _) = Pubkey::find_program_address(
             &[MapEnemies::SEED_PREFIX, game_session_key.as_ref()],
             &gameplay_state::ID,
@@ -661,8 +694,11 @@ pub mod session_manager {
         ctx: Context<DelegateGeneratedMap>,
         campaign_level: u8,
     ) -> Result<()> {
-        let game_session_key =
-            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level, ctx.accounts.session_nonces.campaign_nonce);
+        let game_session_key = derive_campaign_session_pda(
+            &ctx.accounts.player.key(),
+            campaign_level,
+            ctx.accounts.session_nonces.campaign_nonce,
+        );
         let (expected_generated_map, _) = Pubkey::find_program_address(
             &[GeneratedMap::SEED_PREFIX, game_session_key.as_ref()],
             &map_generator::ID,
@@ -683,8 +719,11 @@ pub mod session_manager {
 
     /// Delegates inventory account to the MagicBlock delegation program.
     pub fn delegate_inventory(ctx: Context<DelegateInventory>, campaign_level: u8) -> Result<()> {
-        let game_session_key =
-            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level, ctx.accounts.session_nonces.campaign_nonce);
+        let game_session_key = derive_campaign_session_pda(
+            &ctx.accounts.player.key(),
+            campaign_level,
+            ctx.accounts.session_nonces.campaign_nonce,
+        );
         let (expected_inventory, _) = Pubkey::find_program_address(
             &[b"inventory", game_session_key.as_ref()],
             &player_inventory::ID,
@@ -705,8 +744,11 @@ pub mod session_manager {
 
     /// Delegates map-pois account to the MagicBlock delegation program.
     pub fn delegate_map_pois(ctx: Context<DelegateMapPois>, campaign_level: u8) -> Result<()> {
-        let game_session_key =
-            derive_campaign_session_pda(&ctx.accounts.player.key(), campaign_level, ctx.accounts.session_nonces.campaign_nonce);
+        let game_session_key = derive_campaign_session_pda(
+            &ctx.accounts.player.key(),
+            campaign_level,
+            ctx.accounts.session_nonces.campaign_nonce,
+        );
         let (expected_map_pois, _) = Pubkey::find_program_address(
             &[b"map_pois", game_session_key.as_ref()],
             &POI_SYSTEM_PROGRAM_ID,
@@ -727,7 +769,11 @@ pub mod session_manager {
 
     /// Delegates PoiVrfState account to the MagicBlock delegation program.
     /// Only needed for PvP sessions that use VRF for POI offers.
-    pub fn delegate_poi_vrf_state(ctx: Context<DelegatePoiVrfState>, session_key: Pubkey, validator: Option<Pubkey>) -> Result<()> {
+    pub fn delegate_poi_vrf_state(
+        ctx: Context<DelegatePoiVrfState>,
+        session_key: Pubkey,
+        validator: Option<Pubkey>,
+    ) -> Result<()> {
         let (expected_poi_vrf, _) = Pubkey::find_program_address(
             &[b"poi_vrf", session_key.as_ref()],
             &POI_SYSTEM_PROGRAM_ID,
@@ -738,8 +784,11 @@ pub mod session_manager {
             SessionManagerError::Unauthorized
         );
         let poi_vrf_seeds: &[&[u8]] = &[b"poi_vrf", session_key.as_ref()];
-        ctx.accounts
-            .delegate_poi_vrf_state(&ctx.accounts.player, poi_vrf_seeds, local_delegate_config(validator))?;
+        ctx.accounts.delegate_poi_vrf_state(
+            &ctx.accounts.player,
+            poi_vrf_seeds,
+            local_delegate_config(validator),
+        )?;
         Ok(())
     }
 
@@ -796,10 +845,16 @@ pub mod session_manager {
             &campaign_seed,
             &campaign_nonce_bytes,
         ];
-        let duel_session_seeds: &[&[u8]] =
-            &[GameSession::DUEL_SEED_PREFIX, session_player.as_ref(), &duel_nonce_bytes];
-        let gauntlet_session_seeds: &[&[u8]] =
-            &[GameSession::GAUNTLET_SEED_PREFIX, session_player.as_ref(), &gauntlet_nonce_bytes];
+        let duel_session_seeds: &[&[u8]] = &[
+            GameSession::DUEL_SEED_PREFIX,
+            session_player.as_ref(),
+            &duel_nonce_bytes,
+        ];
+        let gauntlet_session_seeds: &[&[u8]] = &[
+            GameSession::GAUNTLET_SEED_PREFIX,
+            session_player.as_ref(),
+            &gauntlet_nonce_bytes,
+        ];
 
         let (campaign_session_pda, _) =
             Pubkey::find_program_address(campaign_session_seeds, &crate::ID);
@@ -893,7 +948,11 @@ pub mod session_manager {
         let generated_map_info = ctx.accounts.generated_map.to_account_info();
         let inventory_info = ctx.accounts.inventory.to_account_info();
         let map_pois_info = ctx.accounts.map_pois.to_account_info();
-        let poi_vrf_info = ctx.accounts.poi_vrf_state.as_ref().map(|a| a.to_account_info());
+        let poi_vrf_info = ctx
+            .accounts
+            .poi_vrf_state
+            .as_ref()
+            .map(|a| a.to_account_info());
         let mut accounts_to_commit = vec![
             &game_session_info,
             &game_state_info,
@@ -1060,40 +1119,110 @@ pub mod session_manager {
             )?;
         }
 
-        // 1. Close map_pois (depends on session)
-        close_map_pois_via_session_signer_cpi(
-            &ctx.accounts.poi_system_program,
-            &ctx.accounts.map_pois,
-            &ctx.accounts.game_session.to_account_info(),
-            &ctx.accounts.player,
-            &ctx.accounts.session_signer.to_account_info(),
-        )?;
+        // 1. Close map_pois — skip CPI if account is corrupted (e.g., after failed ER commit)
+        {
+            let info = ctx.accounts.map_pois.to_account_info();
+            let data = info.try_borrow_data()?;
+            let valid = data.len() >= 8 && data[..8] != [0u8; 8];
+            drop(data);
+            if valid {
+                close_map_pois_via_session_signer_cpi(
+                    &ctx.accounts.poi_system_program,
+                    &ctx.accounts.map_pois,
+                    &ctx.accounts.game_session.to_account_info(),
+                    &ctx.accounts.player,
+                    &ctx.accounts.session_signer.to_account_info(),
+                )?;
+            }
+            // else: account corrupted (e.g., after failed ER commit) — skip close,
+            // rent lamports are forfeit. Session can still be abandoned.
+        }
 
-        // 2. Close generated_map (depends on session)
-        close_generated_map_cpi(
-            &ctx.accounts.map_generator_program,
-            &ctx.accounts.generated_map,
-            &ctx.accounts.game_session.to_account_info(),
-            &ctx.accounts.player,
-            &ctx.accounts.session_signer.to_account_info(),
-        )?;
+        // 1b. Close session_discovery — skip CPI if corrupted
+        {
+            let info = ctx.accounts.session_discovery.to_account_info();
+            let data = info.try_borrow_data()?;
+            let valid = data.len() >= 8 && data[..8] != [0u8; 8];
+            drop(data);
+            if valid {
+                close_session_discovery_cpi(
+                    &ctx.accounts.map_generator_program,
+                    &ctx.accounts.session_discovery,
+                    &ctx.accounts.game_session.to_account_info(),
+                    &ctx.accounts.player,
+                    &ctx.accounts.session_signer.to_account_info(),
+                )?;
+            }
+            // else: account corrupted (e.g., after failed ER commit) — skip close,
+            // rent lamports are forfeit. Session can still be abandoned.
+        }
 
-        // 3. Close map_enemies (depends on game_state)
-        close_map_enemies_cpi(
-            &ctx.accounts.gameplay_state_program.to_account_info(),
-            &ctx.accounts.map_enemies,
-            &ctx.accounts.game_state.to_account_info(),
-            &ctx.accounts.player,
-            &ctx.accounts.session_signer.to_account_info(),
-        )?;
+        // 2. Close generated_map — skip CPI if corrupted
+        {
+            let info = ctx.accounts.generated_map.to_account_info();
+            let data = info.try_borrow_data()?;
+            let valid = data.len() >= 8 && data[..8] != [0u8; 8];
+            drop(data);
+            if valid {
+                close_generated_map_cpi(
+                    &ctx.accounts.map_generator_program,
+                    &ctx.accounts.generated_map,
+                    &ctx.accounts.game_session.to_account_info(),
+                    &ctx.accounts.player,
+                    &ctx.accounts.session_signer.to_account_info(),
+                )?;
+            }
+            // else: account corrupted (e.g., after failed ER commit) — skip close,
+            // rent lamports are forfeit. Session can still be abandoned.
+        }
 
-        // 4. Close game_state
-        close_game_state_via_session_signer_cpi(
-            &ctx.accounts.gameplay_state_program.to_account_info(),
-            &ctx.accounts.game_state.to_account_info(),
-            &ctx.accounts.player,
-            &ctx.accounts.session_signer.to_account_info(),
-        )?;
+        // 3. Close map_enemies — skip CPI if corrupted
+        {
+            let info = ctx.accounts.map_enemies.to_account_info();
+            let data = info.try_borrow_data()?;
+            let valid = data.len() >= 8 && data[..8] != [0u8; 8];
+            drop(data);
+            if valid {
+                close_map_enemies_cpi(
+                    &ctx.accounts.gameplay_state_program.to_account_info(),
+                    &ctx.accounts.map_enemies,
+                    &ctx.accounts.game_state.to_account_info(),
+                    &ctx.accounts.player,
+                    &ctx.accounts.session_signer.to_account_info(),
+                )?;
+            }
+            // else: account corrupted (e.g., after failed ER commit) — skip close,
+            // rent lamports are forfeit. Session can still be abandoned.
+        }
+
+        // 3b. Close gauntlet_echoes if present (depends on game_state)
+        if let Some(ref ge) = ctx.accounts.gauntlet_echoes {
+            close_gauntlet_echoes_cpi(
+                &ctx.accounts.gameplay_state_program.to_account_info(),
+                &ge.to_account_info(),
+                &ctx.accounts.game_state.to_account_info(),
+                &ctx.accounts.player,
+                &ctx.accounts.session_signer.to_account_info(),
+            )?;
+        }
+
+        // 4. Close game_state — skip CPI if corrupted
+        {
+            let info = ctx.accounts.game_state.to_account_info();
+            let data = info.try_borrow_data()?;
+            let valid = data.len() >= 8 && data[..8] != [0u8; 8];
+            drop(data);
+            if valid {
+                close_game_state_via_session_signer_cpi(
+                    &ctx.accounts.gameplay_state_program.to_account_info(),
+                    &ctx.accounts.game_state.to_account_info(),
+                    &ctx.accounts.player,
+                    &ctx.accounts.session_signer.to_account_info(),
+                )?;
+            }
+            // else: account corrupted (e.g., after failed ER commit) — skip close,
+            // rent lamports are forfeit. Session can still be abandoned.
+        }
 
         // 5. Close inventory via CPI to ensure fresh inventory for next session
         // Use session_signer since it's the inventory owner (set during start_session)
@@ -1111,11 +1240,16 @@ pub mod session_manager {
 
     /// Settles run outcome into player-profile without requiring account closure.
     /// This is idempotent and can be retried independently when close fails.
-    pub fn settle_session_result(ctx: Context<SettleSessionResult>, _campaign_level: u8) -> Result<()> {
+    pub fn settle_session_result(
+        ctx: Context<SettleSessionResult>,
+        _campaign_level: u8,
+    ) -> Result<()> {
         let clock = Clock::get()?;
 
-        let (expected_game_state, _) =
-            Pubkey::find_program_address(&[b"game_state", ctx.accounts.game_session.key().as_ref()], &gameplay_state::ID);
+        let (expected_game_state, _) = Pubkey::find_program_address(
+            &[b"game_state", ctx.accounts.game_session.key().as_ref()],
+            &gameplay_state::ID,
+        );
         require_keys_eq!(
             ctx.accounts.game_state.key(),
             expected_game_state,
@@ -1166,8 +1300,10 @@ pub mod session_manager {
     pub fn close_session_only(ctx: Context<CloseSessionOnly>) -> Result<()> {
         let clock = Clock::get()?;
 
-        let (expected_game_state, _) =
-            Pubkey::find_program_address(&[b"game_state", ctx.accounts.game_session.key().as_ref()], &gameplay_state::ID);
+        let (expected_game_state, _) = Pubkey::find_program_address(
+            &[b"game_state", ctx.accounts.game_session.key().as_ref()],
+            &gameplay_state::ID,
+        );
         require_keys_eq!(
             ctx.accounts.game_state.key(),
             expected_game_state,
@@ -1304,6 +1440,16 @@ pub mod session_manager {
             close_map_pois_via_session_signer_cpi(
                 &ctx.accounts.poi_system_program,
                 &ctx.accounts.map_pois,
+                &ctx.accounts.game_session.to_account_info(),
+                &ctx.accounts.player,
+                &ctx.accounts.session_signer.to_account_info(),
+            )?;
+        }
+
+        if *ctx.accounts.session_discovery.owner == MAP_GENERATOR_PROGRAM_ID {
+            close_session_discovery_cpi(
+                &ctx.accounts.map_generator_program,
+                &ctx.accounts.session_discovery,
                 &ctx.accounts.game_session.to_account_info(),
                 &ctx.accounts.player,
                 &ctx.accounts.session_signer.to_account_info(),
@@ -1485,40 +1631,110 @@ pub mod session_manager {
             )?;
         }
 
-        // 1. Close map_pois (depends on session)
-        close_map_pois_via_session_signer_cpi(
-            &ctx.accounts.poi_system_program,
-            &ctx.accounts.map_pois,
-            &ctx.accounts.game_session.to_account_info(),
-            &ctx.accounts.player,
-            &ctx.accounts.session_signer.to_account_info(),
-        )?;
+        // 1. Close map_pois — skip CPI if account is corrupted (e.g., after failed ER commit)
+        {
+            let info = ctx.accounts.map_pois.to_account_info();
+            let data = info.try_borrow_data()?;
+            let valid = data.len() >= 8 && data[..8] != [0u8; 8];
+            drop(data);
+            if valid {
+                close_map_pois_via_session_signer_cpi(
+                    &ctx.accounts.poi_system_program,
+                    &ctx.accounts.map_pois,
+                    &ctx.accounts.game_session.to_account_info(),
+                    &ctx.accounts.player,
+                    &ctx.accounts.session_signer.to_account_info(),
+                )?;
+            }
+            // else: account corrupted (e.g., after failed ER commit) — skip close,
+            // rent lamports are forfeit. Session can still be abandoned.
+        }
 
-        // 2. Close generated_map (depends on session)
-        close_generated_map_cpi(
-            &ctx.accounts.map_generator_program,
-            &ctx.accounts.generated_map,
-            &ctx.accounts.game_session.to_account_info(),
-            &ctx.accounts.player,
-            &ctx.accounts.session_signer.to_account_info(),
-        )?;
+        // 1b. Close session_discovery — skip CPI if corrupted
+        {
+            let info = ctx.accounts.session_discovery.to_account_info();
+            let data = info.try_borrow_data()?;
+            let valid = data.len() >= 8 && data[..8] != [0u8; 8];
+            drop(data);
+            if valid {
+                close_session_discovery_cpi(
+                    &ctx.accounts.map_generator_program,
+                    &ctx.accounts.session_discovery,
+                    &ctx.accounts.game_session.to_account_info(),
+                    &ctx.accounts.player,
+                    &ctx.accounts.session_signer.to_account_info(),
+                )?;
+            }
+            // else: account corrupted (e.g., after failed ER commit) — skip close,
+            // rent lamports are forfeit. Session can still be abandoned.
+        }
 
-        // 3. Close map_enemies (depends on game_state)
-        close_map_enemies_cpi(
-            &ctx.accounts.gameplay_state_program.to_account_info(),
-            &ctx.accounts.map_enemies,
-            &ctx.accounts.game_state.to_account_info(),
-            &ctx.accounts.player,
-            &ctx.accounts.session_signer.to_account_info(),
-        )?;
+        // 2. Close generated_map — skip CPI if corrupted
+        {
+            let info = ctx.accounts.generated_map.to_account_info();
+            let data = info.try_borrow_data()?;
+            let valid = data.len() >= 8 && data[..8] != [0u8; 8];
+            drop(data);
+            if valid {
+                close_generated_map_cpi(
+                    &ctx.accounts.map_generator_program,
+                    &ctx.accounts.generated_map,
+                    &ctx.accounts.game_session.to_account_info(),
+                    &ctx.accounts.player,
+                    &ctx.accounts.session_signer.to_account_info(),
+                )?;
+            }
+            // else: account corrupted (e.g., after failed ER commit) — skip close,
+            // rent lamports are forfeit. Session can still be abandoned.
+        }
 
-        // 4. Close game_state
-        close_game_state_via_session_signer_cpi(
-            &ctx.accounts.gameplay_state_program.to_account_info(),
-            &ctx.accounts.game_state.to_account_info(),
-            &ctx.accounts.player,
-            &ctx.accounts.session_signer.to_account_info(),
-        )?;
+        // 3. Close map_enemies — skip CPI if corrupted
+        {
+            let info = ctx.accounts.map_enemies.to_account_info();
+            let data = info.try_borrow_data()?;
+            let valid = data.len() >= 8 && data[..8] != [0u8; 8];
+            drop(data);
+            if valid {
+                close_map_enemies_cpi(
+                    &ctx.accounts.gameplay_state_program.to_account_info(),
+                    &ctx.accounts.map_enemies,
+                    &ctx.accounts.game_state.to_account_info(),
+                    &ctx.accounts.player,
+                    &ctx.accounts.session_signer.to_account_info(),
+                )?;
+            }
+            // else: account corrupted (e.g., after failed ER commit) — skip close,
+            // rent lamports are forfeit. Session can still be abandoned.
+        }
+
+        // 3b. Close gauntlet_echoes if present (depends on game_state)
+        if let Some(ref ge) = ctx.accounts.gauntlet_echoes {
+            close_gauntlet_echoes_cpi(
+                &ctx.accounts.gameplay_state_program.to_account_info(),
+                &ge.to_account_info(),
+                &ctx.accounts.game_state.to_account_info(),
+                &ctx.accounts.player,
+                &ctx.accounts.session_signer.to_account_info(),
+            )?;
+        }
+
+        // 4. Close game_state — skip CPI if corrupted
+        {
+            let info = ctx.accounts.game_state.to_account_info();
+            let data = info.try_borrow_data()?;
+            let valid = data.len() >= 8 && data[..8] != [0u8; 8];
+            drop(data);
+            if valid {
+                close_game_state_via_session_signer_cpi(
+                    &ctx.accounts.gameplay_state_program.to_account_info(),
+                    &ctx.accounts.game_state.to_account_info(),
+                    &ctx.accounts.player,
+                    &ctx.accounts.session_signer.to_account_info(),
+                )?;
+            }
+            // else: account corrupted (e.g., after failed ER commit) — skip close,
+            // rent lamports are forfeit. Session can still be abandoned.
+        }
 
         // 5. Close inventory via CPI
         player_inventory::cpi::close_inventory(CpiContext::new(
@@ -1602,7 +1818,10 @@ pub mod session_manager {
                 ctx.accounts.gameplay_state_program.to_account_info(),
                 gameplay_state::cpi::accounts::RotateGameStateSessionKey {
                     game_state: ctx.accounts.game_state.to_account_info(),
-                    session_manager_authority: ctx.accounts.session_manager_authority.to_account_info(),
+                    session_manager_authority: ctx
+                        .accounts
+                        .session_manager_authority
+                        .to_account_info(),
                 },
                 signer_seeds,
             ),
@@ -1615,7 +1834,10 @@ pub mod session_manager {
                 ctx.accounts.player_inventory_program.to_account_info(),
                 player_inventory::cpi::accounts::RotateInventoryOwner {
                     inventory: ctx.accounts.inventory.to_account_info(),
-                    session_manager_authority: ctx.accounts.session_manager_authority.to_account_info(),
+                    session_manager_authority: ctx
+                        .accounts
+                        .session_manager_authority
+                        .to_account_info(),
                 },
                 signer_seeds,
             ),
@@ -1760,6 +1982,10 @@ pub struct StartSession<'info> {
     /// CHECK: PDA created by map-generator CPI
     pub generated_map: UncheckedAccount<'info>,
 
+    /// CHECK: PDA created by map-generator CPI. Optional to keep combined TX under size limit.
+    #[account(mut)]
+    pub session_discovery: Option<UncheckedAccount<'info>>,
+
     #[account(mut)]
     /// CHECK: Initialized by gameplay-state CPI
     pub game_state: UncheckedAccount<'info>,
@@ -1839,6 +2065,10 @@ pub struct StartDuelSession<'info> {
     #[account(mut)]
     /// CHECK: PDA created by map-generator CPI
     pub generated_map: UncheckedAccount<'info>,
+
+    /// CHECK: PDA created by map-generator CPI. Optional to keep combined TX under size limit.
+    #[account(mut)]
+    pub session_discovery: Option<UncheckedAccount<'info>>,
 
     #[account(mut)]
     /// CHECK: Initialized by gameplay-state CPI
@@ -1921,6 +2151,10 @@ pub struct StartGauntletSession<'info> {
     #[account(mut)]
     /// CHECK: PDA created by map-generator CPI
     pub generated_map: UncheckedAccount<'info>,
+
+    /// CHECK: PDA created by map-generator CPI. Optional to keep combined TX under size limit.
+    #[account(mut)]
+    pub session_discovery: Option<UncheckedAccount<'info>>,
 
     #[account(mut)]
     /// CHECK: Initialized by gameplay-state CPI
@@ -2185,7 +2419,12 @@ fn validate_secondary_runtime_accounts(
 fn derive_campaign_session_pda(player: &Pubkey, campaign_level: u8, nonce: u64) -> Pubkey {
     let campaign_seed = [campaign_level];
     let nonce_bytes = nonce.to_le_bytes();
-    let seeds: &[&[u8]] = &[GameSession::SEED_PREFIX, player.as_ref(), &campaign_seed, &nonce_bytes];
+    let seeds: &[&[u8]] = &[
+        GameSession::SEED_PREFIX,
+        player.as_ref(),
+        &campaign_seed,
+        &nonce_bytes,
+    ];
     Pubkey::find_program_address(seeds, &crate::ID).0
 }
 
@@ -2240,6 +2479,11 @@ pub struct EndSession<'info> {
     /// CHECK: Validated by map-generator CPI
     pub generated_map: UncheckedAccount<'info>,
 
+    /// SessionDiscovery account (closed via map-generator CPI)
+    #[account(mut)]
+    /// CHECK: Validated by map-generator CPI
+    pub session_discovery: UncheckedAccount<'info>,
+
     /// Map POIs account (closed via poi-system CPI)
     #[account(mut)]
     /// CHECK: Validated by poi-system CPI
@@ -2289,6 +2533,11 @@ pub struct EndSession<'info> {
     /// CHECK: Validated by gameplay-state close CPI
     #[account(mut)]
     pub gameplay_vrf_state: Option<UncheckedAccount<'info>>,
+
+    /// Optional GauntletEchoes (only for gauntlet sessions)
+    /// CHECK: Validated by gameplay-state close CPI
+    #[account(mut)]
+    pub gauntlet_echoes: Option<UncheckedAccount<'info>>,
 
     pub player_inventory_program: Program<'info, PlayerInventory>,
     pub gameplay_state_program: Program<'info, GameplayState>,
@@ -2423,6 +2672,11 @@ pub struct ForceCloseSession<'info> {
     /// CHECK: Owner checked in handler before CPI.
     pub generated_map: UncheckedAccount<'info>,
 
+    /// SessionDiscovery account — may be delegated.
+    #[account(mut)]
+    /// CHECK: Owner checked in handler before CPI.
+    pub session_discovery: UncheckedAccount<'info>,
+
     /// Map POIs account — may be delegated.
     #[account(mut)]
     /// CHECK: Owner checked in handler before CPI.
@@ -2536,6 +2790,11 @@ pub struct AbandonSession<'info> {
     /// CHECK: Validated by map-generator CPI
     pub generated_map: UncheckedAccount<'info>,
 
+    /// SessionDiscovery account (closed via map-generator CPI)
+    #[account(mut)]
+    /// CHECK: Validated by map-generator CPI
+    pub session_discovery: UncheckedAccount<'info>,
+
     /// Map POIs account (closed via poi-system CPI)
     #[account(mut)]
     /// CHECK: Validated by poi-system CPI
@@ -2584,6 +2843,11 @@ pub struct AbandonSession<'info> {
     /// CHECK: Validated by gameplay-state close CPI
     #[account(mut)]
     pub gameplay_vrf_state: Option<UncheckedAccount<'info>>,
+
+    /// Optional GauntletEchoes (only for gauntlet sessions)
+    /// CHECK: Validated by gameplay-state close CPI
+    #[account(mut)]
+    pub gauntlet_echoes: Option<UncheckedAccount<'info>>,
 
     pub player_inventory_program: Program<'info, PlayerInventory>,
     pub gameplay_state_program: Program<'info, GameplayState>,
@@ -2971,10 +3235,13 @@ pub const CLOSE_GAME_STATE_VIA_SESSION_SIGNER_DISCRIMINATOR: [u8; 8] =
     [199, 166, 186, 238, 90, 16, 234, 79];
 pub const CLOSE_MAP_ENEMIES_DISCRIMINATOR: [u8; 8] = [192, 111, 190, 66, 236, 132, 252, 88];
 pub const CLOSE_GENERATED_MAP_DISCRIMINATOR: [u8; 8] = [249, 208, 241, 231, 57, 214, 174, 103];
+pub const CLOSE_SESSION_DISCOVERY_DISCRIMINATOR: [u8; 8] =
+    [0x60, 0xf6, 0x1c, 0x60, 0x1a, 0xa9, 0x44, 0x7f];
+pub const CLOSE_GAUNTLET_ECHOES_DISCRIMINATOR: [u8; 8] =
+    [0x85, 0xa2, 0xe1, 0xee, 0x33, 0x0d, 0xbf, 0xb2];
 pub const CLOSE_MAP_POIS_VIA_SESSION_SIGNER_DISCRIMINATOR: [u8; 8] =
     [35, 38, 19, 18, 250, 66, 39, 150];
-pub const CLOSE_MAP_POIS_ORPHANED_DISCRIMINATOR: [u8; 8] =
-    [218, 44, 98, 133, 139, 114, 27, 98];
+pub const CLOSE_MAP_POIS_ORPHANED_DISCRIMINATOR: [u8; 8] = [218, 44, 98, 133, 139, 114, 27, 98];
 
 fn close_game_state_via_session_signer_cpi<'info>(
     program: &AccountInfo<'info>,
@@ -3016,6 +3283,27 @@ fn close_map_enemies_cpi<'info>(
     )
 }
 
+fn close_gauntlet_echoes_cpi<'info>(
+    program: &AccountInfo<'info>,
+    gauntlet_echoes: &AccountInfo<'info>,
+    game_state: &AccountInfo<'info>,
+    player: &AccountInfo<'info>,
+    session_signer: &AccountInfo<'info>,
+) -> Result<()> {
+    invoke_manual_cpi(
+        program,
+        gameplay_state::ID,
+        &CLOSE_GAUNTLET_ECHOES_DISCRIMINATOR,
+        &[],
+        &[
+            (gauntlet_echoes, true, false),
+            (game_state, false, false),
+            (player, true, false),
+            (session_signer, false, true),
+        ],
+    )
+}
+
 fn close_generated_map_cpi<'info>(
     program: &AccountInfo<'info>,
     generated_map: &AccountInfo<'info>,
@@ -3030,6 +3318,27 @@ fn close_generated_map_cpi<'info>(
         &[],
         &[
             (generated_map, true, false),
+            (session, false, false),
+            (player, true, false),
+            (session_signer, false, true),
+        ],
+    )
+}
+
+fn close_session_discovery_cpi<'info>(
+    program: &AccountInfo<'info>,
+    session_discovery: &AccountInfo<'info>,
+    session: &AccountInfo<'info>,
+    player: &AccountInfo<'info>,
+    session_signer: &AccountInfo<'info>,
+) -> Result<()> {
+    invoke_manual_cpi(
+        program,
+        MAP_GENERATOR_PROGRAM_ID,
+        &CLOSE_SESSION_DISCOVERY_DISCRIMINATOR,
+        &[],
+        &[
+            (session_discovery, true, false),
             (session, false, false),
             (player, true, false),
             (session_signer, false, true),
@@ -3229,6 +3538,17 @@ mod tests {
     }
 
     #[test]
+    fn test_close_gauntlet_echoes_discriminator() {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(b"global:close_gauntlet_echoes");
+        let expected: [u8; 8] = hash[..8].try_into().unwrap();
+        assert_eq!(
+            CLOSE_GAUNTLET_ECHOES_DISCRIMINATOR, expected,
+            "CLOSE_GAUNTLET_ECHOES_DISCRIMINATOR doesn't match"
+        );
+    }
+
+    #[test]
     fn test_close_generated_map_discriminator() {
         use sha2::{Digest, Sha256};
         let hash = Sha256::digest(b"global:close_generated_map");
@@ -3236,6 +3556,17 @@ mod tests {
         assert_eq!(
             CLOSE_GENERATED_MAP_DISCRIMINATOR, expected,
             "CLOSE_GENERATED_MAP_DISCRIMINATOR doesn't match"
+        );
+    }
+
+    #[test]
+    fn test_close_session_discovery_discriminator() {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(b"global:close_session_discovery");
+        let expected: [u8; 8] = hash[..8].try_into().unwrap();
+        assert_eq!(
+            CLOSE_SESSION_DISCOVERY_DISCRIMINATOR, expected,
+            "CLOSE_SESSION_DISCOVERY_DISCRIMINATOR doesn't match"
         );
     }
 

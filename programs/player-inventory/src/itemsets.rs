@@ -100,7 +100,7 @@ pub const FUSE_NETWORK: ItemsetDefinition = ItemsetDefinition {
 };
 
 /// Shrapnel Harness: G-ST-03, G-ST-06, T-ST-01
-/// Bonus: Keep up to 2 Shrapnel at turn end and gain Armor when struck.
+/// Bonus: When you gain Shrapnel, gain +2 more; Shrapnel reflects +1 extra damage.
 pub const SHRAPNEL_HARNESS: ItemsetDefinition = ItemsetDefinition {
     id: "shrapnel-harness",
     name: "Shrapnel Harness",
@@ -108,17 +108,16 @@ pub const SHRAPNEL_HARNESS: ItemsetDefinition = ItemsetDefinition {
     required_items: &[*b"G-ST-03\0", *b"G-ST-06\0", *b"T-ST-01\0"],
     bonus_effect: &[
         EffectDefinition::new(
-            TriggerType::BattleStart,
-            EffectType::PreserveShrapnel,
+            TriggerType::OnGainShrapnel,
+            EffectType::ApplyShrapnel,
             false,
             [2, 2, 2],
         ),
-        EffectDefinition::with_condition(
-            TriggerType::OnStruck,
-            EffectType::GainArmor,
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::ShrapnelReflectBonus,
             false,
             [1, 1, 1],
-            Condition::OwnerHasStatus(crate::state::StatusType::Shrapnel),
         ),
     ],
 };

@@ -9,12 +9,12 @@ pub const NIGHT_MOVES: u8 = 30;
 // =============================================================================
 
 /// Base HP before item bonuses, scaled by campaign level (campaign only).
-/// Levels 1-9: 25 HP, 10-19: 20 HP, 20+: 15 HP.
+/// Levels 1-9: 25 HP, 10-19: 22 HP, 20+: 18 HP.
 pub fn base_hp(campaign_level: u8) -> i16 {
     match campaign_level {
         1..=9 => 25,
-        10..=19 => 20,
-        _ => 15,
+        10..=19 => 22,
+        _ => 18,
     }
 }
 
@@ -71,6 +71,9 @@ pub const DUEL_ENTRY_SEED: &[u8] = b"duel_entry";
 // DuelCreatorEntry::INIT_SPACE is currently 201 bytes, so 50 entries keeps the queue account safely below the limit
 // (8-byte discriminator + DuelOpenQueue::INIT_SPACE = 10,063 bytes total).
 pub const DUEL_OPEN_QUEUE_CAPACITY: usize = 50;
+
+/// PDA seed prefix for per-session gauntlet echoes account
+pub const GAUNTLET_ECHOES_SEED: &[u8] = b"gauntlet_echoes";
 
 /// PDA seed prefix for gauntlet config account
 pub const GAUNTLET_CONFIG_SEED: &[u8] = b"gauntlet_config";

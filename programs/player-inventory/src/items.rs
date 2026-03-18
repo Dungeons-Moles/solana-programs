@@ -70,6 +70,12 @@ pub const T_ST_01: ItemDefinition = ItemDefinition {
             false,
             [4, 6, 8],
         ),
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::ReduceWeaponDamageWhileArmored,
+            false,
+            [1, 1, 1],
+        ),
     ],
 };
 
@@ -95,7 +101,12 @@ pub const T_ST_02: ItemDefinition = ItemDefinition {
             [3, 5, 7],
         ),
         // First strike each turn removes 1/2/3 enemy Armor before damage
-        EffectDefinition::new(TriggerType::BeforeStrike, EffectType::RemoveArmor, true, [1, 2, 3]),
+        EffectDefinition::new(
+            TriggerType::BeforeStrike,
+            EffectType::RemoveArmor,
+            true,
+            [1, 2, 3],
+        ),
     ],
 };
 
@@ -182,6 +193,12 @@ pub const G_ST_04: ItemDefinition = ItemDefinition {
             false,
             [2, 4, 8],
         ),
+        EffectDefinition::new(
+            TriggerType::EveryOtherTurn,
+            EffectType::ApplyShrapnel,
+            false,
+            [1, 2, 4],
+        ),
     ],
 };
 
@@ -205,6 +222,12 @@ pub const G_ST_05: ItemDefinition = ItemDefinition {
             EffectType::GainArmor,
             false,
             [4, 8, 16],
+        ),
+        EffectDefinition::new(
+            TriggerType::FirstTimeExposed,
+            EffectType::ApplyShrapnel,
+            false,
+            [2, 4, 8],
         ),
     ],
 };
@@ -300,6 +323,12 @@ pub const T_SC_01: ItemDefinition = ItemDefinition {
             EffectType::GainStrikes,
             false,
             [1, 1, 1], // Flat +1 strike at all tiers
+        ),
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::OnHitPerStrike,
+            false,
+            [1, 1, 1],
         ),
     ],
 };
@@ -536,7 +565,6 @@ pub const G_SC_08: ItemDefinition = ItemDefinition {
     rarity: Rarity::Mythic,
     effects: &[
         // On Hit effects trigger twice (once/turn).
-        // Source scoping is enforced by higher-level combat resolution.
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::DoubleOnHitEffects,
@@ -649,7 +677,12 @@ pub const G_GR_02: ItemDefinition = ItemDefinition {
     rarity: Rarity::Common,
     effects: &[
         // Victory: gain 3/6/12 Gold
-        EffectDefinition::new(TriggerType::Victory, EffectType::GainGold, false, [3, 6, 12]),
+        EffectDefinition::new(
+            TriggerType::Victory,
+            EffectType::GainGold,
+            false,
+            [3, 6, 12],
+        ),
         // Victory: heal 3/6/12 HP
         EffectDefinition::new(TriggerType::Victory, EffectType::Heal, false, [3, 6, 12]),
     ],
@@ -700,6 +733,12 @@ pub const G_GR_04: ItemDefinition = ItemDefinition {
             EffectType::GainAtk,
             false,
             [1, 2, 4],
+        ),
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::LimitGoldArmorConversions,
+            false,
+            [3, 3, 3],
         ),
         // Turn Start: convert 1 Gold → 4/8/16 Armor
         EffectDefinition::new(
@@ -817,7 +856,7 @@ pub const T_BL_01: ItemDefinition = ItemDefinition {
             TriggerType::OnHit,
             EffectType::DealNonWeaponDamage,
             true,
-            [1, 2, 2],
+            [1, 2, 3],
         ),
     ],
 };
@@ -855,17 +894,17 @@ pub const G_BL_01: ItemDefinition = ItemDefinition {
     effects: &[
         // Countdown(2): deal 10/20/40 to enemy (non-weapon)
         EffectDefinition::new(
-            TriggerType::Countdown { turns: 2 },
+            TriggerType::Countdown { turns: 3 },
             EffectType::DealNonWeaponDamage,
             false,
-            [10, 20, 40],
+            [8, 14, 24],
         ),
         // Also deal 4/8/16 to self (non-weapon)
         EffectDefinition::new(
-            TriggerType::Countdown { turns: 2 },
+            TriggerType::Countdown { turns: 3 },
             EffectType::DealSelfNonWeaponDamage,
             false,
-            [4, 8, 16],
+            [4, 6, 10],
         ),
     ],
 };
@@ -877,12 +916,12 @@ pub const G_BL_02: ItemDefinition = ItemDefinition {
     tag: ItemTag::Blast,
     rarity: Rarity::Rare,
     effects: &[
-        // You ignore damage from your own BLAST items
+        // Reduce your BLAST self-damage by 50% (round down)
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::BlastImmunity,
             false,
-            [1, 1, 1], // Value doesn't matter, just enables immunity
+            [1, 1, 1],
         ),
         EffectDefinition::new(
             TriggerType::BattleStart,
@@ -955,12 +994,12 @@ pub const G_BL_05: ItemDefinition = ItemDefinition {
     tag: ItemTag::Blast,
     rarity: Rarity::Heroic,
     effects: &[
-        // Battle Start: reduce Countdown of all your bomb items by 1/2/4 (min 0)
+        // Battle Start: reduce Countdown of all your bomb items by 1 (min 1)
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::ReduceAllCountdowns,
             false,
-            [1, 2, 4],
+            [1, 1, 1],
         ),
         // Tier bonus: sturdier satchel gives blast protection
         EffectDefinition::new(
@@ -975,6 +1014,12 @@ pub const G_BL_05: ItemDefinition = ItemDefinition {
             EffectType::GainAtk,
             false,
             [1, 2, 4],
+        ),
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::BombDamageBonus,
+            false,
+            [0, 2, 4],
         ),
     ],
 };
@@ -1078,15 +1123,15 @@ pub const T_FR_01: ItemDefinition = ItemDefinition {
             false,
             [1, 2, 3],
         ),
-        // On Hit (once/turn): apply 1 Chill (flat, not scaling)
+        // On Hit (once/turn): apply 1 Chill
         EffectDefinition::new(TriggerType::OnHit, EffectType::ApplyChill, true, [1, 1, 1]),
-        // On Hit (once/turn): if enemy has Chill, deal +1 bonus damage
+        // On Hit (once/turn): if enemy has 2+ Chill, apply 1 additional Chill
         EffectDefinition::with_condition(
             TriggerType::OnHit,
-            EffectType::DealDamage,
+            EffectType::ApplyChill,
             true,
             [1, 1, 1],
-            Condition::EnemyHasStatus(StatusType::Chill),
+            Condition::EnemyHasStatusAtLeast(StatusType::Chill, 2),
         ),
     ],
 };
@@ -1392,8 +1437,8 @@ pub const T_RU_01: ItemDefinition = ItemDefinition {
             false,
             [1, 2, 3],
         ),
-        // On Hit (once/turn): apply 1 Rust (flat, not scaling)
-        EffectDefinition::new(TriggerType::OnHit, EffectType::ApplyRust, true, [1, 1, 1]),
+        // On Hit (once/turn): apply 2 Rust
+        EffectDefinition::new(TriggerType::OnHit, EffectType::ApplyRust, true, [2, 2, 2]),
     ],
 };
 
@@ -1656,8 +1701,14 @@ pub const T_BO_01: ItemDefinition = ItemDefinition {
             false,
             [1, 2, 3],
         ),
-        // On Hit (once/turn): apply 1 Bleed (flat, not scaling)
+        // On Hit (once/turn): apply 1 Bleed
         EffectDefinition::new(TriggerType::OnHit, EffectType::ApplyBleed, true, [1, 1, 1]),
+        EffectDefinition::new(
+            TriggerType::OnEnemyBleedDamage,
+            EffectType::Heal,
+            false,
+            [1, 2, 4],
+        ),
     ],
 };
 
@@ -1900,6 +1951,12 @@ pub const T_TE_01: ItemDefinition = ItemDefinition {
             false,
             [2, 3, 4],
         ),
+        EffectDefinition::new(
+            TriggerType::EveryOtherTurn,
+            EffectType::GainSpd,
+            false,
+            [1, 2, 4],
+        ),
     ],
 };
 
@@ -2002,6 +2059,12 @@ pub const G_TE_03: ItemDefinition = ItemDefinition {
             EffectType::GainArmor,
             false,
             [7, 14, 28],
+        ),
+        EffectDefinition::new(
+            TriggerType::FirstTurnIfSlower,
+            EffectType::ApplyShrapnel,
+            false,
+            [2, 4, 8],
         ),
     ],
 };
@@ -2358,16 +2421,25 @@ mod tests {
 
         assert_eq!(burrowblade.effects.len(), 5);
         assert_eq!(burrowblade.effects[2].trigger, TriggerType::BattleStart);
-        assert_eq!(burrowblade.effects[2].effect_type, EffectType::SetArmorPiercing);
+        assert_eq!(
+            burrowblade.effects[2].effect_type,
+            EffectType::SetArmorPiercing
+        );
         assert_eq!(burrowblade.effects[2].values, [32767, 32767, 32767]);
         assert_eq!(
             burrowblade.effects[2].condition,
             Condition::EnemyHasStatusAtLeast(StatusType::Rust, 4)
         );
         assert_eq!(burrowblade.effects[3].trigger, TriggerType::BattleStart);
-        assert_eq!(burrowblade.effects[3].effect_type, EffectType::SetArmorPiercing);
+        assert_eq!(
+            burrowblade.effects[3].effect_type,
+            EffectType::SetArmorPiercing
+        );
         assert_eq!(burrowblade.effects[4].trigger, TriggerType::OnHit);
-        assert_eq!(burrowblade.effects[4].effect_type, EffectType::SetArmorPiercing);
+        assert_eq!(
+            burrowblade.effects[4].effect_type,
+            EffectType::SetArmorPiercing
+        );
     }
 
     #[test]
@@ -2511,7 +2583,10 @@ mod tests {
         assert_eq!(rebar.effects[0].values, [3, 6, 12]);
 
         let shrapnel_talisman = get_item(b"G-ST-06\0").unwrap();
-        assert_eq!(shrapnel_talisman.effects[0].effect_type, EffectType::GainArmor);
+        assert_eq!(
+            shrapnel_talisman.effects[0].effect_type,
+            EffectType::GainArmor
+        );
         assert_eq!(shrapnel_talisman.effects[0].values, [3, 6, 12]);
 
         let tunnel_instinct = get_item(b"G-SC-03\0").unwrap();
@@ -2522,7 +2597,10 @@ mod tests {
 
         let blast_suit = get_item(b"G-BL-02\0").unwrap();
         assert_eq!(blast_suit.effects[1].values, [4, 8, 16]);
-        assert_eq!(blast_suit.effects[2].trigger, TriggerType::OnDealNonWeaponDamage);
+        assert_eq!(
+            blast_suit.effects[2].trigger,
+            TriggerType::OnDealNonWeaponDamage
+        );
         assert_eq!(blast_suit.effects[2].values, [1, 2, 4]);
 
         let frost_lantern = get_item(b"G-FR-01\0").unwrap();
@@ -2538,7 +2616,10 @@ mod tests {
         assert_eq!(salvage_clamp.effects[1].condition, Condition::None);
 
         let bloodletting_fang = get_item(b"G-BO-02\0").unwrap();
-        assert_eq!(bloodletting_fang.effects[0].effect_type, EffectType::GainAtk);
+        assert_eq!(
+            bloodletting_fang.effects[0].effect_type,
+            EffectType::GainAtk
+        );
         assert_eq!(bloodletting_fang.effects[0].values, [1, 2, 4]);
 
         let ambush_charm = get_item(b"G-TE-02\0").unwrap();

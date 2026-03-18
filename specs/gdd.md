@@ -109,7 +109,7 @@ Start (prototype baseline):
 
 - **Starting HP by campaign level:** Levels 1–9: 25 HP, Levels 10–19: 22 HP, Levels 20+: 18 HP. PvP modes (Duels, Pit Draft, Gauntlet): always 20 HP.
 - ATK 1 (from Basic Pickaxe), ARM 0, SPD 0, DIG 1 (Base).
-- **Starting Gold by campaign level:** Levels 1–9: 10 Gold, Levels 10–19: 5 Gold, Levels 20+: 0 Gold.
+- **Starting Gold by campaign level:** Levels 1–5: 10 Gold, Levels 6–10: 8 Gold, Levels 11–15: 5 Gold, Levels 16–20: 3 Gold, Levels 21–30: 2 Gold, Levels 31–40: 0 Gold.
 
 Inventory:
 
@@ -274,10 +274,10 @@ Format: `ID — Name (Type) [Tag] {Rarity} — Image: <path> — Effect`
 - `G-GR-02` — Lucky Coin (Gear) [GREED] {Common} — Image: assets/icons/items/greed/lucky_coin.png — Victory: gain `3/6/12` Gold and heal `3/6/12` HP
 - `G-GR-03` — Gilded Band (Gear) [GREED] {Heroic} — Image: assets/icons/items/greed/gilded_band.png — `+2/4/8 ARM`; Battle Start: gain Armor equal to `Gold/6`, rounded down, capped at `6/12/24`; if Gold ≥ 20, also gain `+1/2/4` SPD this battle
 - `G-GR-04` — Royal Bracer (Gear) [GREED] {Mythic} — Image: assets/icons/items/greed/royal_bracer.png — Turn Start: convert 1 Gold → `4/8/16` Armor (max 3 times per battle); your Gold gains from all sources are increased by `50/100/200`% (round down)
-- `G-GR-05` — Emerald Shard (Gear) [GREED] {Common} — Image: assets/icons/items/greed/emerald_shard.png — Every other turn (on first hit): heal `2/4/8` HP
-- `G-GR-06` — Ruby Shard (Gear) [GREED] {Common} — Image: assets/icons/items/greed/ruby_shard.png — Every other turn (on first hit): deal `1/2/4` non-weapon damage
-- `G-GR-07` — Sapphire Shard (Gear) [GREED] {Common} — Image: assets/icons/items/greed/sapphire_shard.png — Every other turn (on first hit): gain `2/4/8` Armor
-- `G-GR-08` — Citrine Shard (Gear) [GREED] {Common} — Image: assets/icons/items/greed/citrine_shard.png — Every other turn (on first hit): gain `2/4/8` Gold; `+1/2/4 ARM`
+- `G-GR-05` — Quartz Shard (Gear) [GREED] {Common} — Image: assets/icons/items/greed/emerald_shard.png — Every other turn (on first hit): heal `2/4/8` HP
+- `G-GR-06` — Amber Shard (Gear) [GREED] {Common} — Image: assets/icons/items/greed/ruby_shard.png — Every other turn (on first hit): deal `1/2/4` non-weapon damage
+- `G-GR-07` — Zircon Shard (Gear) [GREED] {Common} — Image: assets/icons/items/greed/sapphire_shard.png — Every other turn (on first hit): gain `2/4/8` Armor
+- `G-GR-08` — Tourmaline Shard (Gear) [GREED] {Common} — Image: assets/icons/items/greed/citrine_shard.png — Every other turn (on first hit): gain `2/4/8` Gold; `+1/2/4 ARM`
 
 #### BLAST (10)
 
@@ -388,7 +388,7 @@ New accounts start with 40 items unlocked (5 per tag = 1 tool + 4 gear):
 | BLOOD | T-BO-01 | G-BO-01, G-BO-02, G-BO-03, G-BO-04 | 76, 48, 49, 50, 51 |
 | TEMPO | T-TE-01 | G-TE-01, G-TE-02, G-TE-03, G-TE-04 | 78, 56, 57, 58, 59 |
 
-**Note:** GREED starter gear skips G-GR-04 (Royal Bracer, Mythic) in favor of G-GR-05 (Emerald Shard, Common).
+**Note:** GREED starter gear skips G-GR-04 (Royal Bracer, Mythic) in favor of G-GR-05 (Quartz Shard, Common).
 
 #### Starter Bitmask
 
@@ -519,36 +519,39 @@ Baseline spawns ensure that every run contains at least one copy of each **commo
 
 **L2 Supply Cache (3 Gear options)**
 
-- Act 1: 60% Common / 40% Rare
-- Act 2: 70% Common / 30% Rare
-- Act 3: 80% Common / 20% Rare
-- Act 4: 90% Common / 10% Rare
+- Act 1: 70% Common / 30% Rare
+- Act 2: 60% Common / 40% Rare
+- Act 3: 50% Common / 50% Rare
+- Act 4: 40% Common / 60% Rare
 
 **L3 Tool Crate (3 Tool options)**
 
-- Act 1: 50% Common / 30% Rare / 20% Heroic
-- Act 2: 60% Common / 25% Rare / 15% Heroic
-- Act 3: 70% Common / 20% Rare / 10% Heroic
-- Act 4: 80% Common / 15% Rare / 5% Heroic
+- Act 1: 60% Common / 30% Rare / 10% Heroic
+- Act 2: 50% Common / 30% Rare / 20% Heroic
+- Act 3: 40% Common / 35% Rare / 25% Heroic
+- Act 4: 30% Common / 40% Rare / 30% Heroic
 
 **L12 Geode Vault**
 
-- Act 1–4: 90% Heroic / 10% Mythic (max 1 Mythic shown)
+- Act 1: 95% Heroic / 5% Mythic (max 1 Mythic shown)
+- Act 2: 90% Heroic / 10% Mythic
+- Act 3: 80% Heroic / 20% Mythic
+- Act 4: 70% Heroic / 30% Mythic
 
 **L9 Smuggler Hatch (6 items = 1 Tool + 5 Gear)**
 Gear rarity weights:
 
-- Act 1: 35% Common / 45% Rare / 10% Heroic / 10% Mythic
-- Act 2: 45% Common / 40% Rare / 10% Heroic / 5% Mythic
-- Act 3: 55% Common / 30% Rare / 12% Heroic / 3% Mythic
-- Act 4: 65% Common / 25% Rare / 8% Heroic / 2% Mythic
+- Act 1: 45% Common / 35% Rare / 12% Heroic / 8% Mythic
+- Act 2: 40% Common / 40% Rare / 12% Heroic / 8% Mythic
+- Act 3: 30% Common / 40% Rare / 18% Heroic / 12% Mythic
+- Act 4: 25% Common / 35% Rare / 25% Heroic / 15% Mythic
 
 Tool rarity weights:
 
-- Act 1: 45% Common / 40% Rare / 15% Heroic
-- Act 2: 55% Common / 35% Rare / 10% Heroic
-- Act 3: 65% Common / 30% Rare / 5% Heroic
-- Act 4: 80% Common / 15% Rare / 5% Heroic
+- Act 1: 60% Common / 30% Rare / 10% Heroic
+- Act 2: 50% Common / 35% Rare / 15% Heroic
+- Act 3: 40% Common / 35% Rare / 25% Heroic
+- Act 4: 30% Common / 40% Rare / 30% Heroic
 
 ### Gold pricing
 
@@ -650,12 +653,14 @@ Week 3 finals (Biome B new):
 
 ### Act+ modifiers (Acts 3 & 4)
 
-Within-act ramp (stages 1–5/6–10/11–15/16–20):
+Within-act ramp (stages 1–3 / 4–7 / 8–10):
 
-- `tier = floor((stageInAct - 1) / 5)` = 0..3
+- `tier = 0 for stages 1-3, tier = 1 for stages 4-7, tier = 2 for stages 8-10`
 - Week 1 boss: `+1 HP*tier`, `+1 ARM*tier`
 - Week 2 boss: `+2 HP*tier`, `+1 ARM*tier`, `+1 ATK at tier>=2`
 - Week 3 final: `+3 HP*tier`, `+1 ARM*tier`, `+1 ATK at tier>=1`; at tier 0 specifically, **-3 ARM reduction** (makes early Week 3 finals more accessible)
+
+Note: Tier 2 is now reachable within each act at stages 8-10, activating the W2 ATK bonus.
 
 Act-level bumps:
 
@@ -663,6 +668,39 @@ Act-level bumps:
 - Act 4 (D): Week 1/2 bosses +1 ATK +1 SPD baseline; Week 3 finals +2 ATK +1 SPD baseline.
 
 Each boss also gets one additional "Act+" trait line (data-driven) that intensifies its identity (no new mechanics).
+
+### Act+ Trait Lines
+
+Each boss gains one trait in Act C and one in Act D. These traits are additive — they stack on top of the base traits and stat modifiers. Biome B W1/W2 bosses share Act+ traits with their Biome A counterparts (same archetypes).
+
+**W1 Bosses:**
+
+| Boss | Act C Trait | Act D Trait |
+|------|-----------|-----------|
+| B-A-W1-01 Broodmother | Brood Frenzy: Wounded → attacks 3×/turn instead of 2 | Sticky Webs: Chill from Webbed Strikes also reduces your SPD by 1 (this battle) |
+| B-A-W1-02 Obsidian Golem | Magma Core: Turn Start, if Armor ≥ 10, deal 1 non-weapon damage to you | Obsidian Reform: Every 3rd turn, regain 3 Armor |
+| B-A-W1-03 Gas Anomaly | Dense Fumes: Toxic Seep deals 2 damage instead of 1 | Panic Spread: Fume Panic triggers at 75% HP instead of 50% |
+| B-A-W1-04 Mad Miner | Tunnel Network: DIG treated as +2 higher for comparisons | Claim Stake: if Exposed on Turn 1, also steal 5 Gold |
+| B-A-W1-05 Shard Colossus | Crystal Lattice: Refracting Hide gains 3 Shrapnel instead of 2 | Hardened Spines: While boss has 4+ Shrapnel, gain +2 ARM |
+
+**W2 Bosses:**
+
+| Boss | Act C Trait | Act D Trait |
+|------|-----------|-----------|
+| B-A-W2-01 Drill Sergeant | Double Time: Rev Up grants +2 ATK on even turns instead of +1 | Cadence Call: Rev Up also grants +1 strike at Turn 5 |
+| B-A-W2-02 Crystal Mimic | Mirror Sheen: Prismatic Reflection starts with 3 stacks instead of 2 | Shattered Reflection: Consuming a reflection stack deals 2 non-weapon damage to you |
+| B-A-W2-03 Rust Regent | Royal Decay: Corroding Edict applies 2 Rust instead of 1 | Tax Collector: Execution Tax deals 2 damage instead of 1; if you have Rust, take +1 more |
+| B-A-W2-04 Powder Keg Baron | Unstable Reserves: Volatile Countdown deals 10 damage instead of 8 | Chain Reaction: When Volatile Countdown detonates, apply 2 Chill to you |
+| B-A-W2-05 Greedkeeper | Vault Lock: Toll Collector steals 20 Gold instead of 16; cap increases to 5 | Compound Interest: Every 3rd turn, gain +1 ATK per 4 Gold stolen (this battle) |
+
+**W3 Finals:**
+
+| Boss | Act C Trait | Act D Trait |
+|------|-----------|-----------|
+| B-A-W3-01 Eldritch Mole | Ancient Resilience: Phase thresholds shift to 80%/55%/30% | Primordial Wrath: 25% phase Bleed increases to 3/turn; at 10% HP gain +3 ATK |
+| B-A-W3-02 Gilded Devourer | Insatiable: Tax Feast conversion improves to +1 ARM per 2 Gold (cap 16) | Feast Frenzy: Wounded: deal 4 non-weapon damage AND apply 3 Bleed |
+| B-B-W3-01 Frostbound Leviathan | Blizzard Pulse: Whiteout applies 3 Chill (was 2); Glacial Bulk grants +4 ARM (was +3) | Permafrost Shell: While Leviathan has 8+ ARM, your weapon damage reduced by 1 (min 1) |
+| B-B-W3-02 Rusted Chronomancer | Temporal Loop: Time Shear also fires on Turn 5 (2 strikes again) | Decaying Timeline: Oxidized Future applies 2 Rust/turn (was 1); your Bleed decays 1 slower (min 0) |
 
 ### Stage-determined mapping (per 20-stage act)
 
@@ -783,8 +821,8 @@ Expected fights per run (target). More POIs in early acts means wider exploratio
 
 Gold income is roughly flat across acts (~70–75 gold), but its purchasing power differs sharply:
 
-- Act 1: 2 Smuggler Hatches with 40% Rare supply caches and 10% Mythic shop gear — gold buys high-impact items. Rare Gear (14g) roughly every ~5 fights; Heroic Gear (22g) roughly every ~8 fights.
-- Act 4: 1 Smuggler Hatch with 90% Common supply caches and 2% Mythic shop gear — gold mostly buys filler. Players rely on the few Tool Crates and the Geode Vault for meaningful upgrades.
+- Act 1: 2 Smuggler Hatches with 30% Rare supply caches and 8% Mythic shop gear — gold buys decent items but rarity is modest. Rare Gear (14g) roughly every ~5 fights; Heroic Gear (22g) roughly every ~8 fights.
+- Act 4: 1 Smuggler Hatch with 60% Rare supply caches and 15% Mythic shop gear — late-game items are more powerful but scarcer (fewer POIs). Players get better rarity when they do find items.
 
 ### Target stage difficulty ("fair" loss rate)
 

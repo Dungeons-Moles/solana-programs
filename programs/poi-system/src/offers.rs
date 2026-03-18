@@ -123,45 +123,45 @@ pub enum ItemType {
 // Rarity Tables (percentages for Common/Rare/Heroic/Mythic)
 // =============================================================================
 
-/// Supply Cache (L2) rarity table by act
+/// Supply Cache (L2) rarity table by act (inverted model: later acts = better rarity)
 pub const SUPPLY_CACHE_RARITY: [(u8, u8, u8, u8); 4] = [
-    (60, 40, 0, 0), // Act 1: 60% Common, 40% Rare
-    (70, 30, 0, 0), // Act 2: 70% Common, 30% Rare
-    (80, 20, 0, 0), // Act 3: 80% Common, 20% Rare
-    (90, 10, 0, 0), // Act 4: 90% Common, 10% Rare
+    (70, 30, 0, 0), // Act 1: 70% Common, 30% Rare
+    (60, 40, 0, 0), // Act 2: 60% Common, 40% Rare
+    (50, 50, 0, 0), // Act 3: 50% Common, 50% Rare
+    (40, 60, 0, 0), // Act 4: 40% Common, 60% Rare
 ];
 
-/// Tool Crate (L3) rarity table by act
+/// Tool Crate (L3) rarity table by act (inverted model)
 pub const TOOL_CRATE_RARITY: [(u8, u8, u8, u8); 4] = [
-    (50, 30, 20, 0), // Act 1: 50% Common, 30% Rare, 20% Heroic
-    (60, 25, 15, 0), // Act 2: 60% Common, 25% Rare, 15% Heroic
-    (70, 20, 10, 0), // Act 3: 70% Common, 20% Rare, 10% Heroic
-    (80, 15, 5, 0),  // Act 4: 80% Common, 15% Rare, 5% Heroic
+    (60, 30, 10, 0), // Act 1: 60% Common, 30% Rare, 10% Heroic
+    (50, 30, 20, 0), // Act 2: 50% Common, 30% Rare, 20% Heroic
+    (40, 35, 25, 0), // Act 3: 40% Common, 35% Rare, 25% Heroic
+    (30, 40, 30, 0), // Act 4: 30% Common, 40% Rare, 30% Heroic
 ];
 
-/// Geode Vault (L12) rarity table by act.
-/// All acts: 90% Heroic, 10% Mythic (max 1 Mythic enforced at generation).
+/// Geode Vault (L12) rarity table by act (inverted model).
+/// Max 1 Mythic enforced at generation.
 pub const GEODE_VAULT_RARITY: [(u8, u8, u8, u8); 4] = [
-    (0, 0, 90, 10), // Act 1: 90% Heroic, 10% Mythic
+    (0, 0, 95, 5),  // Act 1: 95% Heroic, 5% Mythic
     (0, 0, 90, 10), // Act 2: 90% Heroic, 10% Mythic
-    (0, 0, 90, 10), // Act 3: 90% Heroic, 10% Mythic
-    (0, 0, 90, 10), // Act 4: 90% Heroic, 10% Mythic
+    (0, 0, 80, 20), // Act 3: 80% Heroic, 20% Mythic
+    (0, 0, 70, 30), // Act 4: 70% Heroic, 30% Mythic
 ];
 
-/// Smuggler Hatch (L9) Gear rarity table by act
+/// Smuggler Hatch (L9) Gear rarity table by act (inverted model)
 pub const SMUGGLER_GEAR_RARITY: [(u8, u8, u8, u8); 4] = [
-    (35, 45, 10, 10), // Act 1
-    (45, 40, 10, 5),  // Act 2
-    (55, 30, 12, 3),  // Act 3
-    (65, 25, 8, 2),   // Act 4
+    (45, 35, 12, 8),  // Act 1
+    (40, 40, 12, 8),  // Act 2
+    (30, 40, 18, 12), // Act 3
+    (25, 35, 25, 15), // Act 4
 ];
 
-/// Smuggler Hatch (L9) Tool rarity table by act
+/// Smuggler Hatch (L9) Tool rarity table by act (inverted model)
 pub const SMUGGLER_TOOL_RARITY: [(u8, u8, u8, u8); 4] = [
-    (45, 40, 15, 0), // Act 1
-    (55, 35, 10, 0), // Act 2
-    (65, 30, 5, 0),  // Act 3
-    (80, 15, 5, 0),  // Act 4
+    (60, 30, 10, 0), // Act 1
+    (50, 35, 15, 0), // Act 2
+    (40, 35, 25, 0), // Act 3
+    (30, 40, 30, 0), // Act 4
 ];
 
 /// Counter Cache (L13) rarity table (uses standard act table)
@@ -994,8 +994,8 @@ mod tests {
             }
         }
 
-        assert_eq!(common_count, 60);
-        assert_eq!(rare_count, 40);
+        assert_eq!(common_count, 70, "Act 1 Supply Cache: 70% Common");
+        assert_eq!(rare_count, 30, "Act 1 Supply Cache: 30% Rare");
     }
 
     #[test]
@@ -1012,8 +1012,8 @@ mod tests {
             }
         }
 
-        assert_eq!(common_count, 90);
-        assert_eq!(rare_count, 10);
+        assert_eq!(common_count, 40, "Act 4 Supply Cache: 40% Common");
+        assert_eq!(rare_count, 60, "Act 4 Supply Cache: 60% Rare");
     }
 
     #[test]
@@ -1027,27 +1027,30 @@ mod tests {
             }
         }
 
-        assert_eq!(heroic_count, 20, "Act 1 Tool Crate should have 20% Heroic");
+        assert_eq!(heroic_count, 10, "Act 1 Tool Crate should have 10% Heroic");
     }
 
     #[test]
-    fn test_geode_vault_mythic_all_acts() {
-        for act in 1..=4 {
-            let mut mythic_count = 0;
-
-            for seed in 0..100 {
-                let rarity = get_rarity_from_table(&GEODE_VAULT_RARITY, act, seed);
-                if rarity == ItemRarity::Mythic {
-                    mythic_count += 1;
-                }
+    fn test_geode_vault_mythic_scales_by_act() {
+        // Act 1: 5% Mythic
+        let mut mythic_count = 0;
+        for seed in 0..100 {
+            let rarity = get_rarity_from_table(&GEODE_VAULT_RARITY, 1, seed);
+            if rarity == ItemRarity::Mythic {
+                mythic_count += 1;
             }
-
-            assert_eq!(
-                mythic_count, 10,
-                "Act {} Geode Vault should have 10% Mythic",
-                act
-            );
         }
+        assert_eq!(mythic_count, 5, "Act 1 Geode Vault should have 5% Mythic");
+
+        // Act 4: 30% Mythic
+        let mut mythic_count = 0;
+        for seed in 0..100 {
+            let rarity = get_rarity_from_table(&GEODE_VAULT_RARITY, 4, seed);
+            if rarity == ItemRarity::Mythic {
+                mythic_count += 1;
+            }
+        }
+        assert_eq!(mythic_count, 30, "Act 4 Geode Vault should have 30% Mythic");
     }
 
     #[test]
@@ -1106,9 +1109,9 @@ mod tests {
         let tool_table = get_rarity_table(PoiOfferType::SmugglerHatch, true);
         let gear_table = get_rarity_table(PoiOfferType::SmugglerHatch, false);
 
-        // Act 1: Tool 45% Common, Gear 35% Common
-        assert_eq!(tool_table[0].0, 45);
-        assert_eq!(gear_table[0].0, 35);
+        // Act 1: Tool 60% Common, Gear 45% Common (inverted model)
+        assert_eq!(tool_table[0].0, 60);
+        assert_eq!(gear_table[0].0, 45);
     }
 
     // =========================================================================

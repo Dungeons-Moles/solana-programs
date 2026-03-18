@@ -4,10 +4,16 @@ use crate::{
     CombatantInput, ScaledBossStats, Week,
 };
 
-/// Calculate tier (0-1) based on level within act (10 levels per act)
-/// Tier 0: levels 1-5, Tier 1: levels 6-10
+/// Calculate tier (0-2) based on level within act (10 levels per act)
+/// Tier 0: stages 1-3, Tier 1: stages 4-7, Tier 2: stages 8-10
 pub fn calculate_tier(level_in_act: u8) -> u8 {
-    (level_in_act - 1) / 5
+    if level_in_act <= 3 {
+        0
+    } else if level_in_act <= 7 {
+        1
+    } else {
+        2
+    }
 }
 
 /// Scale Week 1 boss stats based on tier
@@ -124,11 +130,17 @@ mod tests {
 
     #[test]
     fn test_calculate_tier() {
-        // With 10 levels per act, only tiers 0-1 are used
-        assert_eq!(calculate_tier(1), 0); // Level 1 = Tier 0
-        assert_eq!(calculate_tier(5), 0); // Level 5 = Tier 0
-        assert_eq!(calculate_tier(6), 1); // Level 6 = Tier 1
-        assert_eq!(calculate_tier(10), 1); // Level 10 = Tier 1
+        // Three-tier within-act system: stages 1-3 = tier 0, 4-7 = tier 1, 8-10 = tier 2
+        assert_eq!(calculate_tier(1), 0);
+        assert_eq!(calculate_tier(2), 0);
+        assert_eq!(calculate_tier(3), 0);
+        assert_eq!(calculate_tier(4), 1);
+        assert_eq!(calculate_tier(5), 1);
+        assert_eq!(calculate_tier(6), 1);
+        assert_eq!(calculate_tier(7), 1);
+        assert_eq!(calculate_tier(8), 2);
+        assert_eq!(calculate_tier(9), 2);
+        assert_eq!(calculate_tier(10), 2);
     }
 
     #[test]
@@ -215,7 +227,7 @@ mod tests {
     #[test]
     fn test_full_scaling_example() {
         // Level 35 in Act 4 (B+), Week 3 Final
-        // level_in_act = 5, tier = (5-1)/5 = 0
+        // level_in_act = 5, tier = 1 (stages 4-7)
         // Boss: The Frostbound Leviathan (B-B-W3-01) - odd level = Final 1
         // Base: HP=52, ATK=3, ARM=10, SPD=2, DIG=3
 
@@ -224,11 +236,11 @@ mod tests {
 
         let scaled = scale_boss(boss, 35, Week::Three);
 
-        // Week 3 tier 0 scaling: -3 ARM reduction
+        // Week 3 tier 1 scaling: +3 HP, +1 ARM, +1 ATK
         // Act 4 baseline: +2 ATK, +1 SPD
-        assert_eq!(scaled.hp, 52); // no tier bonus
-        assert_eq!(scaled.atk, 3 + 2); // 5 (base + act bonus)
-        assert_eq!(scaled.arm, 7); // 10 - 3 ARM reduction at tier 0
+        assert_eq!(scaled.hp, 55); // 52 + 3*1
+        assert_eq!(scaled.atk, 3 + 1 + 2); // 6 (base + tier ATK + act bonus)
+        assert_eq!(scaled.arm, 11); // 10 + 1 ARM from tier
         assert_eq!(scaled.spd, 2 + 1); // 3 (act 4 bonus)
         assert_eq!(scaled.dig, 3); // unchanged
     }

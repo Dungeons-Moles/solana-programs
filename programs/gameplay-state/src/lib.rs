@@ -25,7 +25,7 @@ use combat_system::{
     ItemEffect, TriggerType,
 };
 use constants::{
-    base_hp, BASE_ARM, BASE_ATK, BASE_SPD, COMPANY_TREASURY_ADDRESS, DAY_MOVES,
+    base_hp, BASE_ARM, BASE_ATK, BASE_SPD, COMPANY_TREASURY_ADDRESS, DAY_MOVES, PVP_BASE_HP,
     DUEL_ENTRY_LAMPORTS, DUEL_ENTRY_SEED, DUEL_OPEN_QUEUE_SEED, DUEL_QUEUE_SEED, DUEL_VAULT_SEED,
     GAME_STATE_SEED, GAUNTLET_BOOTSTRAP_ECHOES_PER_WEEK, GAUNTLET_CAMPAIGN_LEVEL,
     GAUNTLET_ECHOES_SEED,
@@ -243,8 +243,11 @@ pub mod gameplay_state {
         game_state.total_moves = 0;
         game_state.boss_fight_ready = false;
         game_state.gold = match campaign_level {
-            1..=9 => 10,
-            10..=19 => 5,
+            1..=5 => 10,
+            6..=10 => 8,
+            11..=15 => 5,
+            16..=20 => 3,
+            21..=30 => 2,
             _ => 0,
         };
         game_state.bump = ctx.bumps.game_state;
@@ -750,6 +753,13 @@ pub mod gameplay_state {
         );
         game_state.run_mode = run_mode;
         game_state.max_weeks = max_weeks;
+
+        // PvP modes use fixed starting stats independent of campaign level
+        if run_mode == RunMode::Duel || run_mode == RunMode::Gauntlet {
+            game_state.hp = PVP_BASE_HP;
+            game_state.gold = 0;
+        }
+
         Ok(())
     }
 
@@ -880,6 +890,8 @@ pub mod gameplay_state {
 
         game_state.run_mode = RunMode::Gauntlet;
         game_state.max_weeks = 5;
+        game_state.hp = PVP_BASE_HP;
+        game_state.gold = 0;
         game_state.gauntlet_epoch_id = epoch_id;
 
         let epoch_pool = &mut ctx.accounts.gauntlet_epoch_pool;
@@ -3650,7 +3662,8 @@ fn resolve_boss_fight<'info>(
         )
     };
     let boss_definition = boss_system::get_boss(&boss_id).ok_or(GameplayStateError::InvalidWeek)?;
-    let boss_effects = boss_system::get_boss_annotated_item_effects(boss_definition);
+    let act = boss_system::calculate_act(stage);
+    let boss_effects = boss_system::get_boss_annotated_item_effects_for_act(boss_definition, act);
 
     let player_stats = calculate_stats(inventory, game_state.campaign_level, game_state.run_mode);
     let all_player_effects = generate_annotated_combat_effects(inventory);

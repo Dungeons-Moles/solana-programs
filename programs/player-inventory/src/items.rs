@@ -759,7 +759,7 @@ pub const G_GR_04: ItemDefinition = ItemDefinition {
 
 pub const G_GR_05: ItemDefinition = ItemDefinition {
     id: b"G-GR-05\0",
-    name: "Emerald Shard",
+    name: "Quartz Shard",
     item_type: ItemType::Gear,
     tag: ItemTag::Greed,
     rarity: Rarity::Common, // GDD says Common
@@ -776,7 +776,7 @@ pub const G_GR_05: ItemDefinition = ItemDefinition {
 
 pub const G_GR_06: ItemDefinition = ItemDefinition {
     id: b"G-GR-06\0",
-    name: "Ruby Shard",
+    name: "Amber Shard",
     item_type: ItemType::Gear,
     tag: ItemTag::Greed,
     rarity: Rarity::Common, // GDD says Common
@@ -793,7 +793,7 @@ pub const G_GR_06: ItemDefinition = ItemDefinition {
 
 pub const G_GR_07: ItemDefinition = ItemDefinition {
     id: b"G-GR-07\0",
-    name: "Sapphire Shard",
+    name: "Zircon Shard",
     item_type: ItemType::Gear,
     tag: ItemTag::Greed,
     rarity: Rarity::Common, // GDD says Common
@@ -810,7 +810,7 @@ pub const G_GR_07: ItemDefinition = ItemDefinition {
 
 pub const G_GR_08: ItemDefinition = ItemDefinition {
     id: b"G-GR-08\0",
-    name: "Citrine Shard",
+    name: "Tourmaline Shard",
     item_type: ItemType::Gear,
     tag: ItemTag::Greed,
     rarity: Rarity::Common, // GDD says Common

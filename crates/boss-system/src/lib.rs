@@ -139,7 +139,8 @@ pub fn get_boss_annotated_effects(
     }
 
     let boss = select_boss(stage, week);
-    Ok(get_boss_annotated_item_effects(boss))
+    let act = calculate_act(stage);
+    Ok(get_boss_annotated_item_effects_for_act(boss, act))
 }
 
 /// Returns a complete CombatantInput struct for initializing boss combat.

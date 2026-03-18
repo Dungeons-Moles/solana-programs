@@ -615,6 +615,15 @@ pub fn get_boss_item_effects(boss: &BossDefinition) -> Vec<ItemEffect> {
 }
 
 pub fn get_boss_annotated_item_effects(boss: &BossDefinition) -> Vec<AnnotatedItemEffect> {
+    get_boss_annotated_item_effects_for_act(boss, 0)
+}
+
+/// Get annotated item effects for a boss, including Act+ traits for the given act.
+/// act: 0 = Act A, 1 = Act B, 2 = Act C, 3 = Act D
+pub fn get_boss_annotated_item_effects_for_act(
+    boss: &BossDefinition,
+    act: u8,
+) -> Vec<AnnotatedItemEffect> {
     let mut source_id = [0u8; 16];
     source_id[..12].copy_from_slice(&boss.id);
     let source = CombatSourceRef {
@@ -622,11 +631,55 @@ pub fn get_boss_annotated_item_effects(boss: &BossDefinition) -> Vec<AnnotatedIt
         id: source_id,
     };
 
-    get_boss_item_effects(boss)
+    let mut effects: Vec<AnnotatedItemEffect> = get_boss_item_effects(boss)
         .into_iter()
         .map(|effect| AnnotatedItemEffect {
             effect,
             source: Some(source),
         })
-        .collect()
+        .collect();
+
+    // Apply Act+ traits for Acts C (2) and D (3)
+    if act >= 2 {
+        if let Some(act_plus) = get_act_plus_traits(&boss.id) {
+            // Add Act C traits
+            let act_c_effects: Vec<AnnotatedItemEffect> = act_plus
+                .act_c
+                .iter()
+                .filter(|t| {
+                    !matches!(
+                        t.special,
+                        SpecialMechanic::Phase { .. } | SpecialMechanic::ModifyOnWounded { .. }
+                    )
+                })
+                .map(|t| AnnotatedItemEffect {
+                    effect: t.to_item_effect(),
+                    source: Some(source),
+                })
+                .collect();
+            effects.extend(act_c_effects);
+
+            // Add Act D traits (cumulative with Act C)
+            if act >= 3 {
+                let act_d_effects: Vec<AnnotatedItemEffect> = act_plus
+                    .act_d
+                    .iter()
+                    .filter(|t| {
+                        !matches!(
+                            t.special,
+                            SpecialMechanic::Phase { .. }
+                                | SpecialMechanic::ModifyOnWounded { .. }
+                        )
+                    })
+                    .map(|t| AnnotatedItemEffect {
+                        effect: t.to_item_effect(),
+                        source: Some(source),
+                    })
+                    .collect();
+                effects.extend(act_d_effects);
+            }
+        }
+    }
+
+    effects
 }

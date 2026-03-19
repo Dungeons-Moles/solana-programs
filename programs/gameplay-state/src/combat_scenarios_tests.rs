@@ -268,6 +268,9 @@ fn assert_no_fake_baked_player_stat_gain_logs(log: &[CombatLogEntry], context: &
         .position(|entry| entry.action == LogAction::Attack)
         .unwrap_or(log.len());
 
+    // Only reject turn-0 (pre-combat) positive stat gains — those are improperly logged
+    // baked BattleStart effects. Turn-1 pre-attack gains are legitimate conditional triggers
+    // (e.g. FirstTurnIfFaster: GainAtk from Chrono Rapier).
     assert!(
         !log.iter().take(first_attack_index).any(|entry| {
             matches!(
@@ -275,6 +278,7 @@ fn assert_no_fake_baked_player_stat_gain_logs(log: &[CombatLogEntry], context: &
                 LogAction::AtkChange | LogAction::ArmorChange | LogAction::SpdChange
             ) && entry.is_player
                 && entry.value > 0
+                && entry.turn == 0
         }),
         "{}: baked player stats should not replay as positive pre-attack gain logs",
         context

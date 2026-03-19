@@ -121,13 +121,13 @@ pub fn is_subset(pool: [u8; ITEM_BITMASK_SIZE], unlocked: [u8; ITEM_BITMASK_SIZE
 }
 
 /// Select a random locked item from currently unlockable indices.
-/// Uses deterministic PRNG based on player, level, and slot.
+/// Uses deterministic PRNG based on player, level, and VRF-derived randomness.
 ///
 /// # Arguments
 /// * `unlocked_items` - Current unlocked items bitmask
 /// * `player` - Player's public key for PRNG seed
 /// * `level` - Completed level for PRNG seed
-/// * `slot` - Solana slot for PRNG seed
+/// * `randomness` - 32-byte VRF-derived randomness (or zeroes if VRF unavailable)
 ///
 /// # Returns
 /// `Some(index)` of a randomly selected locked item, or `None` if all items are unlocked
@@ -135,7 +135,7 @@ pub fn select_random_locked_item(
     unlocked_items: [u8; ITEM_BITMASK_SIZE],
     player: &Pubkey,
     level: u8,
-    slot: u64,
+    randomness: &[u8; 32],
 ) -> Option<u8> {
     // Find all locked items in the current unlockable range.
     let mut locked_items: [u8; UNLOCKABLE_ITEMS as usize] = [0; UNLOCKABLE_ITEMS as usize];
@@ -152,11 +152,11 @@ pub fn select_random_locked_item(
         return None;
     }
 
-    // Create deterministic seed from player, level, and slot
-    let mut seed_data = [0u8; 41]; // 32 (pubkey) + 1 (level) + 8 (slot)
+    // Create deterministic seed from player, level, and VRF randomness
+    let mut seed_data = [0u8; 65]; // 32 (pubkey) + 1 (level) + 32 (randomness)
     seed_data[..32].copy_from_slice(player.as_ref());
     seed_data[32] = level;
-    seed_data[33..41].copy_from_slice(&slot.to_le_bytes());
+    seed_data[33..65].copy_from_slice(randomness);
 
     // Simple hash: XOR all bytes and use modulo
     let hash: u64 = seed_data.iter().fold(0u64, |acc, &byte| {
@@ -298,9 +298,9 @@ mod tests {
         let unlocked = STARTER_ITEMS_BITMASK; // 40 specific items set
         let player = Pubkey::new_unique();
         let level = 5u8;
-        let slot = 12345u64;
+        let randomness = [42u8; 32];
 
-        let result = select_random_locked_item(unlocked, &player, level, slot);
+        let result = select_random_locked_item(unlocked, &player, level, &randomness);
         assert!(result.is_some());
 
         let index = result.unwrap();
@@ -328,9 +328,9 @@ mod tests {
         }
         let player = Pubkey::new_unique();
         let level = 5u8;
-        let slot = 12345u64;
+        let randomness = [0u8; 32];
 
-        let result = select_random_locked_item(all_unlocked, &player, level, slot);
+        let result = select_random_locked_item(all_unlocked, &player, level, &randomness);
         assert!(result.is_none());
     }
 
@@ -339,10 +339,10 @@ mod tests {
         let unlocked = STARTER_ITEMS_BITMASK;
         let player = Pubkey::new_unique();
         let level = 5u8;
-        let slot = 12345u64;
+        let randomness = [99u8; 32];
 
-        let result1 = select_random_locked_item(unlocked, &player, level, slot);
-        let result2 = select_random_locked_item(unlocked, &player, level, slot);
+        let result1 = select_random_locked_item(unlocked, &player, level, &randomness);
+        let result2 = select_random_locked_item(unlocked, &player, level, &randomness);
 
         assert_eq!(result1, result2, "Same inputs should produce same output");
     }
@@ -352,10 +352,13 @@ mod tests {
         let unlocked = STARTER_ITEMS_BITMASK;
         let player = Pubkey::new_unique();
 
-        // Different slots should (usually) produce different results
-        let result1 = select_random_locked_item(unlocked, &player, 1, 100);
-        let result2 = select_random_locked_item(unlocked, &player, 1, 200);
-        let result3 = select_random_locked_item(unlocked, &player, 2, 100);
+        // Different randomness should (usually) produce different results
+        let rand1 = [1u8; 32];
+        let rand2 = [2u8; 32];
+        let rand3 = [3u8; 32];
+        let result1 = select_random_locked_item(unlocked, &player, 1, &rand1);
+        let result2 = select_random_locked_item(unlocked, &player, 1, &rand2);
+        let result3 = select_random_locked_item(unlocked, &player, 2, &rand3);
 
         // At least one should differ (statistically very likely with 40 options)
         let all_same = result1 == result2 && result2 == result3;

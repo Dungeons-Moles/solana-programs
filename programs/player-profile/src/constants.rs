@@ -39,6 +39,10 @@ pub const SESSION_MANAGER_PROGRAM_ID: [u8; 32] = [
     0xa9, 0x4f, 0x56, 0x2e, 0x62, 0x85, 0x26, 0xb7, 0x4f, 0x8b, 0xa1, 0x4d, 0x08, 0x36, 0x20, 0x99,
 ];
 
+/// Session Manager program ID as Pubkey for use in Anchor account owner constraints.
+pub const SESSION_MANAGER_PROGRAM_PUBKEY: anchor_lang::prelude::Pubkey =
+    anchor_lang::prelude::Pubkey::new_from_array(SESSION_MANAGER_PROGRAM_ID);
+
 /// Seed for session-manager authority PDA that signs authorized CPIs.
 pub const SESSION_MANAGER_AUTHORITY_SEED: &[u8] = b"session_manager_authority";
 
@@ -69,6 +73,14 @@ pub const GAMEPLAY_STATE_PROGRAM_ID: [u8; 32] = [
     0xa5, 0x69, 0x33, 0xc3, 0x32, 0x44, 0x5d, 0xb7, 0x52, 0x8d, 0x7a, 0x6b, 0xc3, 0x01, 0x56, 0x1e,
     0x68, 0x50, 0xaa, 0x96, 0x7a, 0x85, 0xea, 0x62, 0xb5, 0x79, 0xe3, 0x23, 0xe4, 0xa8, 0x88, 0x36,
 ];
+
+/// Gameplay-state program ID as Pubkey for use in Anchor account owner constraints.
+pub const GAMEPLAY_STATE_PROGRAM_PUBKEY: anchor_lang::prelude::Pubkey =
+    anchor_lang::prelude::Pubkey::new_from_array(GAMEPLAY_STATE_PROGRAM_ID);
+
+/// Anchor discriminator for `PitDraftQueue` account: sha256("account:PitDraftQueue")[..8].
+pub const PIT_DRAFT_QUEUE_DISCRIMINATOR: [u8; 8] =
+    [0xfa, 0x28, 0xca, 0x89, 0x8c, 0xa2, 0xda, 0x4d];
 
 /// Seed used by gameplay-state for the canonical gauntlet pool vault PDA.
 pub const GAUNTLET_POOL_VAULT_SEED: &[u8] = b"gauntlet_pool_vault";

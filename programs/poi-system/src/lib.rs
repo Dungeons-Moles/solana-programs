@@ -272,7 +272,7 @@ fn refresh_discovered_enemies_authorized_cpi<'info>(
     gameplay_state_program: &AccountInfo<'info>,
     session: &AccountInfo<'info>,
     generated_map: &AccountInfo<'info>,
-    map_enemies: &AccountInfo<'info>,
+    game_state: &AccountInfo<'info>,
     poi_authority: &AccountInfo<'info>,
     gameplay_authority: &AccountInfo<'info>,
     map_generator_program: &AccountInfo<'info>,
@@ -287,7 +287,7 @@ fn refresh_discovered_enemies_authorized_cpi<'info>(
                 poi_authority: poi_authority.clone(),
                 session: session.clone(),
                 generated_map: generated_map.clone(),
-                map_enemies: map_enemies.clone(),
+                game_state: game_state.clone(),
                 gameplay_authority: gameplay_authority.clone(),
                 map_generator_program: map_generator_program.clone(),
                 session_discovery: session_discovery.cloned(),
@@ -1191,7 +1191,7 @@ pub mod poi_system {
                 &ctx.accounts.gameplay_state_program.to_account_info(),
                 &sess.to_account_info(),
                 &ctx.accounts.generated_map.to_account_info(),
-                &ctx.accounts.map_enemies.to_account_info(),
+                &ctx.accounts.game_state.to_account_info(),
                 &ctx.accounts.poi_authority.to_account_info(),
                 &ctx.accounts.gameplay_authority.to_account_info(),
                 &mgp.to_account_info(),
@@ -1240,8 +1240,7 @@ pub mod poi_system {
         let (randomness, nonce) = vrf_data.ok_or(PoiSystemError::VrfRequired)?;
         let seed = {
             let offer_ctx = offers::OfferContext::new(act, game_state.week, 0, poi_index);
-            let vrf_ref: Option<(&[u8; 32], u64)> = Some((&randomness, nonce));
-            let mut rng = offer_ctx.create_rng(vrf_ref);
+            let mut rng = offer_ctx.create_rng((&randomness, nonce));
             rng.next_val()
         };
 
@@ -1256,132 +1255,9 @@ pub mod poi_system {
 
         let pool = &ctx.accounts.game_session.active_item_pool;
 
-        // Retry generation with different seeds until we have 3 pool-valid items.
-        // Each attempt generates 3 candidates; we keep ones that are in the pool
-        // and not yet collected. This prevents empty slots when the pool filters
-        // out some generated items.
-        let mut items = [state::OfferItem::default(); 3];
-        let mut count = 0usize;
-        let mut used_ids = [[0u8; 8]; 3];
-
-        for attempt in 0..10u64 {
-            let attempt_seed = seed ^ attempt.wrapping_mul(0x9e3779b97f4a7c15);
-            let generated = offers::generate_poi_offers(poi_type, act, w1, w2, attempt_seed)
-                .ok_or(PoiSystemError::InvalidInteraction)?;
-
-            for offer in &generated.offers {
-                // Skip duplicates
-                if used_ids[..count].contains(&offer.item_id) {
-                    continue;
-                }
-                // Check pool membership
-                if let Some(index) = offers::item_id_to_pool_index(&offer.item_id) {
-                    if offers::is_item_in_pool(pool, index) {
-                        used_ids[count] = offer.item_id;
-                        items[count] = state::OfferItem {
-                            item_id: offer.item_id,
-                            rarity: offers::rarity_from_item_id(&offer.item_id),
-                            tier: offer.tier,
-                        };
-                        count += 1;
-                        if count >= 3 {
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if count >= 3 {
-                break;
-            }
-        }
-
-        // Deterministic fallback: if normal generation+pool filtering could not fill all 3
-        // slots (e.g., very restrictive active item pool), backfill from the active pool
-        // with POI-compatible items so frontend always receives 3 visible options.
-        if count < 3 {
-            let matches_weakness = |item_id: &[u8; 8], weakness: offers::WeaknessTag| -> bool {
-                match weakness {
-                    offers::WeaknessTag::Stone => item_id[2] == b'S' && item_id[3] == b'T',
-                    offers::WeaknessTag::Scout => item_id[2] == b'S' && item_id[3] == b'C',
-                    offers::WeaknessTag::Greed => item_id[2] == b'G' && item_id[3] == b'R',
-                    offers::WeaknessTag::Blast => item_id[2] == b'B' && item_id[3] == b'L',
-                    offers::WeaknessTag::Frost => item_id[2] == b'F' && item_id[3] == b'R',
-                    offers::WeaknessTag::Rust => item_id[2] == b'R' && item_id[3] == b'U',
-                    offers::WeaknessTag::Blood => item_id[2] == b'B' && item_id[3] == b'O',
-                    offers::WeaknessTag::Tempo => item_id[2] == b'T' && item_id[3] == b'E',
-                }
-            };
-
-            let accepts_for_poi = |item_id: &[u8; 8]| -> bool {
-                match poi_type {
-                    2 => item_id[0] == b'G', // Supply Cache: gear
-                    3 => item_id[0] == b'T', // Tool Crate: tools
-                    12 => item_id[0] == b'G' && offers::rarity_from_item_id(item_id) >= 2, // Geode: Heroic+
-                    13 => {
-                        item_id[0] == b'G'
-                            && (matches_weakness(item_id, w1) || matches_weakness(item_id, w2))
-                    } // Counter: weakness-tagged gear
-                    _ => false,
-                }
-            };
-
-            let mut fallback_candidates: Vec<[u8; 8]> = Vec::new();
-            for (index, item) in player_inventory::items::ITEMS.iter().enumerate() {
-                let pool_index = index as u8;
-                if !offers::is_item_in_pool(pool, pool_index) {
-                    continue;
-                }
-                let item_id = *item.id;
-                if !accepts_for_poi(&item_id) {
-                    continue;
-                }
-                if used_ids[..count].contains(&item_id) {
-                    continue;
-                }
-                fallback_candidates.push(item_id);
-            }
-
-            if !fallback_candidates.is_empty() {
-                let mut cursor = (seed as usize) % fallback_candidates.len();
-                let mut scanned = 0usize;
-                while count < 3 && scanned < fallback_candidates.len() {
-                    let item_id = fallback_candidates[cursor];
-                    if !used_ids[..count].contains(&item_id) {
-                        used_ids[count] = item_id;
-                        items[count] = state::OfferItem {
-                            item_id,
-                            rarity: offers::rarity_from_item_id(&item_id),
-                            tier: 0,
-                        };
-                        count += 1;
-                    }
-                    cursor = (cursor + 1) % fallback_candidates.len();
-                    scanned += 1;
-                }
-            }
-
-            // Absolute last resort: duplicate a valid offer so UI still gets 3 choices.
-            if count < 3 {
-                let fallback_id = if count > 0 {
-                    used_ids[0]
-                } else if poi_type == 3 {
-                    *b"T-ST-01\0"
-                } else {
-                    *b"G-ST-01\0"
-                };
-
-                while count < 3 {
-                    used_ids[count] = fallback_id;
-                    items[count] = state::OfferItem {
-                        item_id: fallback_id,
-                        rarity: offers::rarity_from_item_id(&fallback_id),
-                        tier: 0,
-                    };
-                    count += 1;
-                }
-            }
-        }
+        let items = offers::generate_pool_filtered_cache_offers(
+            poi_type, act, w1, w2, seed, pool,
+        );
 
         map_pois.cache_offers.push(state::CacheOffer {
             poi_index,
@@ -1877,11 +1753,16 @@ pub mod poi_system {
         // Increment reroll count
         map_pois.shop_state.reroll_count = map_pois.shop_state.reroll_count.saturating_add(1);
 
-        // Deterministic reroll sequence anchored to entry seed.
-        let seed = map_pois.shop_state.rng_state
-            ^ ((map_pois.shop_state.reroll_count as u64) << 8)
-            ^ ((game_state.total_moves as u64) << 32);
-        map_pois.shop_state.rng_state = seed.rotate_left(13) ^ 0x9e37_79b9_7f4a_7c15_u64;
+        // Extract VRF randomness for reroll
+        let session_key = map_pois.session;
+        let vrf_data = extract_poi_vrf(&ctx.accounts.poi_vrf_state, &session_key)?;
+        let (randomness, nonce) = vrf_data.ok_or(PoiSystemError::VrfRequired)?;
+        let sub_domain = vrf_rng::domains::POI_SUPPLY_CACHE
+            ^ ((map_pois.shop_state.reroll_count as u64) << 32)
+            ^ 0x5265_726f_6c6c; // "Reroll" tag
+        let mut rng = vrf_rng::GameRng::from_vrf(&randomness, nonce, sub_domain);
+        let seed = rng.next_val();
+        map_pois.shop_state.rng_state = seed;
 
         // Fetch boss weaknesses on-chain
         let week = to_boss_week(game_state.week)?;
@@ -2281,7 +2162,7 @@ pub mod poi_system {
             &ctx.accounts.gameplay_state_program.to_account_info(),
             &ctx.accounts.session.to_account_info(),
             &ctx.accounts.generated_map.to_account_info(),
-            &ctx.accounts.map_enemies.to_account_info(),
+            &ctx.accounts.game_state.to_account_info(),
             &ctx.accounts.poi_authority.to_account_info(),
             &ctx.accounts.gameplay_authority.to_account_info(),
             &ctx.accounts.map_generator_program.to_account_info(),
@@ -2359,7 +2240,7 @@ pub mod poi_system {
             &ctx.accounts.gameplay_state_program.to_account_info(),
             &ctx.accounts.session.to_account_info(),
             &ctx.accounts.generated_map.to_account_info(),
-            &ctx.accounts.map_enemies.to_account_info(),
+            &ctx.accounts.game_state.to_account_info(),
             &ctx.accounts.poi_authority.to_account_info(),
             &ctx.accounts.gameplay_authority.to_account_info(),
             &ctx.accounts.map_generator_program.to_account_info(),
@@ -2533,7 +2414,7 @@ pub mod poi_system {
                     revealed_poi_type,
                     x,
                     y,
-                    revealed_idx as u8,
+                    u8::try_from(revealed_idx).map_err(|_| error!(PoiSystemError::InvalidPoiIndex))?,
                 )?;
             }
 
@@ -2541,7 +2422,7 @@ pub mod poi_system {
                 &ctx.accounts.gameplay_state_program.to_account_info(),
                 &ctx.accounts.session.to_account_info(),
                 &ctx.accounts.generated_map.to_account_info(),
-                &ctx.accounts.map_enemies.to_account_info(),
+                &ctx.accounts.game_state.to_account_info(),
                 &ctx.accounts.poi_authority.to_account_info(),
                 &ctx.accounts.gameplay_authority.to_account_info(),
                 &ctx.accounts.map_generator_program.to_account_info(),
@@ -2663,6 +2544,10 @@ pub mod poi_system {
     /// Inits the VrfState account in the same instruction (matching map/gameplay pattern).
     pub fn request_poi_vrf(ctx: Context<RequestPoiVrf>) -> Result<()> {
         let vrf_state = &mut ctx.accounts.vrf_state;
+        require!(
+            vrf_state.status != VrfStatus::Fulfilled,
+            PoiSystemError::VrfAlreadyFulfilled
+        );
         vrf_state.session = ctx.accounts.session.key();
         vrf_state.randomness = [0u8; 32];
         vrf_state.nonce = 1;
@@ -2750,7 +2635,8 @@ pub struct DelegateMapPois<'info> {
     #[account(mut, del)]
     /// CHECK: PDA is validated in handler.
     pub map_pois: AccountInfo<'info>,
-    /// CHECK: Session PDA owned by session-manager; used only for seed derivation.
+    /// CHECK: Session PDA used only for seed derivation. Owner not checked because
+    /// the session may already be delegated (owned by delegation program) at this point.
     pub game_session: UncheckedAccount<'info>,
     pub player: Signer<'info>,
 }
@@ -2761,7 +2647,8 @@ pub struct DelegatePoiVrfState<'info> {
     #[account(mut, del)]
     /// CHECK: PDA is validated in handler.
     pub poi_vrf_state: AccountInfo<'info>,
-    /// CHECK: Session PDA owned by session-manager; used only for seed derivation.
+    /// CHECK: Session PDA used only for seed derivation. Owner not checked because
+    /// the session may already be delegated (owned by delegation program) at this point.
     pub game_session: UncheckedAccount<'info>,
     pub player: Signer<'info>,
 }
@@ -2772,7 +2659,8 @@ pub struct UndelegateMapPois<'info> {
     #[account(mut)]
     /// CHECK: PDA is validated and deserialized in handler.
     pub map_pois: AccountInfo<'info>,
-    /// CHECK: Session account is read for session signer authorization.
+    /// CHECK: Session PDA used only for seed derivation. Owner not checked because
+    /// the session may already be delegated (owned by delegation program) at this point.
     pub game_session: UncheckedAccount<'info>,
     #[account(mut)]
     pub session_signer: Signer<'info>,
@@ -2784,7 +2672,8 @@ pub struct UndelegatePoiVrfState<'info> {
     #[account(mut)]
     /// CHECK: PDA is validated in handler.
     pub poi_vrf_state: AccountInfo<'info>,
-    /// CHECK: Session account is read for session signer authorization.
+    /// CHECK: Session PDA used only for seed derivation. Owner not checked because
+    /// the session may already be delegated (owned by delegation program) at this point.
     pub game_session: UncheckedAccount<'info>,
     #[account(mut)]
     pub session_signer: Signer<'info>,
@@ -3030,13 +2919,6 @@ pub struct InteractRest<'info> {
         seeds::program = gameplay_state::ID,
     )]
     pub game_state: Box<Account<'info, GameState>>,
-
-    #[account(
-        seeds = [gameplay_state::state::MapEnemies::SEED_PREFIX, map_pois.session.as_ref()],
-        bump = map_enemies.bump,
-        seeds::program = gameplay_state::ID,
-    )]
-    pub map_enemies: Account<'info, gameplay_state::state::MapEnemies>,
 
     /// Player's inventory for deriving max_hp and boss fight resolution (mut for gear slot expansion)
     #[account(
@@ -3396,6 +3278,10 @@ pub struct ShopReroll<'info> {
     /// Gameplay state program for CPI
     pub gameplay_state_program: Program<'info, gameplay_state::program::GameplayState>,
 
+    /// VRF state for reroll randomness.
+    /// CHECK: Validated via PDA derivation and manual deserialization in handler.
+    pub poi_vrf_state: Option<UncheckedAccount<'info>>,
+
     /// Player rerolling
     pub player: Signer<'info>,
 
@@ -3615,13 +3501,6 @@ pub struct FastTravel<'info> {
     /// Gameplay state program for CPI (set_position_authorized)
     pub gameplay_state_program: Program<'info, gameplay_state::program::GameplayState>,
 
-    #[account(
-        seeds = [gameplay_state::state::MapEnemies::SEED_PREFIX, map_pois.session.as_ref()],
-        bump = map_enemies.bump,
-        seeds::program = gameplay_state::ID,
-    )]
-    pub map_enemies: Account<'info, gameplay_state::state::MapEnemies>,
-
     /// Gameplay authority PDA from gameplay-state for CPI into map-generator.
     /// CHECK: PDA derived from gameplay-state program.
     #[account(
@@ -3681,13 +3560,6 @@ pub struct InteractSurveyBeacon<'info> {
 
     /// CHECK: Session PDA reference validated by generated_map and game_state seeds.
     pub session: UncheckedAccount<'info>,
-
-    #[account(
-        seeds = [gameplay_state::state::MapEnemies::SEED_PREFIX, map_pois.session.as_ref()],
-        bump = map_enemies.bump,
-        seeds::program = gameplay_state::ID,
-    )]
-    pub map_enemies: Account<'info, gameplay_state::state::MapEnemies>,
 
     /// POI authority PDA for signing CPI calls.
     /// CHECK: PDA derived from this program, used as signer in CPI.
@@ -3793,13 +3665,6 @@ pub struct InteractSeismicScanner<'info> {
 
     /// CHECK: Session PDA reference validated by generated_map and game_state seeds.
     pub session: UncheckedAccount<'info>,
-
-    #[account(
-        seeds = [gameplay_state::state::MapEnemies::SEED_PREFIX, map_pois.session.as_ref()],
-        bump = map_enemies.bump,
-        seeds::program = gameplay_state::ID,
-    )]
-    pub map_enemies: Account<'info, gameplay_state::state::MapEnemies>,
 
     /// POI authority PDA for signing CPI calls.
     /// CHECK: PDA derived from this program, used as signer in CPI.
@@ -3921,6 +3786,7 @@ pub struct RequestPoiVrf<'info> {
 
     /// CHECK: Session PDA key used only for VRF PDA derivation.
     /// Same pattern as map_generator::RequestMapVrf and gameplay_state::RequestGameplayVrf.
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID @ PoiSystemError::InvalidSessionOwner)]
     pub session: UncheckedAccount<'info>,
 
     #[account(

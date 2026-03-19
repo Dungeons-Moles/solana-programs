@@ -124,4 +124,7 @@ pub enum PoiSystemError {
 
     #[msg("VRF randomness required for PvP offer generation")]
     VrfRequired,
+
+    #[msg("VRF already fulfilled; cannot re-request")]
+    VrfAlreadyFulfilled,
 }

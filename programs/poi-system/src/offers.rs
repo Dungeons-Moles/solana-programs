@@ -63,18 +63,13 @@ impl OfferContext {
         derive_offer_seed(self.seed, self.poi_index, self.offer_call_count)
     }
 
-    /// Create a GameRng seeded from VRF (if available) or legacy seed.
+    /// Create a GameRng seeded from VRF randomness.
     ///
-    /// When VRF is provided, derives the domain from context and mixes in
+    /// Derives the domain from context and mixes in
     /// poi_index + offer_call_count as sub-domain uniqueness.
-    pub fn create_rng(&self, vrf: Option<(&[u8; 32], u64)>) -> GameRng {
-        match vrf {
-            Some((randomness, nonce)) => {
-                let sub_domain = self.vrf_sub_domain();
-                GameRng::from_vrf(randomness, nonce, sub_domain)
-            }
-            None => GameRng::from_seed(self.derive_seed()),
-        }
+    pub fn create_rng(&self, vrf: (&[u8; 32], u64)) -> GameRng {
+        let sub_domain = self.vrf_sub_domain();
+        GameRng::from_vrf(vrf.0, vrf.1, sub_domain)
     }
 
     /// Compute VRF sub-domain incorporating POI index and call count.
@@ -1705,6 +1700,202 @@ mod tests {
         assert_eq!(rarity_from_item_id(b"G-ST-AB\0"), 0);
         assert_eq!(rarity_from_item_id(b"G-ST-00\0"), 0);
     }
+
+    // =========================================================================
+    // Pool-Filtered Cache Offer Tests
+    // =========================================================================
+
+    /// Helper: build a pool bitmask with specific item indices set.
+    fn pool_with_items(indices: &[u8]) -> [u8; ITEM_POOL_SIZE] {
+        let mut pool = [0u8; ITEM_POOL_SIZE];
+        for &idx in indices {
+            if (idx as usize) < ITEM_POOL_SIZE * 8 {
+                pool[(idx / 8) as usize] |= 1 << (idx % 8);
+            }
+        }
+        pool
+    }
+
+    /// Helper: get pool index for a known item ID.
+    fn pidx(id: &[u8; 8]) -> u8 {
+        item_id_to_pool_index(id).unwrap()
+    }
+
+    #[test]
+    fn test_pool_filtered_always_3_items_full_pool() {
+        let full_pool = [0xFF; ITEM_POOL_SIZE];
+        for poi_type in [2, 3, 12, 13] {
+            let items = generate_pool_filtered_cache_offers(
+                poi_type, 1, WeaknessTag::Stone, WeaknessTag::Frost, 12345, &full_pool,
+            );
+            for (i, item) in items.iter().enumerate() {
+                assert_ne!(
+                    item.item_id, [0u8; 8],
+                    "POI type {}: slot {} should not be empty",
+                    poi_type, i
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_pool_filtered_no_duplicates_full_pool() {
+        let full_pool = [0xFF; ITEM_POOL_SIZE];
+        for poi_type in [2, 3, 12, 13] {
+            for seed in 0..50u64 {
+                let items = generate_pool_filtered_cache_offers(
+                    poi_type, 2, WeaknessTag::Stone, WeaknessTag::Frost,
+                    seed * 12345, &full_pool,
+                );
+                assert_ne!(items[0].item_id, items[1].item_id,
+                    "POI {}: slot 0 == slot 1 (seed {})", poi_type, seed);
+                assert_ne!(items[0].item_id, items[2].item_id,
+                    "POI {}: slot 0 == slot 2 (seed {})", poi_type, seed);
+                assert_ne!(items[1].item_id, items[2].item_id,
+                    "POI {}: slot 1 == slot 2 (seed {})", poi_type, seed);
+            }
+        }
+    }
+
+    #[test]
+    fn test_pool_filtered_all_items_in_pool() {
+        // Sparse pool: only 10 items unlocked
+        let pool = pool_with_items(&[0, 1, 2, 8, 16, 24, 32, 40, 48, 64]);
+        for poi_type in [2, 3, 12, 13] {
+            let items = generate_pool_filtered_cache_offers(
+                poi_type, 1, WeaknessTag::Stone, WeaknessTag::Frost, 12345, &pool,
+            );
+            for item in &items {
+                if item.item_id == [0u8; 8] {
+                    continue; // skip unfilled (shouldn't happen with 10 items)
+                }
+                let pool_idx = item_id_to_pool_index(&item.item_id)
+                    .expect("item should have valid pool index");
+                assert!(
+                    is_item_in_pool(&pool, pool_idx),
+                    "POI {}: item {:?} not in pool",
+                    poi_type,
+                    std::str::from_utf8(&item.item_id).unwrap_or("?")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_geode_vault_degrades_rarity_when_no_heroic_in_pool() {
+        // Pool with only Common gear items (Stone tag: G-ST-01 to G-ST-04 are Common/Rare)
+        // G-ST-01 idx=0, G-ST-02 idx=1, G-ST-03 idx=2 are Common per item defs
+        // Add a few from different tags to have enough
+        let pool = pool_with_items(&[
+            pidx(b"G-ST-01\0"), pidx(b"G-ST-02\0"), pidx(b"G-ST-03\0"),
+            pidx(b"G-SC-01\0"), pidx(b"G-GR-01\0"),
+        ]);
+
+        let items = generate_pool_filtered_cache_offers(
+            12, 1, WeaknessTag::Stone, WeaknessTag::Frost, 12345, &pool,
+        );
+
+        // Should still produce 3 items even without Heroic+ in pool
+        for (i, item) in items.iter().enumerate() {
+            assert_ne!(
+                item.item_id, [0u8; 8],
+                "Geode Vault slot {} should not be empty with rarity degradation", i
+            );
+            let pool_idx = item_id_to_pool_index(&item.item_id).unwrap();
+            assert!(is_item_in_pool(&pool, pool_idx),
+                "Geode Vault slot {}: item not in pool", i);
+        }
+
+        // All 3 should be unique
+        assert_ne!(items[0].item_id, items[1].item_id);
+        assert_ne!(items[0].item_id, items[2].item_id);
+        assert_ne!(items[1].item_id, items[2].item_id);
+    }
+
+    #[test]
+    fn test_counter_cache_degrades_when_no_weakness_items() {
+        // Pool with only Frost gear (no Stone items) but boss weakness is Stone + Blast
+        let pool = pool_with_items(&[
+            pidx(b"G-FR-01\0"), pidx(b"G-FR-02\0"), pidx(b"G-FR-03\0"),
+            pidx(b"G-RU-01\0"),
+        ]);
+
+        let items = generate_pool_filtered_cache_offers(
+            13, 1, WeaknessTag::Stone, WeaknessTag::Blast, 12345, &pool,
+        );
+
+        for (i, item) in items.iter().enumerate() {
+            assert_ne!(
+                item.item_id, [0u8; 8],
+                "Counter Cache slot {} should not be empty after constraint relaxation", i
+            );
+            let pool_idx = item_id_to_pool_index(&item.item_id).unwrap();
+            assert!(is_item_in_pool(&pool, pool_idx),
+                "Counter Cache slot {}: item not in pool", i);
+        }
+
+        assert_ne!(items[0].item_id, items[1].item_id);
+        assert_ne!(items[0].item_id, items[2].item_id);
+        assert_ne!(items[1].item_id, items[2].item_id);
+    }
+
+    #[test]
+    fn test_tool_crate_falls_back_to_gear_when_few_tools_in_pool() {
+        // Pool with only 1 tool and some gear
+        let pool = pool_with_items(&[
+            pidx(b"T-ST-01\0"),
+            pidx(b"G-ST-01\0"), pidx(b"G-FR-01\0"), pidx(b"G-RU-01\0"),
+        ]);
+
+        let items = generate_pool_filtered_cache_offers(
+            3, 1, WeaknessTag::Stone, WeaknessTag::Frost, 12345, &pool,
+        );
+
+        // All 3 slots filled
+        for (i, item) in items.iter().enumerate() {
+            assert_ne!(item.item_id, [0u8; 8],
+                "Tool Crate slot {} should be filled", i);
+            let pool_idx = item_id_to_pool_index(&item.item_id).unwrap();
+            assert!(is_item_in_pool(&pool, pool_idx));
+        }
+
+        // No duplicates
+        assert_ne!(items[0].item_id, items[1].item_id);
+        assert_ne!(items[0].item_id, items[2].item_id);
+        assert_ne!(items[1].item_id, items[2].item_id);
+    }
+
+    #[test]
+    fn test_pool_filtered_no_duplicates_stress() {
+        // Run many seeds across all POI types with a medium pool
+        let pool = pool_with_items(&[
+            0, 1, 2, 3, 8, 9, 10, 16, 17, 24, 32, 40, 48, 56, 64, 65, 66, 72,
+        ]);
+        for poi_type in [2, 3, 12, 13] {
+            for seed in 0..200u64 {
+                let items = generate_pool_filtered_cache_offers(
+                    poi_type, 3, WeaknessTag::Greed, WeaknessTag::Blood,
+                    seed * 7919, &pool,
+                );
+                // All in pool
+                for item in &items {
+                    if item.item_id == [0u8; 8] {
+                        panic!("POI {}: empty slot at seed {}", poi_type, seed);
+                    }
+                    let idx = item_id_to_pool_index(&item.item_id).unwrap();
+                    assert!(is_item_in_pool(&pool, idx),
+                        "POI {} seed {}: item not in pool", poi_type, seed);
+                }
+                // No duplicates
+                assert_ne!(items[0].item_id, items[1].item_id,
+                    "POI {} seed {}: dup 0-1", poi_type, seed);
+                assert_ne!(items[0].item_id, items[2].item_id,
+                    "POI {} seed {}: dup 0-2", poi_type, seed);
+                assert_ne!(items[1].item_id, items[2].item_id,
+                    "POI {} seed {}: dup 1-2", poi_type, seed);
+            }
+        }
+    }
 }
 
 // =============================================================================
@@ -1810,6 +2001,141 @@ pub fn item_id_to_pool_index(item_id: &[u8; 8]) -> Option<u8> {
         }
         _ => None,
     }
+}
+
+/// Generate 3 unique, pool-valid cache offers for a pick-item POI.
+///
+/// 1. Tries up to 10 seeds through `generate_poi_offers`, keeping pool-valid results.
+/// 2. If fewer than 3, runs a progressive fallback that relaxes POI constraints
+///    (e.g. Geode Vault: Heroic+ → Rare+ → any gear → any pool item).
+///
+/// Guarantees: exactly 3 items, all unique, all in the active pool.
+pub fn generate_pool_filtered_cache_offers(
+    poi_type: u8,
+    act: u8,
+    w1: WeaknessTag,
+    w2: WeaknessTag,
+    seed: u64,
+    pool: &[u8; ITEM_POOL_SIZE],
+) -> [crate::state::OfferItem; 3] {
+    let mut items = [crate::state::OfferItem::default(); 3];
+    let mut count = 0usize;
+    let mut used_ids = [[0u8; 8]; 3];
+
+    // Phase 1: generate via normal POI offer tables + pool filter
+    for attempt in 0..10u64 {
+        let attempt_seed = seed ^ attempt.wrapping_mul(0x9e3779b97f4a7c15);
+        let generated = match generate_poi_offers(poi_type, act, w1, w2, attempt_seed) {
+            Some(g) => g,
+            None => break, // not an item-giving POI
+        };
+
+        for offer in &generated.offers {
+            if used_ids[..count].contains(&offer.item_id) {
+                continue;
+            }
+            if let Some(index) = item_id_to_pool_index(&offer.item_id) {
+                if is_item_in_pool(pool, index) {
+                    used_ids[count] = offer.item_id;
+                    items[count] = crate::state::OfferItem {
+                        item_id: offer.item_id,
+                        rarity: rarity_from_item_id(&offer.item_id),
+                        tier: offer.tier,
+                    };
+                    count += 1;
+                    if count >= 3 {
+                        return items;
+                    }
+                }
+            }
+        }
+    }
+
+    // Phase 2: progressive fallback from the active pool
+    let matches_weakness = |item_id: &[u8; 8], weakness: WeaknessTag| -> bool {
+        match weakness {
+            WeaknessTag::Stone => item_id[2] == b'S' && item_id[3] == b'T',
+            WeaknessTag::Scout => item_id[2] == b'S' && item_id[3] == b'C',
+            WeaknessTag::Greed => item_id[2] == b'G' && item_id[3] == b'R',
+            WeaknessTag::Blast => item_id[2] == b'B' && item_id[3] == b'L',
+            WeaknessTag::Frost => item_id[2] == b'F' && item_id[3] == b'R',
+            WeaknessTag::Rust => item_id[2] == b'R' && item_id[3] == b'U',
+            WeaknessTag::Blood => item_id[2] == b'B' && item_id[3] == b'O',
+            WeaknessTag::Tempo => item_id[2] == b'T' && item_id[3] == b'E',
+        }
+    };
+
+    let fallback_filters: &[&dyn Fn(&[u8; 8]) -> bool] = match poi_type {
+        2 => &[
+            &|id: &[u8; 8]| id[0] == b'G',
+            &|_: &[u8; 8]| true,
+        ],
+        3 => &[
+            &|id: &[u8; 8]| id[0] == b'T',
+            &|_: &[u8; 8]| true,
+        ],
+        12 => &[
+            &|id: &[u8; 8]| id[0] == b'G' && rarity_from_item_id(id) >= 2,
+            &|id: &[u8; 8]| id[0] == b'G' && rarity_from_item_id(id) >= 1,
+            &|id: &[u8; 8]| id[0] == b'G',
+            &|_: &[u8; 8]| true,
+        ],
+        13 => &[
+            &|id: &[u8; 8]| {
+                id[0] == b'G'
+                    && (matches_weakness(id, w1) || matches_weakness(id, w2))
+            },
+            &|id: &[u8; 8]| id[0] == b'G',
+            &|_: &[u8; 8]| true,
+        ],
+        _ => &[&|_: &[u8; 8]| true],
+    };
+
+    for filter in fallback_filters {
+        if count >= 3 {
+            break;
+        }
+
+        let mut candidates: Vec<[u8; 8]> = Vec::new();
+        for item in player_inventory::items::ITEMS.iter() {
+            let item_id = *item.id;
+            let pool_index = match item_id_to_pool_index(&item_id) {
+                Some(idx) => idx,
+                None => continue,
+            };
+            if !is_item_in_pool(pool, pool_index) {
+                continue;
+            }
+            if !filter(&item_id) {
+                continue;
+            }
+            if used_ids[..count].contains(&item_id) {
+                continue;
+            }
+            candidates.push(item_id);
+        }
+
+        if !candidates.is_empty() {
+            let mut cursor = (seed as usize) % candidates.len();
+            let mut scanned = 0usize;
+            while count < 3 && scanned < candidates.len() {
+                let item_id = candidates[cursor];
+                if !used_ids[..count].contains(&item_id) {
+                    used_ids[count] = item_id;
+                    items[count] = crate::state::OfferItem {
+                        item_id,
+                        rarity: rarity_from_item_id(&item_id),
+                        tier: 0,
+                    };
+                    count += 1;
+                }
+                cursor = (cursor + 1) % candidates.len();
+                scanned += 1;
+            }
+        }
+    }
+
+    items
 }
 
 /// Filter offers to only include items that are in the active item pool.

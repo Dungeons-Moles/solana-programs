@@ -1,6 +1,6 @@
 use crate::constants::{BASE_DIG_COST, FLOOR_MOVE_COST, MIN_DIG_COST};
 use crate::errors::GameplayStateError;
-use crate::state::{MapEnemies, Phase};
+use crate::state::{GameState, Phase};
 use anchor_lang::prelude::*;
 use map_generator::constants::PACKED_TILES_SIZE;
 
@@ -83,77 +83,44 @@ pub fn get_boss_id(stage: u8, week: u8) -> Result<[u8; 12]> {
     Ok(boss.id)
 }
 
-/// Get duel week 1/2 boss combat input based on map seed.
-/// Week 3 has no weekly boss in duel mode and returns InvalidWeek.
-pub fn get_duel_boss_for_combat(
-    seed: u64,
-    week: u8,
-) -> Result<combat_system::state::CombatantInput> {
-    let boss_week = to_boss_week(week)?;
-    let boss = boss_system::select_duel_week_boss(seed, boss_week)
-        .ok_or(GameplayStateError::InvalidWeek)?;
-    let scaled = boss_system::scale_boss(boss, 20, boss_week);
-    Ok(boss_system::scaling::to_combatant_input(&scaled))
-}
-
-/// Get duel week 1/2 boss ID (12 bytes) based on map seed.
-/// Week 3 has no weekly boss in duel mode and returns InvalidWeek.
-pub fn get_duel_boss_id(seed: u64, week: u8) -> Result<[u8; 12]> {
-    let boss_week = to_boss_week(week)?;
-    let boss = boss_system::select_duel_week_boss(seed, boss_week)
-        .ok_or(GameplayStateError::InvalidWeek)?;
-    Ok(boss.id)
-}
-
-/// VRF-aware duel boss selection.
+/// VRF-based duel boss selection.
 /// Uses VRF randomness with DUEL_BOSS domain for verifiable boss selection.
-/// Falls back to legacy seed path if VRF is unavailable.
 pub fn get_duel_boss_for_combat_vrf(
-    vrf: Option<(&[u8; 32], u64)>,
-    legacy_seed: u64,
+    vrf: (&[u8; 32], u64),
     week: u8,
 ) -> Result<combat_system::state::CombatantInput> {
     let boss_week = to_boss_week(week)?;
-    let boss = match vrf {
-        Some((randomness, nonce)) => {
-            let mut rng =
-                vrf_rng::GameRng::from_vrf(randomness, nonce, vrf_rng::domains::DUEL_BOSS);
-            boss_system::select_duel_week_boss_vrf(&mut rng, boss_week)
-        }
-        None => boss_system::select_duel_week_boss(legacy_seed, boss_week),
-    }
-    .ok_or(GameplayStateError::InvalidWeek)?;
+    let (randomness, nonce) = vrf;
+    let mut rng =
+        vrf_rng::GameRng::from_vrf(randomness, nonce, vrf_rng::domains::DUEL_BOSS);
+    let boss = boss_system::select_duel_week_boss_vrf(&mut rng, boss_week)
+        .ok_or(GameplayStateError::InvalidWeek)?;
     let scaled = boss_system::scale_boss(boss, 20, boss_week);
     Ok(boss_system::scaling::to_combatant_input(&scaled))
 }
 
-/// VRF-aware duel boss ID lookup.
+/// VRF-based duel boss ID lookup.
 pub fn get_duel_boss_id_vrf(
-    vrf: Option<(&[u8; 32], u64)>,
-    legacy_seed: u64,
+    vrf: (&[u8; 32], u64),
     week: u8,
 ) -> Result<[u8; 12]> {
     let boss_week = to_boss_week(week)?;
-    let boss = match vrf {
-        Some((randomness, nonce)) => {
-            let mut rng =
-                vrf_rng::GameRng::from_vrf(randomness, nonce, vrf_rng::domains::DUEL_BOSS);
-            boss_system::select_duel_week_boss_vrf(&mut rng, boss_week)
-        }
-        None => boss_system::select_duel_week_boss(legacy_seed, boss_week),
-    }
-    .ok_or(GameplayStateError::InvalidWeek)?;
+    let (randomness, nonce) = vrf;
+    let mut rng =
+        vrf_rng::GameRng::from_vrf(randomness, nonce, vrf_rng::domains::DUEL_BOSS);
+    let boss = boss_system::select_duel_week_boss_vrf(&mut rng, boss_week)
+        .ok_or(GameplayStateError::InvalidWeek)?;
     Ok(boss.id)
 }
 
 /// Compute all enemies on discovered tiles for SessionDiscovery sync.
 pub fn compute_visible_enemies(
-    map_enemies: &MapEnemies,
+    game_state: &GameState,
     discovered_tiles: &[u8; PACKED_TILES_SIZE],
     map_width: u8,
 ) -> Vec<map_generator::state::DiscoveredEnemy> {
     let mut result = Vec::new();
-    for (idx, enemy) in map_enemies.enemies.iter().enumerate() {
+    for (idx, enemy) in game_state.enemies.iter().enumerate() {
         if enemy.defeated {
             continue;
         }
@@ -177,7 +144,7 @@ pub fn compute_visible_enemies(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{EnemyInstance, MapEnemies};
+    use crate::state::EnemyInstance;
     use anchor_lang::prelude::Pubkey;
 
     #[test]
@@ -264,11 +231,38 @@ mod tests {
 
     #[test]
     fn test_compute_visible_enemies_excludes_defeated() {
+        use crate::state::Phase;
+
         let mut discovered_tiles = [0u8; PACKED_TILES_SIZE];
         discovered_tiles[0] = 0b0000_0011;
 
-        let map_enemies = MapEnemies {
+        let game_state = GameState {
+            player: Pubkey::default(),
+            session_signer: Pubkey::default(),
             session: Pubkey::default(),
+            position_x: 0,
+            position_y: 0,
+            map_width: 50,
+            map_height: 50,
+            hp: 100,
+            gear_slots: 4,
+            week: 1,
+            phase: Phase::Day1,
+            moves_remaining: 50,
+            total_moves: 0,
+            boss_fight_ready: false,
+            gold: 0,
+            bump: 0,
+            campaign_level: 1,
+            run_mode: crate::state::RunMode::Campaign,
+            max_weeks: 3,
+            is_dead: false,
+            completed: false,
+            gauntlet_epoch_id: 0,
+            gauntlet_points_earned: 0,
+            gauntlet_defender_credit: None,
+            gauntlet_highest_week_won: 0,
+            gauntlet_settled: false,
             enemies: vec![
                 EnemyInstance {
                     archetype_id: 0,
@@ -285,11 +279,10 @@ mod tests {
                     defeated: true,
                 },
             ],
-            count: 2,
-            bump: 0,
+            enemy_count: 2,
         };
 
-        let visible = compute_visible_enemies(&map_enemies, &discovered_tiles, 50);
+        let visible = compute_visible_enemies(&game_state, &discovered_tiles, 50);
         assert_eq!(visible.len(), 1);
         assert_eq!(visible[0].archetype_id, 0);
         assert_eq!(visible[0].map_enemies_index, 0);

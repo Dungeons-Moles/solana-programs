@@ -173,4 +173,5 @@ pub enum GameplayStateError {
 
     #[msg("VRF state has not been requested yet")]
     VrfNotRequested,
+
 }

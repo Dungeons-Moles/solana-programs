@@ -43,6 +43,16 @@ pub mod nft_marketplace {
         config.gauntlet_pool = ctx.accounts.gauntlet_pool.key();
         config.company_fee_bps = DEFAULT_COMPANY_FEE_BPS;
         config.gauntlet_fee_bps = DEFAULT_GAUNTLET_FEE_BPS;
+
+        // Validate total fees do not exceed 100%
+        require!(
+            (config.company_fee_bps as u64)
+                .checked_add(config.gauntlet_fee_bps as u64)
+                .ok_or(MarketplaceError::ArithmeticOverflow)?
+                < BPS_DENOMINATOR,
+            MarketplaceError::FeeTooHigh
+        );
+
         config.bump = ctx.bumps.marketplace_config;
         Ok(())
     }
@@ -101,6 +111,10 @@ pub mod nft_marketplace {
     /// List an NFT for sale. Adds Transfer Delegate plugin so marketplace PDA can transfer.
     pub fn list_nft(ctx: Context<ListNft>, price_lamports: u64) -> Result<()> {
         require!(price_lamports > 0, MarketplaceError::InvalidPrice);
+        require!(
+            price_lamports >= MIN_LISTING_PRICE,
+            MarketplaceError::PriceTooLow
+        );
 
         // Validate asset is owned by seller by reading raw bytes.
         // Metaplex Core asset: byte 0 = Key discriminator (1 = AssetV1), bytes 1..33 = owner.
@@ -134,6 +148,7 @@ pub mod nft_marketplace {
             if profile_data.len() > 44 {
                 let name_len =
                     u32::from_le_bytes(profile_data[40..44].try_into().unwrap()) as usize;
+                require!(name_len <= 32, MarketplaceError::InvalidAccountData);
                 let equipped_offset = 44usize
                     .checked_add(name_len)
                     .and_then(|v| v.checked_add(4 + 1 + 4 + 8 + 1 + 10 + 10))

@@ -200,12 +200,6 @@ pub mod map_generator {
 
     /// Marks a POI as used on the generated map.
     pub fn mark_poi_used(ctx: Context<MarkPoiUsed>, poi_index: u8) -> Result<()> {
-        require_keys_eq!(
-            *ctx.accounts.session.owner,
-            SESSION_MANAGER_PROGRAM_ID,
-            MapGeneratorError::InvalidSessionOwner
-        );
-
         let generated_map = &mut ctx.accounts.generated_map;
 
         require!(
@@ -505,6 +499,7 @@ pub mod map_generator {
                 require!(data.len() >= 74, MapGeneratorError::InvalidOfferData);
                 for i in 0..6 {
                     let offset = i * 12;
+                    require!(offset + 12 <= data.len(), MapGeneratorError::InvalidOfferData);
                     let mut item_id = [0u8; 8];
                     item_id.copy_from_slice(&data[offset..offset + 8]);
                     discovery.shop_offers[i] = state::DiscoveryShopOffer {
@@ -522,6 +517,7 @@ pub mod map_generator {
                 require!(data.len() >= 30, MapGeneratorError::InvalidOfferData);
                 for i in 0..3 {
                     let offset = i * 10;
+                    require!(offset + 10 <= data.len(), MapGeneratorError::InvalidOfferData);
                     let mut item_id = [0u8; 8];
                     item_id.copy_from_slice(&data[offset..offset + 8]);
                     discovery.cache_offer_items[i] = state::DiscoveryOfferItem {
@@ -949,7 +945,8 @@ pub struct DelegateGeneratedMap<'info> {
     #[account(mut, del)]
     /// CHECK: PDA is validated via explicit seed check in handler.
     pub generated_map: AccountInfo<'info>,
-    /// CHECK: Session PDA owned by session-manager; used only for seed derivation.
+    /// CHECK: Session PDA used only for seed derivation. Owner not checked because
+    /// the session may already be delegated (owned by delegation program) at this point.
     pub session: UncheckedAccount<'info>,
     pub player: Signer<'info>,
 }
@@ -960,7 +957,8 @@ pub struct UndelegateGeneratedMap<'info> {
     #[account(mut)]
     /// CHECK: PDA is validated and deserialized in handler.
     pub generated_map: AccountInfo<'info>,
-    /// CHECK: Session PDA used only for deterministic PDA validation.
+    /// CHECK: Session PDA used only for seed derivation. Owner not checked because
+    /// the session may already be delegated (owned by delegation program) at this point.
     pub session: UncheckedAccount<'info>,
     #[account(mut)]
     pub session_signer: Signer<'info>,
@@ -984,7 +982,8 @@ pub struct MarkPoiUsed<'info> {
     pub generated_map: Account<'info, GeneratedMap>,
 
     /// Game session PDA reference (validated by owner + has_one)
-    /// CHECK: Session account is validated by owner check
+    /// CHECK: Session PDA owned by session-manager; validated via raw-byte reads in handler.
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID)]
     pub session: UncheckedAccount<'info>,
 }
 
@@ -1079,8 +1078,9 @@ pub struct SetTileFloor<'info> {
     )]
     pub generated_map: Account<'info, GeneratedMap>,
 
-    /// Game session PDA reference (validated by has_one)
-    /// CHECK: Session account is validated by has_one constraint
+    /// Game session PDA reference (validated by owner + has_one)
+    /// CHECK: Session PDA owned by session-manager; validated via has_one constraint.
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID)]
     pub session: UncheckedAccount<'info>,
 
     /// Gameplay authority PDA from gameplay-state that must sign
@@ -1108,7 +1108,8 @@ pub struct RevealRadius<'info> {
     )]
     pub generated_map: Account<'info, GeneratedMap>,
 
-    /// CHECK: Session account is validated manually against the stored session signer.
+    /// CHECK: Session PDA owned by session-manager; validated via raw-byte reads in handler.
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID)]
     pub session: UncheckedAccount<'info>,
 
     pub session_signer: Signer<'info>,
@@ -1131,7 +1132,8 @@ pub struct CloseGeneratedMap<'info> {
     pub generated_map: Account<'info, GeneratedMap>,
 
     /// Game session PDA to verify session_signer authorization
-    /// CHECK: Session account is validated manually in instruction
+    /// CHECK: Session PDA owned by session-manager; validated via raw-byte reads in handler.
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID)]
     pub session: UncheckedAccount<'info>,
 
     /// Player wallet receives the rent refund (not a signer)
@@ -1169,8 +1171,8 @@ pub struct RequestMapVrf<'info> {
     #[account(seeds = [ephemeral_vrf_sdk::consts::IDENTITY], bump)]
     pub program_identity: UncheckedAccount<'info>,
 
-    /// CHECK: Oracle queue account selected by the caller.
-    #[account(mut)]
+    /// CHECK: Oracle queue account — must be owned by the VRF program.
+    #[account(mut, owner = ephemeral_vrf_sdk::consts::VRF_PROGRAM_ID)]
     pub oracle_queue: UncheckedAccount<'info>,
 
     /// CHECK: Slot hashes sysvar for VRF request validation.
@@ -1223,7 +1225,8 @@ pub struct CloseMapVrfState<'info> {
     )]
     pub vrf_state: Account<'info, MapVrfState>,
 
-    /// CHECK: Session account for signer validation. Read as raw bytes.
+    /// CHECK: Session PDA owned by session-manager; validated via raw-byte reads in handler.
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID)]
     pub session: UncheckedAccount<'info>,
 
     /// CHECK: Validated against session.player in instruction body.
@@ -1290,7 +1293,8 @@ pub struct DelegateMapVrfState<'info> {
     #[account(mut, del)]
     /// CHECK: PDA is validated via explicit seed check in handler.
     pub map_vrf_state: AccountInfo<'info>,
-    /// CHECK: Session PDA owned by session-manager; used only for seed derivation.
+    /// CHECK: Session PDA used only for seed derivation. Owner not checked because
+    /// the session may already be delegated (owned by delegation program) at this point.
     pub session: UncheckedAccount<'info>,
     pub player: Signer<'info>,
 }
@@ -1340,7 +1344,8 @@ pub struct CloseSessionDiscovery<'info> {
     )]
     pub session_discovery: Account<'info, SessionDiscovery>,
 
-    /// CHECK: Session account for signer validation. Read as raw bytes.
+    /// CHECK: Session PDA owned by session-manager; validated via raw-byte reads in handler.
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID)]
     pub session: UncheckedAccount<'info>,
 
     /// CHECK: Validated against session.player in instruction body.
@@ -1356,7 +1361,8 @@ pub struct DelegateSessionDiscovery<'info> {
     #[account(mut, del)]
     /// CHECK: PDA is validated via explicit seed check in handler.
     pub session_discovery: AccountInfo<'info>,
-    /// CHECK: Session PDA owned by session-manager; used only for seed derivation.
+    /// CHECK: Session PDA used only for seed derivation. Owner not checked because
+    /// the session may already be delegated (owned by delegation program) at this point.
     pub session: UncheckedAccount<'info>,
     pub player: Signer<'info>,
 }
@@ -1367,7 +1373,8 @@ pub struct UndelegateSessionDiscovery<'info> {
     #[account(mut)]
     /// CHECK: PDA is validated in handler.
     pub session_discovery: AccountInfo<'info>,
-    /// CHECK: Session PDA used for PDA validation.
+    /// CHECK: Session PDA used only for seed derivation. Owner not checked because
+    /// the session may already be delegated (owned by delegation program) at this point.
     pub session: UncheckedAccount<'info>,
     #[account(mut)]
     pub session_signer: Signer<'info>,
@@ -1385,7 +1392,8 @@ pub struct RecordDiscoveredPoi<'info> {
     )]
     pub session_discovery: Account<'info, SessionDiscovery>,
 
-    /// CHECK: Session PDA for seed derivation.
+    /// CHECK: Session PDA owned by session-manager; validated via seeds on session_discovery.
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID)]
     pub session: UncheckedAccount<'info>,
 
     pub session_signer: Signer<'info>,
@@ -1403,7 +1411,8 @@ pub struct UpdateActiveOffer<'info> {
     )]
     pub session_discovery: Account<'info, SessionDiscovery>,
 
-    /// CHECK: Session PDA for seed derivation.
+    /// CHECK: Session PDA owned by session-manager; validated via seeds on session_discovery.
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID)]
     pub session: UncheckedAccount<'info>,
 
     pub session_signer: Signer<'info>,
@@ -1420,7 +1429,8 @@ pub struct UpdateDiscoveredEnemies<'info> {
     )]
     pub session_discovery: Account<'info, SessionDiscovery>,
 
-    /// CHECK: Session PDA for seed derivation.
+    /// CHECK: Session PDA owned by session-manager; validated via seeds on session_discovery.
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID)]
     pub session: UncheckedAccount<'info>,
 
     #[account(
@@ -1442,7 +1452,8 @@ pub struct UpdateBossId<'info> {
     )]
     pub session_discovery: Account<'info, SessionDiscovery>,
 
-    /// CHECK: Session PDA for seed derivation.
+    /// CHECK: Session PDA owned by session-manager; validated via seeds on session_discovery.
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID)]
     pub session: UncheckedAccount<'info>,
 
     #[account(
@@ -1464,7 +1475,8 @@ pub struct UpdateCurrentEcho<'info> {
     )]
     pub session_discovery: Account<'info, SessionDiscovery>,
 
-    /// CHECK: Session PDA for seed derivation.
+    /// CHECK: Session PDA owned by session-manager; validated via seeds on session_discovery.
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID)]
     pub session: UncheckedAccount<'info>,
 
     #[account(

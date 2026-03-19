@@ -17,6 +17,9 @@ pub const DEFAULT_GAUNTLET_FEE_BPS: u16 = 200;
 /// BPS denominator
 pub const BPS_DENOMINATOR: u64 = 10_000;
 
+/// Minimum listing price in lamports (0.00001 SOL) — enough to generate non-zero fees
+pub const MIN_LISTING_PRICE: u64 = 10_000;
+
 /// Royalty bps for collection creation: 500 bps = 5%
 pub const ROYALTY_BPS: u16 = 500;
 

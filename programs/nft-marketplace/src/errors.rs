@@ -55,4 +55,10 @@ pub enum MarketplaceError {
 
     #[msg("Invalid gauntlet pool account")]
     InvalidGauntletPool,
+
+    #[msg("Listing price too low")]
+    PriceTooLow,
+
+    #[msg("Invalid account data")]
+    InvalidAccountData,
 }

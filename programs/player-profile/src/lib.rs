@@ -34,6 +34,13 @@ fn is_player_queued_in_pit_draft(
 
     let data = pit_draft_queue.try_borrow_data()?;
     require!(data.len() >= 9, PlayerProfileError::InvalidPitDraftQueue);
+
+    // Validate Anchor discriminator before trusting account data
+    require!(
+        data[..8] == PIT_DRAFT_QUEUE_DISCRIMINATOR,
+        PlayerProfileError::InvalidPitDraftQueueDiscriminator
+    );
+
     let mut cursor = 8usize; // skip discriminator
 
     let waiting_tag = data[cursor];
@@ -189,23 +196,20 @@ pub mod player_profile {
         ctx: Context<RecordRunResultCpi>,
         level_completed: u8,
         victory: bool,
+        unlock_randomness: [u8; 32],
     ) -> Result<()> {
         let profile = &mut ctx.accounts.player_profile;
         let session_info = &ctx.accounts.session;
 
-        // Verify session account is owned by the session-manager program
-        require!(
-            *session_info.owner == Pubkey::new_from_array(SESSION_MANAGER_PROGRAM_ID),
-            PlayerProfileError::InvalidSessionOwner
-        );
+        // Owner check is enforced by the #[account(owner = ...)] constraint on session.
 
         let session_data = session_info.try_borrow_data()?;
         let clock = Clock::get()?;
 
-        // Verify session account has enough data to read through session_signer
+        // Verify session account has enough data to read through session_signer (offset 77 + 32 = 109)
         require!(
             session_data.len() >= SESSION_MIN_DATA_LEN,
-            PlayerProfileError::InvalidSession
+            PlayerProfileError::SessionDataTooShort
         );
 
         // Read player pubkey from session account (offset 8 for discriminator)
@@ -256,7 +260,7 @@ pub mod player_profile {
                 profile.unlocked_items,
                 &profile.owner,
                 level_completed,
-                clock.slot,
+                &unlock_randomness,
             ) {
                 bitmask::set_bit(&mut profile.unlocked_items, item_index);
                 bitmask::set_bit(&mut profile.active_item_pool, item_index);
@@ -451,7 +455,8 @@ pub struct UpdateActiveItemPool<'info> {
 
     pub owner: Signer<'info>,
 
-    /// CHECK: Validated in update_active_item_pool against gameplay-state PDA/owner.
+    /// CHECK: Validated via owner constraint + PDA/discriminator checks in handler.
+    #[account(owner = GAMEPLAY_STATE_PROGRAM_PUBKEY @ PlayerProfileError::InvalidPitDraftQueue)]
     pub pit_draft_queue: AccountInfo<'info>,
 }
 
@@ -475,11 +480,12 @@ pub struct RecordRunResultCpi<'info> {
     #[account(mut)]
     pub player_profile: Account<'info, PlayerProfile>,
 
-    /// CHECK: All checks performed in record_run_result_cpi handler:
-    /// 1. Account owner == session-manager program ID
+    /// CHECK: Validated via owner constraint + raw-byte reads in handler:
+    /// 1. Account owner == session-manager program ID (enforced by constraint below)
     /// 2. session.player == player_profile.owner
     /// 3. session.campaign_level == level_completed input
     /// 4. session.session_signer == session_signer signer
+    #[account(owner = SESSION_MANAGER_PROGRAM_PUBKEY @ PlayerProfileError::InvalidSessionOwner)]
     pub session: AccountInfo<'info>,
 
     /// Session key signer signer - verified against session's stored session_signer field.

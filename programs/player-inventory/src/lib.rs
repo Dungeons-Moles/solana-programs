@@ -40,6 +40,13 @@ declare_id!("APRnvp41jEYnT1EnrdBTim7bodqE6v2RSgzv1CG7Qv7u");
 /// Seed for inventory_authority PDA used for CPI calls to other programs
 pub const INVENTORY_AUTHORITY_SEED: &[u8] = b"inventory_authority";
 
+/// Metaplex Core AssetV1 key discriminator (first byte of serialized asset data)
+const MPL_CORE_ASSET_V1_KEY: u8 = 1;
+
+/// Minimum byte length for a valid Metaplex Core AssetV1 account.
+/// Layout: key(1) + owner(32) + update_authority(33) = 66 bytes minimum.
+const MPL_CORE_ASSET_V1_MIN_LEN: usize = 66;
+
 /// POI system program ID for authorized equip operations via CPI
 pub const POI_SYSTEM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     0x04, 0xcb, 0x52, 0x15, 0x87, 0x19, 0x4d, 0x2b, 0xbe, 0x24, 0xa5, 0xa7, 0xae, 0xc7, 0xc2, 0x79,
@@ -575,8 +582,9 @@ pub mod player_inventory {
 
         // Validate the NFT is owned by the player (read raw bytes from Metaplex Core asset)
         let skin_data = ctx.accounts.special_asset.try_borrow_data()?;
-        require!(skin_data.len() >= 33, InventoryError::Unauthorized);
-        require!(skin_data[0] == 1, InventoryError::Unauthorized); // AssetV1 discriminator
+        require!(skin_data.len() >= MPL_CORE_ASSET_V1_MIN_LEN, InventoryError::Unauthorized);
+        // Verify the first byte is the AssetV1 key discriminator
+        require!(skin_data[0] == MPL_CORE_ASSET_V1_KEY, InventoryError::Unauthorized);
 
         let mut owner_bytes = [0u8; 32];
         owner_bytes.copy_from_slice(&skin_data[1..33]);
@@ -807,7 +815,8 @@ pub struct DelegateInventory<'info> {
     #[account(mut, del)]
     /// CHECK: PDA is validated in handler.
     pub inventory: AccountInfo<'info>,
-    /// CHECK: Session PDA owned by session-manager; used only for seed derivation.
+    /// CHECK: Session PDA used only for seed derivation. Owner not checked because
+    /// the session may already be delegated (owned by delegation program) at this point.
     pub session: UncheckedAccount<'info>,
     pub player: Signer<'info>,
 }
@@ -818,7 +827,8 @@ pub struct UndelegateInventory<'info> {
     #[account(mut)]
     /// CHECK: PDA is validated and deserialized in handler.
     pub inventory: AccountInfo<'info>,
-    /// CHECK: Session PDA used only for deterministic PDA validation.
+    /// CHECK: Session PDA used only for seed derivation. Owner not checked because
+    /// the session may already be delegated (owned by delegation program) at this point.
     pub session: UncheckedAccount<'info>,
     #[account(mut)]
     pub session_signer: Signer<'info>,
@@ -843,7 +853,8 @@ pub struct InitializeInventory<'info> {
     pub inventory: Account<'info, PlayerInventory>,
 
     /// The game session this inventory belongs to
-    /// CHECK: Session account from session-manager program
+    /// CHECK: Session account from session-manager program, owner validated by constraint
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID)]
     pub session: AccountInfo<'info>,
 
     /// Player wallet, pays for account creation

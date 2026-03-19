@@ -86,4 +86,12 @@ pub enum PlayerProfileError {
     /// Skin NFT is not owned by the player
     #[msg("Skin NFT is not owned by the player")]
     SkinNotOwned,
+
+    /// Pit draft queue account has invalid discriminator
+    #[msg("Invalid pit draft queue discriminator")]
+    InvalidPitDraftQueueDiscriminator,
+
+    /// Session account data too short
+    #[msg("Session account data too short")]
+    SessionDataTooShort,
 }

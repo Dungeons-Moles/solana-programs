@@ -175,6 +175,13 @@ pub struct GameState {
 
     /// Whether gauntlet points have been settled to global accounts.
     pub gauntlet_settled: bool,
+
+    /// Embedded enemy instances (max 48, 5 bytes each).
+    /// Replaces the old separate MapEnemies account.
+    pub enemies: Vec<EnemyInstance>,
+
+    /// Actual count of enemies on the map.
+    pub enemy_count: u8,
 }
 
 impl GameState {
@@ -194,7 +201,11 @@ impl GameState {
     //   gauntlet_highest_week_won: 1
     //   gauntlet_settled: 1
     // Total gauntlet: 59
-    pub const INIT_SPACE: usize = 119 + 59;
+    // Enemy fields (merged from MapEnemies):
+    //   enemies: 4 (vec prefix) + 48 × 5 (EnemyInstance) = 244
+    //   enemy_count: 1
+    // Total enemies: 245
+    pub const INIT_SPACE: usize = 119 + 59 + 245;
 }
 
 /// A spawned enemy instance on the map
@@ -210,30 +221,6 @@ pub struct EnemyInstance {
     pub y: u8,
     /// True if already defeated
     pub defeated: bool,
-}
-
-/// On-chain account storing all enemy instances for a map
-/// PDA Seeds: ["map_enemies", session.as_ref()]
-#[account]
-#[derive(InitSpace)]
-pub struct MapEnemies {
-    /// Parent session PDA
-    pub session: Pubkey,
-
-    /// Enemy instances (max 48)
-    #[max_len(48)]
-    pub enemies: Vec<EnemyInstance>,
-
-    /// Actual count of enemies
-    pub count: u8,
-
-    /// PDA bump seed
-    pub bump: u8,
-}
-
-impl MapEnemies {
-    /// PDA seed prefix
-    pub const SEED_PREFIX: &'static [u8] = b"map_enemies";
 }
 
 /// Per-session gauntlet echo opponents, separated from GameState for PER privacy.
@@ -256,9 +243,13 @@ impl GauntletEchoes {
 }
 
 /// Global queue for pit draft matchmaking.
-/// Stores one waiting player; the next entrant is matched immediately.
+/// Two states:
+/// - **Empty**: No players queued (`waiting_player` is None)
+/// - **Waiting**: One player queued (`waiting_player` set), waiting for opponent
+///
+/// When a second player enters with pre-fulfilled VRF, combat resolves atomically
+/// in the same transaction — no intermediate "matched" state.
 #[account]
-#[derive(InitSpace)]
 pub struct PitDraftQueue {
     /// Waiting player's main wallet.
     pub waiting_player: Option<Pubkey>,
@@ -270,6 +261,15 @@ pub struct PitDraftQueue {
     pub bump: u8,
 }
 
+impl PitDraftQueue {
+    // waiting_player: 1 + 32 = 33
+    // waiting_profile: 1 + 32 = 33
+    // initialized: 1
+    // bump: 1
+    // Total: 68
+    pub const INIT_SPACE: usize = 68;
+}
+
 /// Vault account holding pit draft stakes.
 #[account]
 #[derive(InitSpace)]
@@ -279,6 +279,7 @@ pub struct PitDraftVault {
     /// PDA bump seed.
     pub bump: u8,
 }
+
 
 /// Terminal outcome for a duel run participant.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]

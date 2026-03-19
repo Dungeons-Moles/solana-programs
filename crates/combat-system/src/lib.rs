@@ -1471,6 +1471,24 @@ fn apply_start_of_turn_effects_for_side(
             owner_acts_first,
             log,
         );
+        process_phase_effects(
+            effects,
+            combat_state,
+            is_player,
+            TriggerType::FirstTurnIfFaster,
+            triggered_flags,
+            owner_acts_first,
+            log,
+        );
+        process_phase_effects(
+            effects,
+            combat_state,
+            is_player,
+            TriggerType::FirstTurnIfSlower,
+            triggered_flags,
+            owner_acts_first,
+            log,
+        );
     }
 
     process_phase_effects(
@@ -1518,6 +1536,19 @@ fn apply_start_of_turn_effects_for_side(
             log,
         );
     }
+
+    // TurnN fires only on the exact matching turn (e.g., boss traits at Turn 5)
+    process_phase_effects(
+        effects,
+        combat_state,
+        is_player,
+        TriggerType::TurnN {
+            turn: combat_state.turn,
+        },
+        triggered_flags,
+        owner_acts_first,
+        log,
+    );
 
     for turns in countdown_turns_for_effects(effects) {
         process_phase_effects(

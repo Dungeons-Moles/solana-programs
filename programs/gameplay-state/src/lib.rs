@@ -1829,6 +1829,9 @@ pub mod gameplay_state {
                     extract_gameplay_vrf(&ctx.accounts.gameplay_vrf_state, &game_state.session)?;
                 let vrf_ref = vrf.as_ref().map(|(r, n)| (r, *n));
                 // Resolve boss fight inline (same as move_player does)
+                // NOTE: session_discovery/session/map_generator_program are None here
+                // because the ER rejects writable CPI accounts in the skip_to_day chain.
+                // The frontend handles the missing boss ID / echo update via fallbacks.
                 let player_won = resolve_boss_fight(
                     game_state,
                     ctx.accounts.generated_map.seed,
@@ -1863,6 +1866,13 @@ pub mod gameplay_state {
                 if !player_won {
                     return Ok(());
                 }
+            } else if game_state.run_mode == RunMode::Duel
+                && game_state.week >= game_state.max_weeks
+            {
+                // Duel week 3: no boss fight — mark run as completed immediately.
+                // PvP resolution happens asynchronously via finalize_duel_run.
+                game_state.completed = true;
+                game_state.boss_fight_ready = false;
             }
         } else {
             // Night1 or Night2: Skip to the next Day phase
@@ -2094,7 +2104,14 @@ pub mod gameplay_state {
         let original_phase = game_state.phase;
         let (post_move_phase, post_move_moves_remaining) =
             resolve_post_move_phase_and_moves(original_phase, game_state.moves_remaining, move_cost)?;
-        let visibility_radius = visibility_radius_for_phase(post_move_phase);
+        // When Night moves are exhausted, the phase transitions to Day (or boss→Day
+        // if the player wins). Use Day vision so the reveal matches the post-transition
+        // state. If the boss is lost, the player is dead and extra tiles don't matter.
+        let visibility_radius = if post_move_moves_remaining == 0 && post_move_phase.is_night() {
+            DAY_VISION_RADIUS
+        } else {
+            visibility_radius_for_phase(post_move_phase)
+        };
 
         let is_last_move_of_week =
             game_state.phase.is_night3() && game_state.moves_remaining == move_cost;
@@ -2330,6 +2347,18 @@ pub mod gameplay_state {
                     if !player_won {
                         return Ok(());
                     }
+                    // NOTE: SessionDiscovery echo update is NOT done here because
+                    // move_player's stack is too large (RevealRadius + DiscoverWaypoints +
+                    // UpdateEnemies + PvP combat already exhaust the 4KB BPF stack budget).
+                    // The echo update runs in skip_to_day (simpler call stack) and the
+                    // frontend falls back to fetching GauntletEchoes directly.
+                } else if game_state.run_mode == RunMode::Duel
+                    && game_state.week >= game_state.max_weeks
+                {
+                    // Duel week 3: no boss fight — mark run as completed immediately.
+                    // PvP resolution happens asynchronously via finalize_duel_run.
+                    game_state.completed = true;
+                    game_state.boss_fight_ready = false;
                 }
 
                 if let Some(enemy_idx) =
@@ -2347,6 +2376,45 @@ pub mod gameplay_state {
         }
 
         game_state.enemy_count = game_state.enemies.len() as u8;
+
+        Ok(())
+    }
+
+    /// Syncs the current week's boss ID to SessionDiscovery.
+    ///
+    /// Called by the frontend after a rest-alcove-triggered boss win in Duel mode,
+    /// where the skip_to_day CPI chain is too deep for the ER to allow writable
+    /// session_discovery. This is a lightweight 2-level CPI
+    /// (session signer → gameplay_state → map_generator) that the ER handles fine.
+    pub fn sync_discovery_boss(ctx: Context<SyncDiscoveryBoss>) -> Result<()> {
+        let game_state = &ctx.accounts.game_state;
+        let stage = game_state.campaign_level;
+
+        let boss_id = if game_state.run_mode == RunMode::Duel {
+            if game_state.week >= game_state.max_weeks {
+                [0u8; 12]
+            } else {
+                let vrf = extract_gameplay_vrf(
+                    &ctx.accounts.gameplay_vrf_state,
+                    &game_state.session,
+                )?;
+                let (randomness, nonce) = vrf.ok_or(GameplayStateError::VrfNotFulfilled)?;
+                get_duel_boss_id_vrf((&randomness, nonce), game_state.week)?
+            }
+        } else if game_state.run_mode == RunMode::Gauntlet {
+            [0u8; 12]
+        } else {
+            get_boss_id(stage, game_state.week)?
+        };
+
+        update_boss_id_cpi(
+            &ctx.accounts.session_discovery.to_account_info(),
+            &ctx.accounts.game_session,
+            &ctx.accounts.gameplay_authority,
+            &ctx.accounts.map_generator_program.to_account_info(),
+            ctx.bumps.gameplay_authority,
+            boss_id,
+        )?;
 
         Ok(())
     }
@@ -3441,8 +3509,13 @@ fn resolve_boss_fight<'info>(
                 (session_discovery, session, map_generator_program)
             {
                 let next_boss_id = if game_state.run_mode == RunMode::Duel {
-                    let duel_vrf = vrf.ok_or(GameplayStateError::VrfNotFulfilled)?;
-                    get_duel_boss_id_vrf(duel_vrf, game_state.week)?
+                    // Duel week 3 has no boss (PvP resolution instead) — clear the ID
+                    if game_state.week >= game_state.max_weeks {
+                        [0u8; 12]
+                    } else {
+                        let duel_vrf = vrf.ok_or(GameplayStateError::VrfNotFulfilled)?;
+                        get_duel_boss_id_vrf(duel_vrf, game_state.week)?
+                    }
                 } else if game_state.run_mode == RunMode::Gauntlet {
                     [0u8; 12]
                 } else {
@@ -5407,6 +5480,44 @@ pub struct TriggerBossFight<'info> {
 
     /// Optional map-generator program for SessionDiscovery CPI.
     pub map_generator_program: Option<Program<'info, map_generator::program::MapGenerator>>,
+
+    pub player: Signer<'info>,
+}
+
+/// Lightweight context for syncing boss ID to SessionDiscovery.
+/// Used after rest-alcove boss wins in Duel mode where skip_to_day
+/// can't run update_boss_id_cpi due to ER CPI depth limitations.
+#[derive(Accounts)]
+pub struct SyncDiscoveryBoss<'info> {
+    #[account(
+        constraint = game_state.session_signer == player.key() @ GameplayStateError::Unauthorized,
+    )]
+    pub game_state: Box<Account<'info, GameState>>,
+
+    #[account(
+        constraint = game_state.session == game_session.key() @ GameplayStateError::InvalidSession
+    )]
+    /// CHECK: Validated by game_state.session match.
+    pub game_session: AccountInfo<'info>,
+
+    /// Gameplay authority PDA for signing CPI calls to map_generator
+    /// CHECK: PDA derived from gameplay_state program, validated by seeds
+    #[account(
+        seeds = [GAMEPLAY_AUTHORITY_SEED],
+        bump,
+    )]
+    pub gameplay_authority: AccountInfo<'info>,
+
+    /// SessionDiscovery to update the boss ID.
+    /// CHECK: Passed through to map-generator CPI; validated there.
+    #[account(mut)]
+    pub session_discovery: UncheckedAccount<'info>,
+
+    /// Map generator program for update_boss_id CPI.
+    pub map_generator_program: Program<'info, map_generator::program::MapGenerator>,
+
+    /// Optional GameplayVrfState for VRF-backed duel boss selection.
+    pub gameplay_vrf_state: Option<Account<'info, GameplayVrfState>>,
 
     pub player: Signer<'info>,
 }

@@ -1127,7 +1127,7 @@ pub struct CloseGeneratedMap<'info> {
         seeds = [GeneratedMap::SEED_PREFIX, session.key().as_ref()],
         bump = generated_map.bump,
         has_one = session,
-        close = player,
+        close = session_signer,
     )]
     pub generated_map: Account<'info, GeneratedMap>,
 
@@ -1136,12 +1136,11 @@ pub struct CloseGeneratedMap<'info> {
     #[account(owner = SESSION_MANAGER_PROGRAM_ID)]
     pub session: UncheckedAccount<'info>,
 
-    /// Player wallet receives the rent refund (not a signer)
     /// CHECK: Validated against session.player in instruction
-    #[account(mut)]
     pub player: AccountInfo<'info>,
 
-    /// Session key signer must sign to authorize closure
+    /// Session key signer must sign to authorize closure and receives rent refund
+    #[account(mut)]
     pub session_signer: Signer<'info>,
 }
 
@@ -1221,7 +1220,7 @@ pub struct CloseMapVrfState<'info> {
         mut,
         seeds = [MapVrfState::SEED_PREFIX, vrf_state.session.as_ref()],
         bump = vrf_state.bump,
-        close = player,
+        close = session_signer,
     )]
     pub vrf_state: Account<'info, MapVrfState>,
 
@@ -1230,9 +1229,9 @@ pub struct CloseMapVrfState<'info> {
     pub session: UncheckedAccount<'info>,
 
     /// CHECK: Validated against session.player in instruction body.
-    #[account(mut)]
     pub player: AccountInfo<'info>,
 
+    #[account(mut)]
     pub session_signer: Signer<'info>,
 }
 
@@ -1340,7 +1339,7 @@ pub struct CloseSessionDiscovery<'info> {
         seeds = [SessionDiscovery::SEED_PREFIX, session.key().as_ref()],
         bump = session_discovery.bump,
         has_one = session,
-        close = player,
+        close = session_signer,
     )]
     pub session_discovery: Account<'info, SessionDiscovery>,
 
@@ -1349,9 +1348,9 @@ pub struct CloseSessionDiscovery<'info> {
     pub session: UncheckedAccount<'info>,
 
     /// CHECK: Validated against session.player in instruction body.
-    #[account(mut)]
     pub player: AccountInfo<'info>,
 
+    #[account(mut)]
     pub session_signer: Signer<'info>,
 }
 

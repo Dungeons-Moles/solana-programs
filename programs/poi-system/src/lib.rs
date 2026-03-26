@@ -2825,7 +2825,7 @@ pub struct CloseMapPois<'info> {
 pub struct CloseMapPoisViaSessionSigner<'info> {
     #[account(
         mut,
-        close = player,
+        close = session_signer,
         seeds = [MAP_POIS_SEED, map_pois.session.as_ref()],
         bump = map_pois.bump
     )]
@@ -2840,12 +2840,12 @@ pub struct CloseMapPoisViaSessionSigner<'info> {
     )]
     pub game_session: AccountInfo<'info>,
 
-    /// Player wallet receives the rent refund (not a signer).
+    /// Player wallet.
     /// CHECK: Validated against session.player in instruction body.
-    #[account(mut)]
     pub player: AccountInfo<'info>,
 
-    /// Session key signer must sign to authorize closure.
+    /// Session key signer must sign to authorize closure. Receives rent refund.
+    #[account(mut)]
     pub session_signer: Signer<'info>,
 }
 
@@ -3826,7 +3826,7 @@ pub struct ClosePoiVrfState<'info> {
         mut,
         seeds = [PoiVrfState::SEED_PREFIX, vrf_state.session.as_ref()],
         bump = vrf_state.bump,
-        close = player,
+        close = session_signer,
     )]
     pub vrf_state: Account<'info, PoiVrfState>,
 
@@ -3838,9 +3838,9 @@ pub struct ClosePoiVrfState<'info> {
     pub game_session: AccountInfo<'info>,
 
     /// CHECK: Validated against session.player in instruction body.
-    #[account(mut)]
     pub player: AccountInfo<'info>,
 
+    #[account(mut)]
     pub session_signer: Signer<'info>,
 }
 

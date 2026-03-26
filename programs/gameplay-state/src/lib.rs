@@ -4303,7 +4303,7 @@ fn take_pending_defender_points(
 pub struct InitializeGameState<'info> {
     #[account(
         init,
-        payer = player,
+        payer = payer,
         space = 8 + GameState::INIT_SPACE,
         seeds = [GAME_STATE_SEED, game_session.key().as_ref()],
         bump
@@ -4322,12 +4322,16 @@ pub struct InitializeGameState<'info> {
     )]
     pub generated_map: Box<Account<'info, map_generator::state::GeneratedMap>>,
 
-    #[account(mut)]
-    pub player: Signer<'info>,
+    /// CHECK: Player wallet pubkey stored in game_state.player; does not need to sign.
+    pub player: AccountInfo<'info>,
 
     /// CHECK: Session key signer whose pubkey is stored in game_state.session_signer
     /// for authorizing gameplay transactions (move, boss fight).
     pub session_signer: AccountInfo<'info>,
+
+    /// Account that pays for the GameState account rent (session_signer in CPI flows).
+    #[account(mut)]
+    pub payer: Signer<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -5121,16 +5125,15 @@ pub struct CloseGameStateViaSessionSigner<'info> {
     #[account(
         mut,
         has_one = session_signer @ GameplayStateError::Unauthorized,
-        close = player,
+        close = session_signer,
     )]
     pub game_state: Account<'info, GameState>,
 
-    /// Player wallet receives the rent refund (not a signer)
-    /// CHECK: Validated by game_state.player via close constraint
-    #[account(mut)]
+    /// CHECK: Player wallet pubkey (used for validation only, not receiving rent).
     pub player: AccountInfo<'info>,
 
-    /// Session key signer must sign to authorize closure
+    /// Session key signer authorizes closure and receives the rent refund.
+    #[account(mut)]
     pub session_signer: Signer<'info>,
 }
 
@@ -5144,7 +5147,7 @@ pub struct CloseGauntletEchoes<'info> {
         seeds = [GauntletEchoes::SEED_PREFIX, game_state.session.as_ref()],
         bump = gauntlet_echoes.bump,
         constraint = gauntlet_echoes.session == game_state.session @ GameplayStateError::InvalidSession,
-        close = player,
+        close = session_signer,
     )]
     pub gauntlet_echoes: Account<'info, GauntletEchoes>,
 
@@ -5154,12 +5157,12 @@ pub struct CloseGauntletEchoes<'info> {
     )]
     pub game_state: Account<'info, GameState>,
 
-    /// Player wallet receives the rent refund (not a signer)
-    /// CHECK: Validated via game_state.player
-    #[account(mut, address = game_state.player @ GameplayStateError::Unauthorized)]
+    /// CHECK: Player wallet pubkey (used for validation only, not receiving rent).
+    #[account(address = game_state.player @ GameplayStateError::Unauthorized)]
     pub player: AccountInfo<'info>,
 
-    /// Session key signer must sign to authorize closure
+    /// Session key signer authorizes closure and receives the rent refund.
+    #[account(mut)]
     pub session_signer: Signer<'info>,
 }
 
@@ -5653,7 +5656,7 @@ pub struct CloseGameplayVrfState<'info> {
         mut,
         seeds = [GameplayVrfState::SEED_PREFIX, vrf_state.session.as_ref()],
         bump = vrf_state.bump,
-        close = player,
+        close = session_signer,
     )]
     pub vrf_state: Account<'info, GameplayVrfState>,
 
@@ -5665,9 +5668,10 @@ pub struct CloseGameplayVrfState<'info> {
     pub game_state: Account<'info, GameState>,
 
     /// CHECK: Validated against game_state.player in instruction body.
-    #[account(mut)]
     pub player: AccountInfo<'info>,
 
+    /// Session key signer authorizes closure and receives the rent refund.
+    #[account(mut)]
     pub session_signer: Signer<'info>,
 }
 

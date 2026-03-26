@@ -159,7 +159,7 @@ pub mod session_manager {
             CpiContext::new(
                 ctx.accounts.map_generator_program.to_account_info(),
                 map_generator::cpi::accounts::InitMapAccount {
-                    payer: ctx.accounts.player.to_account_info(),
+                    payer: ctx.accounts.session_signer.to_account_info(),
                     session: ctx.accounts.game_session.to_account_info(),
                     generated_map: ctx.accounts.generated_map.to_account_info(),
                     system_program: ctx.accounts.system_program.to_account_info(),
@@ -175,7 +175,7 @@ pub mod session_manager {
                 CpiContext::new(
                     ctx.accounts.map_generator_program.to_account_info(),
                     map_generator::cpi::accounts::InitSessionDiscovery {
-                        payer: ctx.accounts.player.to_account_info(),
+                        payer: ctx.accounts.session_signer.to_account_info(),
                         session: ctx.accounts.game_session.to_account_info(),
                         session_discovery: sd.to_account_info(),
                         system_program: ctx.accounts.system_program.to_account_info(),
@@ -193,6 +193,7 @@ pub mod session_manager {
                     game_state: ctx.accounts.game_state.to_account_info(),
                     game_session: ctx.accounts.game_session.to_account_info(),
                     generated_map: ctx.accounts.generated_map.to_account_info(),
+                    payer: ctx.accounts.session_signer.to_account_info(),
                     player: ctx.accounts.player.to_account_info(),
                     session_signer: ctx.accounts.session_signer.to_account_info(),
                     system_program: ctx.accounts.system_program.to_account_info(),
@@ -232,7 +233,7 @@ pub mod session_manager {
             &ctx.accounts.game_session.to_account_info(),
             &ctx.accounts.generated_map.to_account_info(),
             &ctx.accounts.game_state.to_account_info(),
-            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.session_signer.to_account_info(),
             &ctx.accounts.system_program.to_account_info(),
             act,
             week,
@@ -316,7 +317,7 @@ pub mod session_manager {
             CpiContext::new(
                 ctx.accounts.map_generator_program.to_account_info(),
                 map_generator::cpi::accounts::InitMapAccount {
-                    payer: ctx.accounts.player.to_account_info(),
+                    payer: ctx.accounts.session_signer.to_account_info(),
                     session: ctx.accounts.game_session.to_account_info(),
                     generated_map: ctx.accounts.generated_map.to_account_info(),
                     system_program: ctx.accounts.system_program.to_account_info(),
@@ -332,7 +333,7 @@ pub mod session_manager {
                 CpiContext::new(
                     ctx.accounts.map_generator_program.to_account_info(),
                     map_generator::cpi::accounts::InitSessionDiscovery {
-                        payer: ctx.accounts.player.to_account_info(),
+                        payer: ctx.accounts.session_signer.to_account_info(),
                         session: ctx.accounts.game_session.to_account_info(),
                         session_discovery: sd.to_account_info(),
                         system_program: ctx.accounts.system_program.to_account_info(),
@@ -349,6 +350,7 @@ pub mod session_manager {
                     game_state: ctx.accounts.game_state.to_account_info(),
                     game_session: ctx.accounts.game_session.to_account_info(),
                     generated_map: ctx.accounts.generated_map.to_account_info(),
+                    payer: ctx.accounts.session_signer.to_account_info(),
                     player: ctx.accounts.player.to_account_info(),
                     session_signer: ctx.accounts.session_signer.to_account_info(),
                     system_program: ctx.accounts.system_program.to_account_info(),
@@ -400,7 +402,7 @@ pub mod session_manager {
             &ctx.accounts.game_session.to_account_info(),
             &ctx.accounts.generated_map.to_account_info(),
             &ctx.accounts.game_state.to_account_info(),
-            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.session_signer.to_account_info(),
             &ctx.accounts.system_program.to_account_info(),
             act,
             week,
@@ -476,7 +478,7 @@ pub mod session_manager {
             CpiContext::new(
                 ctx.accounts.map_generator_program.to_account_info(),
                 map_generator::cpi::accounts::InitMapAccount {
-                    payer: ctx.accounts.player.to_account_info(),
+                    payer: ctx.accounts.session_signer.to_account_info(),
                     session: ctx.accounts.game_session.to_account_info(),
                     generated_map: ctx.accounts.generated_map.to_account_info(),
                     system_program: ctx.accounts.system_program.to_account_info(),
@@ -492,7 +494,7 @@ pub mod session_manager {
                 CpiContext::new(
                     ctx.accounts.map_generator_program.to_account_info(),
                     map_generator::cpi::accounts::InitSessionDiscovery {
-                        payer: ctx.accounts.player.to_account_info(),
+                        payer: ctx.accounts.session_signer.to_account_info(),
                         session: ctx.accounts.game_session.to_account_info(),
                         session_discovery: sd.to_account_info(),
                         system_program: ctx.accounts.system_program.to_account_info(),
@@ -509,6 +511,7 @@ pub mod session_manager {
                     game_state: ctx.accounts.game_state.to_account_info(),
                     game_session: ctx.accounts.game_session.to_account_info(),
                     generated_map: ctx.accounts.generated_map.to_account_info(),
+                    payer: ctx.accounts.session_signer.to_account_info(),
                     player: ctx.accounts.player.to_account_info(),
                     session_signer: ctx.accounts.session_signer.to_account_info(),
                     system_program: ctx.accounts.system_program.to_account_info(),
@@ -560,7 +563,7 @@ pub mod session_manager {
             &ctx.accounts.game_session.to_account_info(),
             &ctx.accounts.generated_map.to_account_info(),
             &ctx.accounts.game_state.to_account_info(),
-            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.session_signer.to_account_info(),
             &ctx.accounts.system_program.to_account_info(),
             act,
             week,
@@ -1811,7 +1814,7 @@ impl anchor_lang::Owner for PlayerProfile {
 pub struct StartSession<'info> {
     #[account(
         init_if_needed,
-        payer = player,
+        payer = session_signer,
         space = 8 + SessionNonces::INIT_SPACE,
         seeds = [SessionNonces::SEED_PREFIX, player.key().as_ref()],
         bump
@@ -1820,7 +1823,7 @@ pub struct StartSession<'info> {
 
     #[account(
         init,
-        payer = player,
+        payer = session_signer,
         space = 8 + GameSession::INIT_SPACE,
         seeds = [GameSession::SEED_PREFIX, player.key().as_ref(), &[campaign_level], &session_nonces.campaign_nonce.to_le_bytes()],
         bump
@@ -1846,8 +1849,8 @@ pub struct StartSession<'info> {
     #[account(mut)]
     pub player: Signer<'info>,
 
-    /// Session key signer that will own all session-specific accounts (inventory, etc.)
-    /// Must be a signer so it can be set as the inventory owner for gameplay transactions.
+    /// Session key signer — pays for all session account rents (funded by wallet in same tx).
+    /// Also set as the inventory owner for gameplay transactions.
     #[account(mut)]
     pub session_signer: Signer<'info>,
 
@@ -1888,7 +1891,7 @@ pub struct StartSession<'info> {
 pub struct StartDuelSession<'info> {
     #[account(
         init_if_needed,
-        payer = player,
+        payer = session_signer,
         space = 8 + SessionNonces::INIT_SPACE,
         seeds = [SessionNonces::SEED_PREFIX, player.key().as_ref()],
         bump
@@ -1897,7 +1900,7 @@ pub struct StartDuelSession<'info> {
 
     #[account(
         init,
-        payer = player,
+        payer = session_signer,
         space = 8 + GameSession::INIT_SPACE,
         seeds = [GameSession::DUEL_SEED_PREFIX, player.key().as_ref(), &session_nonces.duel_nonce.to_le_bytes()],
         bump
@@ -1970,7 +1973,7 @@ pub struct StartDuelSession<'info> {
 pub struct StartGauntletSession<'info> {
     #[account(
         init_if_needed,
-        payer = player,
+        payer = session_signer,
         space = 8 + SessionNonces::INIT_SPACE,
         seeds = [SessionNonces::SEED_PREFIX, player.key().as_ref()],
         bump
@@ -1979,7 +1982,7 @@ pub struct StartGauntletSession<'info> {
 
     #[account(
         init,
-        payer = player,
+        payer = session_signer,
         space = 8 + GameSession::INIT_SPACE,
         seeds = [GameSession::GAUNTLET_SEED_PREFIX, player.key().as_ref(), &session_nonces.gauntlet_nonce.to_le_bytes()],
         bump
@@ -2289,7 +2292,7 @@ pub struct EndSession<'info> {
         mut,
         has_one = player @ SessionManagerError::Unauthorized,
         has_one = session_signer @ SessionManagerError::Unauthorized,
-        close = player
+        close = session_signer
     )]
     pub game_session: Account<'info, GameSession>,
 
@@ -2322,12 +2325,11 @@ pub struct EndSession<'info> {
     )]
     pub player_profile: Account<'info, PlayerProfile>,
 
-    /// Player wallet - receives rent refund but does NOT need to sign.
+    /// Player wallet — validated by has_one constraint. Does NOT need to sign.
     /// CHECK: Validated by has_one constraint on game_session.
-    #[account(mut)]
     pub player: AccountInfo<'info>,
 
-    /// Session key signer - must sign to authorize session end and close inventory
+    /// Session key signer — signs to authorize session end, receives all rent refunds.
     #[account(mut)]
     pub session_signer: Signer<'info>,
 
@@ -2432,7 +2434,7 @@ pub struct CloseSessionOnly<'info> {
         mut,
         has_one = player @ SessionManagerError::Unauthorized,
         has_one = session_signer @ SessionManagerError::Unauthorized,
-        close = player
+        close = session_signer
     )]
     pub game_session: Account<'info, GameSession>,
 
@@ -2454,6 +2456,7 @@ pub struct CloseSessionOnly<'info> {
     #[account(mut)]
     pub player: AccountInfo<'info>,
 
+    #[account(mut)]
     pub session_signer: Signer<'info>,
 
     #[account(
@@ -2477,7 +2480,7 @@ pub struct ForceCloseSession<'info> {
         mut,
         has_one = player @ SessionManagerError::Unauthorized,
         has_one = session_signer @ SessionManagerError::Unauthorized,
-        close = player
+        close = session_signer
     )]
     pub game_session: Account<'info, GameSession>,
 
@@ -2585,7 +2588,7 @@ pub struct AbandonSession<'info> {
         mut,
         has_one = player @ SessionManagerError::Unauthorized,
         has_one = session_signer @ SessionManagerError::Unauthorized,
-        close = player
+        close = session_signer
     )]
     pub game_session: Account<'info, GameSession>,
 
@@ -3138,8 +3141,8 @@ fn close_game_state_via_session_signer_cpi<'info>(
         &[],
         &[
             (game_state, true, false),
-            (player, true, false),
-            (session_signer, false, true),
+            (player, false, false),
+            (session_signer, true, true),
         ],
     )
 }
@@ -3159,8 +3162,8 @@ fn close_gauntlet_echoes_cpi<'info>(
         &[
             (gauntlet_echoes, true, false),
             (game_state, false, false),
-            (player, true, false),
-            (session_signer, false, true),
+            (player, false, false),
+            (session_signer, true, true),
         ],
     )
 }
@@ -3180,8 +3183,8 @@ fn close_generated_map_cpi<'info>(
         &[
             (generated_map, true, false),
             (session, false, false),
-            (player, true, false),
-            (session_signer, false, true),
+            (player, false, false),
+            (session_signer, true, true),
         ],
     )
 }
@@ -3201,8 +3204,8 @@ fn close_session_discovery_cpi<'info>(
         &[
             (session_discovery, true, false),
             (session, false, false),
-            (player, true, false),
-            (session_signer, false, true),
+            (player, false, false),
+            (session_signer, true, true),
         ],
     )
 }
@@ -3222,8 +3225,8 @@ fn close_map_pois_via_session_signer_cpi<'info>(
         &[
             (map_pois, true, false),
             (session, false, false),
-            (player, true, false),
-            (session_signer, false, true),
+            (player, false, false),
+            (session_signer, true, true),
         ],
     )
 }
@@ -3243,8 +3246,8 @@ fn close_map_pois_orphaned_cpi<'info>(
         &[
             (map_pois, true, false),
             (game_state, false, false),
-            (player, true, false),
-            (session_signer, false, true),
+            (player, false, false),
+            (session_signer, true, true),
         ],
     )
 }
@@ -3272,8 +3275,8 @@ fn close_map_vrf_state_cpi<'info>(
         &[
             (vrf_state, true, false),
             (session, false, false),
-            (player, true, false),
-            (session_signer, false, true),
+            (player, false, false),
+            (session_signer, true, true),
         ],
     )
 }
@@ -3293,8 +3296,8 @@ fn close_poi_vrf_state_cpi<'info>(
         &[
             (vrf_state, true, false),
             (session, false, false),
-            (player, true, false),
-            (session_signer, false, true),
+            (player, false, false),
+            (session_signer, true, true),
         ],
     )
 }
@@ -3314,8 +3317,8 @@ fn close_gameplay_vrf_state_cpi<'info>(
         &[
             (vrf_state, true, false),
             (game_state, false, false),
-            (player, true, false),
-            (session_signer, false, true),
+            (player, false, false),
+            (session_signer, true, true),
         ],
     )
 }

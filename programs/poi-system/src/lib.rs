@@ -507,13 +507,18 @@ fn find_matching_gear_slots(
     None
 }
 
-/// Converts game_state.week (1-3) to boss_system::Week enum.
+/// Converts game_state.week to boss_system::Week enum.
+/// Gauntlet runs up to 5 weeks — weeks beyond 3 wrap around (4→1, 5→2)
+/// so boss weakness lookups still produce valid results.
 fn to_boss_week(week: u8) -> Result<boss_system::Week> {
-    match week {
+    if week == 0 {
+        return Err(PoiSystemError::InvalidWeek.into());
+    }
+    match ((week - 1) % 3) + 1 {
         1 => Ok(boss_system::Week::One),
         2 => Ok(boss_system::Week::Two),
         3 => Ok(boss_system::Week::Three),
-        _ => Err(PoiSystemError::InvalidWeek.into()),
+        _ => unreachable!(),
     }
 }
 

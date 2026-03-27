@@ -267,7 +267,11 @@ fn push_log_entry(
     log: &mut Vec<CombatLogEntry>,
     entry: CombatLogEntry,
     source: Option<&CombatSourceRef>,
+    skip_log: bool,
 ) {
+    if skip_log {
+        return;
+    }
     if let Some(source) = source {
         log.push(entry.with_source(*source));
     } else {
@@ -284,6 +288,7 @@ fn apply_status_effect(
     status_id: u8,
     source: Option<&CombatSourceRef>,
     log: &mut Vec<CombatLogEntry>,
+    skip_log: bool,
 ) {
     let add = u8::try_from(value).unwrap_or(u8::MAX);
     *status_field = status_field.saturating_add(add);
@@ -292,7 +297,7 @@ fn apply_status_effect(
         if let Some(source) = source {
             entry = entry.with_source(*source);
         }
-        log.push(entry);
+        crate::log_push!(log, skip_log, entry);
     }
 }
 
@@ -314,6 +319,7 @@ pub fn apply_effect(
     gold_change: &mut i16,
     source: Option<&CombatSourceRef>,
     log: &mut Vec<CombatLogEntry>,
+    skip_log: bool,
 ) {
     let value = value.max(0);
 
@@ -329,6 +335,7 @@ pub fn apply_effect(
                     log,
                     CombatLogEntry::armor_change(turn, is_target_player, -arm_damage),
                     source,
+                    skip_log,
                 );
             }
             if hp_damage > 0 {
@@ -336,6 +343,7 @@ pub fn apply_effect(
                     log,
                     CombatLogEntry::attack(turn, !is_target_player, hp_damage),
                     source,
+                    skip_log,
                 );
             }
         }
@@ -350,6 +358,7 @@ pub fn apply_effect(
                     log,
                     CombatLogEntry::non_weapon_damage(turn, is_target_player, damage),
                     source,
+                    skip_log,
                 );
             }
         }
@@ -364,6 +373,7 @@ pub fn apply_effect(
                     log,
                     CombatLogEntry::heal(turn, is_target_player, actual_heal),
                     source,
+                    skip_log,
                 );
             }
         }
@@ -374,6 +384,7 @@ pub fn apply_effect(
                     log,
                     CombatLogEntry::armor_change(turn, is_target_player, value),
                     source,
+                    skip_log,
                 );
             }
         }
@@ -385,6 +396,7 @@ pub fn apply_effect(
                     log,
                     CombatLogEntry::atk_change(turn, is_target_player, value),
                     source,
+                    skip_log,
                 );
             }
         }
@@ -397,6 +409,7 @@ pub fn apply_effect(
                     log,
                     CombatLogEntry::atk_change(turn, is_target_player, value),
                     source,
+                    skip_log,
                 );
             }
         }
@@ -407,6 +420,7 @@ pub fn apply_effect(
                     log,
                     CombatLogEntry::spd_change(turn, is_target_player, value),
                     source,
+                    skip_log,
                 );
             }
         }
@@ -419,6 +433,7 @@ pub fn apply_effect(
                 STATUS_CHILL,
                 source,
                 log,
+                skip_log,
             );
         }
         EffectType::ApplyShrapnel => {
@@ -430,6 +445,7 @@ pub fn apply_effect(
                 STATUS_SHRAPNEL,
                 source,
                 log,
+                skip_log,
             );
         }
         EffectType::ApplyRust => {
@@ -441,6 +457,7 @@ pub fn apply_effect(
                 STATUS_RUST,
                 source,
                 log,
+                skip_log,
             );
         }
         EffectType::ApplyBleed => {
@@ -452,6 +469,7 @@ pub fn apply_effect(
                 STATUS_BLEED,
                 source,
                 log,
+                skip_log,
             );
         }
         EffectType::RemoveArmor => {
@@ -464,6 +482,7 @@ pub fn apply_effect(
                     log,
                     CombatLogEntry::armor_change(turn, is_target_player, -actual_reduction),
                     source,
+                    skip_log,
                 );
             }
         }
@@ -477,6 +496,7 @@ pub fn apply_effect(
                     log,
                     CombatLogEntry::armor_change(turn, is_target_player, -actual_reduction),
                     source,
+                    skip_log,
                 );
             }
         }
@@ -491,6 +511,7 @@ pub fn apply_effect(
                         log,
                         CombatLogEntry::gold_stolen(turn, false, -stolen),
                         source,
+                        skip_log,
                     );
                 }
             } else {
@@ -499,7 +520,7 @@ pub fn apply_effect(
                     *enemy_gold = enemy_gold.saturating_sub(stolen as u16);
                     *player_gold = player_gold.saturating_add(stolen as u16);
                     *gold_change = gold_change.saturating_add(stolen);
-                    push_log_entry(log, CombatLogEntry::gold_stolen(turn, true, stolen), source);
+                    push_log_entry(log, CombatLogEntry::gold_stolen(turn, true, stolen), source, skip_log);
                 }
             }
         }
@@ -518,6 +539,7 @@ pub fn apply_effect(
                     log,
                     CombatLogEntry::armor_change(turn, is_target_player, gained_armor),
                     source,
+                    skip_log,
                 );
             }
         }
@@ -530,6 +552,7 @@ pub fn apply_effect(
                 STATUS_REFLECTION,
                 source,
                 log,
+                skip_log,
             );
         }
         EffectType::ReduceEnemySpd => {
@@ -541,6 +564,7 @@ pub fn apply_effect(
                     log,
                     CombatLogEntry::spd_change(turn, is_target_player, -actual_reduction),
                     source,
+                    skip_log,
                 );
             }
         }
@@ -574,6 +598,7 @@ pub fn apply_effect(
                     log,
                     CombatLogEntry::non_weapon_damage(turn, is_target_player, damage),
                     source,
+                    skip_log,
                 );
             }
         }
@@ -600,6 +625,7 @@ pub fn apply_effect(
                     log,
                     CombatLogEntry::heal(turn, is_target_player, converted),
                     source,
+                    skip_log,
                 );
             }
         }
@@ -676,6 +702,7 @@ pub fn apply_effect(
                         log,
                         CombatLogEntry::armor_change(turn, is_target_player, value),
                         source,
+                        skip_log,
                     );
                 }
             } else if !is_target_player && *enemy_gold > 0 {
@@ -688,6 +715,7 @@ pub fn apply_effect(
                         log,
                         CombatLogEntry::armor_change(turn, is_target_player, value),
                         source,
+                        skip_log,
                     );
                 }
             }
@@ -705,6 +733,7 @@ pub fn apply_effect(
                     log,
                     CombatLogEntry::armor_change(turn, is_target_player, armor_gain),
                     source,
+                    skip_log,
                 );
             }
         }
@@ -755,6 +784,7 @@ pub fn process_triggers_for_phase(
     enemy_gold: &mut u16,
     gold_change: &mut i16,
     log: &mut Vec<CombatLogEntry>,
+    skip_log: bool,
 ) {
     if phase == TriggerType::TurnStart {
         owner_stats.non_weapon_hits_this_turn = 0;
@@ -792,6 +822,7 @@ pub fn process_triggers_for_phase(
             gold_change,
             log,
             true, // first pass: only unconditional status effects
+            skip_log,
         );
 
         process_effects_pass(
@@ -810,6 +841,7 @@ pub fn process_triggers_for_phase(
             gold_change,
             log,
             false, // second pass: everything else
+            skip_log,
         );
     }
 }
@@ -831,6 +863,7 @@ fn process_effects_pass(
     gold_change: &mut i16,
     log: &mut Vec<CombatLogEntry>,
     first_pass: bool,
+    skip_log: bool,
 ) {
     let is_first_turn = turn == 1;
     let mut gold_armor_conversion_happened = false;
@@ -973,6 +1006,7 @@ fn process_effects_pass(
                     gold_change,
                     Some(&reflection_source()),
                     log,
+                    skip_log,
                 );
             } else {
                 // Normal: effect targets the opponent
@@ -989,6 +1023,7 @@ fn process_effects_pass(
                     gold_change,
                     annotated.source.as_ref(),
                     log,
+                    skip_log,
                 );
             }
 
@@ -1019,6 +1054,7 @@ fn process_effects_pass(
                 gold_change,
                 annotated.source.as_ref(),
                 log,
+                skip_log,
             );
             let owner_gold_after = if is_owner_player {
                 *player_gold
@@ -1065,6 +1101,7 @@ fn process_effects_pass(
             enemy_gold,
             gold_change,
             log,
+            skip_log,
         );
     }
 
@@ -1084,6 +1121,7 @@ fn process_effects_pass(
             enemy_gold,
             gold_change,
             log,
+            skip_log,
         );
     }
 }
@@ -1285,6 +1323,7 @@ mod tests {
             &mut enemy_gold,
             &mut gold_change,
             &mut log,
+            false,
         );
 
         // Chill should NOT be applied because enemy is slower
@@ -1370,6 +1409,7 @@ mod tests {
             &mut enemy_gold,
             &mut gold_change,
             &mut log,
+            false,
         );
 
         // Chill SHOULD be applied because enemy acts first
@@ -1500,6 +1540,7 @@ mod tests {
             &mut enemy_gold,
             &mut gold_change,
             &mut log,
+            false,
         );
 
         assert_eq!(stats.atk, 4);
@@ -1590,6 +1631,7 @@ mod tests {
             &mut enemy_gold,
             &mut gold_change,
             &mut log,
+            false,
         );
 
         // Enemy damage: 10 + 3 next-bomb bonus
@@ -1656,6 +1698,7 @@ mod tests {
             &mut enemy_gold,
             &mut gold_change,
             &mut log,
+            false,
         );
         assert_eq!(owner_stats.next_bomb_self_damage_reduction, 2);
 
@@ -1675,6 +1718,7 @@ mod tests {
             &mut enemy_gold,
             &mut gold_change,
             &mut log,
+            false,
         );
         assert_eq!(owner_stats.next_bomb_self_damage_reduction, 2);
     }
@@ -1716,6 +1760,7 @@ mod tests {
             &mut enemy_gold,
             &mut gold_change,
             &mut log,
+            false,
         );
 
         assert_eq!(owner_stats.arm, 3);
@@ -1761,6 +1806,7 @@ mod tests {
             &mut enemy_gold,
             &mut gold_change,
             &mut log,
+            false,
         );
 
         assert_eq!(owner_stats.arm, 5);
@@ -1805,6 +1851,7 @@ mod tests {
             &mut enemy_gold,
             &mut gold_change,
             &mut log,
+            false,
         );
 
         assert_eq!(owner_stats.arm, 6);
@@ -1836,6 +1883,7 @@ mod tests {
             &mut enemy_gold,
             &mut gold_change,
             &mut log,
+            false,
         );
 
         assert_eq!(owner_stats.arm, 12);
@@ -1880,6 +1928,7 @@ mod tests {
             &mut enemy_gold,
             &mut gold_change,
             &mut log,
+            false,
         );
 
         assert_eq!(owner_stats.hp, 10);
@@ -1950,6 +1999,7 @@ mod tests {
             &mut enemy_gold,
             &mut gold_change,
             &mut log,
+            false,
         );
 
         // Chill should be reflected back to owner
@@ -1997,6 +2047,7 @@ mod tests {
             &mut enemy_gold,
             &mut gold_change,
             &mut log,
+            false,
         );
 
         assert_eq!(owner_status.bleed, 3, "Bleed should be reflected to owner");
@@ -2044,6 +2095,7 @@ mod tests {
             &mut enemy_gold,
             &mut gold_change,
             &mut log,
+            false,
         );
 
         // ApplyReflection should not be reflected, but it is a self-targeting effect.
@@ -2093,6 +2145,7 @@ mod tests {
             &mut enemy_gold,
             &mut gold_change,
             &mut log,
+            false,
         );
 
         // Without Reflection, Rust should apply to opponent normally
@@ -2139,6 +2192,7 @@ mod tests {
             &mut enemy_gold,
             &mut gold_change,
             &mut log,
+            false,
         );
 
         // Direct damage should NOT be reflected
@@ -2197,6 +2251,7 @@ mod tests {
             &mut enemy_gold,
             &mut gold_change,
             &mut log,
+            false,
         );
 
         // Both status effects should be reflected
@@ -2263,6 +2318,7 @@ mod tests {
             &mut enemy_gold,
             &mut gold_change,
             &mut log,
+            false,
         );
 
         // First effect (Chill) should be reflected, rest should hit opponent
@@ -2377,6 +2433,7 @@ mod tests {
             &mut enemy_gold,
             &mut gold_change,
             &mut log,
+            false,
         );
 
         // Frost Lantern should have applied Chill
@@ -2481,6 +2538,7 @@ mod tests {
             &mut enemy_gold,
             &mut gold_change,
             &mut log,
+            false,
         );
 
         // Frost Lantern should have applied Chill (even though it's second in the array)
@@ -2565,6 +2623,7 @@ mod tests {
             &mut enemy_gold,
             &mut gold_change,
             &mut log,
+            false,
         );
         process_triggers_for_phase(
             &mut effects,
@@ -2581,6 +2640,7 @@ mod tests {
             &mut enemy_gold,
             &mut gold_change,
             &mut log,
+            false,
         );
 
         assert_eq!(
@@ -2605,6 +2665,7 @@ mod tests {
             &mut enemy_gold,
             &mut gold_change,
             &mut log,
+            false,
         );
         assert_eq!(
             owner_stats.arm, 2,
@@ -2653,6 +2714,7 @@ mod tests {
             &mut enemy_gold,
             &mut gold_change,
             &mut log,
+            false,
         );
 
         assert_eq!(opponent_stats.hp, 15);

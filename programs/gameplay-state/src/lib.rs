@@ -20,7 +20,7 @@ use combat_system::state::{
 };
 use combat_system::{
     resolve_boss_combat_annotated_with_player_gold, resolve_combat_annotated_with_both_gold,
-    resolve_pvp_combat_annotated_with_both_gold, EffectType,
+    resolve_pvp_combat_annotated_with_both_gold, resolve_pvp_combat_outcome_only, EffectType,
     ItemEffect, TriggerType,
 };
 use constants::{
@@ -2125,18 +2125,6 @@ pub mod gameplay_state {
             game_state.enemy_count = game_state.enemies.len() as u8;
         }
 
-        let map_width = generated_map.width as usize;
-        let map_height = generated_map.height as usize;
-        let mut occupied = vec![false; map_width.saturating_mul(map_height)];
-        for enemy in game_state.enemies.iter() {
-            let index = (enemy.y as usize) * map_width + (enemy.x as usize);
-            if index < occupied.len() {
-                occupied[index] = true;
-            }
-        }
-
-        let mut player_tile_blocked = false;
-
         let target_enemy_exists_before_move =
             find_enemy_index(game_state, target_x, target_y).is_some();
 
@@ -2146,6 +2134,16 @@ pub mod gameplay_state {
         // chase toward the NEW position (target), so moving away means the enemy follows
         // but doesn't catch up in the same turn.
         if should_process_night_enemy_movement(&game_state.phase, target_enemy_exists_before_move) {
+            let map_width = generated_map.width as usize;
+            let map_height = generated_map.height as usize;
+            let mut occupied = vec![false; map_width.saturating_mul(map_height)];
+            for enemy in game_state.enemies.iter() {
+                let index = (enemy.y as usize) * map_width + (enemy.x as usize);
+                if index < occupied.len() {
+                    occupied[index] = true;
+                }
+            }
+            let mut player_tile_blocked = false;
             let detect_x = game_state.position_x;
             let detect_y = game_state.position_y;
             let chase_x = target_x;
@@ -2331,26 +2329,9 @@ pub mod gameplay_state {
                         return Ok(());
                     }
                 } else if game_state.run_mode == RunMode::Gauntlet {
-                    let ge = ctx.accounts.gauntlet_echoes.as_ref()
-                        .ok_or(GameplayStateError::GauntletNotInitialized)?;
-                    let player_won = resolve_gauntlet_echo_inline(
-                        game_state,
-                        ge,
-                        inventory,
-                        inventory_info,
-                        &ctx.accounts.gameplay_authority,
-                        player_inventory_program,
-                        ctx.bumps.gameplay_authority,
-                        ctx.accounts.generated_map.seed,
-                    )?;
-                    if !player_won {
-                        return Ok(());
-                    }
-                    // NOTE: SessionDiscovery echo update is NOT done here because
-                    // move_player's stack is too large (RevealRadius + DiscoverWaypoints +
-                    // UpdateEnemies + PvP combat already exhaust the 4KB BPF stack budget).
-                    // The echo update runs in skip_to_day (simpler call stack) and the
-                    // frontend falls back to fetching GauntletEchoes directly.
+                    // Gauntlet echo combat is resolved in trigger_boss_fight (separate IX)
+                    // to avoid BPF stack overflow — move_player's frame is too deep after
+                    // RevealRadius + DiscoverWaypoints + UpdateEnemies CPIs.
                 } else if game_state.run_mode == RunMode::Duel
                     && game_state.week >= game_state.max_weeks
                 {
@@ -2440,29 +2421,49 @@ pub mod gameplay_state {
             game_state.boss_fight_ready,
             GameplayStateError::BossFightNotReady
         );
-        require!(
-            game_state.run_mode != RunMode::Gauntlet,
-            GameplayStateError::GauntletRunNotActive
-        );
 
-        let vrf = extract_gameplay_vrf(&ctx.accounts.gameplay_vrf_state, &game_state.session)?;
-        let vrf_ref = vrf.as_ref().map(|(r, n)| (r, *n));
-        let player_won = resolve_boss_fight(
-            game_state,
-            ctx.accounts.generated_map.seed,
-            inventory,
-            inventory_info,
-            &ctx.accounts.gameplay_authority,
-            player_inventory_program,
-            ctx.bumps.gameplay_authority,
-            vrf_ref,
-            ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info()).as_ref(),
-            Some(&ctx.accounts.game_session.to_account_info()),
-            ctx.accounts.map_generator_program.as_ref().map(|p| p.to_account_info()).as_ref(),
-            None, // gauntlet_echoes — trigger_boss_fight rejects gauntlet mode
-        )?;
-        if !player_won {
-            return Ok(());
+        if game_state.run_mode == RunMode::Gauntlet
+            && !should_resolve_weekly_boss(game_state.run_mode, game_state.week)
+        {
+            // Gauntlet echo combat (weeks 1-2): resolved here instead of inline in
+            // move_player to avoid BPF stack overflow.
+            let ge = ctx.accounts.gauntlet_echoes.as_ref()
+                .ok_or(GameplayStateError::GauntletNotInitialized)?;
+            let player_won = resolve_gauntlet_echo_inline(
+                game_state,
+                ge,
+                inventory,
+                inventory_info,
+                &ctx.accounts.gameplay_authority,
+                player_inventory_program,
+                ctx.bumps.gameplay_authority,
+                ctx.accounts.generated_map.seed,
+            )?;
+            if !player_won {
+                return Ok(());
+            }
+        } else {
+            // Campaign, Duel, and Gauntlet week 3+ boss fights
+            let vrf = extract_gameplay_vrf(&ctx.accounts.gameplay_vrf_state, &game_state.session)?;
+            let vrf_ref = vrf.as_ref().map(|(r, n)| (r, *n));
+            let ge_ref = ctx.accounts.gauntlet_echoes.as_deref();
+            let player_won = resolve_boss_fight(
+                game_state,
+                ctx.accounts.generated_map.seed,
+                inventory,
+                inventory_info,
+                &ctx.accounts.gameplay_authority,
+                player_inventory_program,
+                ctx.bumps.gameplay_authority,
+                vrf_ref,
+                ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info()).as_ref(),
+                Some(&ctx.accounts.game_session.to_account_info()),
+                ctx.accounts.map_generator_program.as_ref().map(|p| p.to_account_info()).as_ref(),
+                ge_ref,
+            )?;
+            if !player_won {
+                return Ok(());
+            }
         }
 
         if let Some(enemy_idx) =
@@ -3298,6 +3299,7 @@ fn preprocess_enemy_effects(
     base_effects
 }
 
+#[inline(never)]
 fn resolve_enemy_combat(
     game_state: &mut GameState,
     inventory: &PlayerInventory,
@@ -3390,6 +3392,7 @@ fn resolve_enemy_combat(
     }
 }
 
+#[inline(never)]
 #[allow(clippy::too_many_arguments)]
 fn resolve_boss_fight<'info>(
     game_state: &mut GameState,
@@ -3576,6 +3579,7 @@ fn resolve_boss_fight<'info>(
     }
 }
 
+#[inline(never)]
 fn resolve_gauntlet_echo_inline<'info>(
     game_state: &mut GameState,
     gauntlet_echoes: &GauntletEchoes,
@@ -3611,7 +3615,7 @@ fn resolve_gauntlet_echo_inline<'info>(
     let echo_combatant = build_full_hp_combatant(&echo_stats, &all_echo_effects);
     let echo_effects = strip_baked_battle_start_stat_effects(all_echo_effects);
 
-    let outcome = resolve_pvp_combat_annotated_with_both_gold(
+    let outcome = resolve_pvp_combat_outcome_only(
         player_input,
         echo_combatant,
         player_effects,
@@ -5433,6 +5437,9 @@ pub struct TriggerBossFight<'info> {
 
     /// Optional map-generator program for SessionDiscovery CPI.
     pub map_generator_program: Option<Program<'info, map_generator::program::MapGenerator>>,
+
+    /// Optional GauntletEchoes for gauntlet echo resolution.
+    pub gauntlet_echoes: Option<Account<'info, GauntletEchoes>>,
 
     pub player: Signer<'info>,
 }

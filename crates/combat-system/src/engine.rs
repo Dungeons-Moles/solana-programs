@@ -221,6 +221,7 @@ pub fn execute_strikes(
         gold_change,
         log,
         false,
+        false,
     )
 }
 
@@ -242,6 +243,7 @@ pub fn execute_strikes_with_armor_override(
     gold_change: &mut i16,
     log: &mut Vec<CombatLogEntry>,
     ignore_defender_armor: bool,
+    skip_log: bool,
 ) -> (i16, i16) {
     let mut total_hp_damage: i16 = 0;
 
@@ -261,6 +263,7 @@ pub fn execute_strikes_with_armor_override(
             enemy_gold,
             gold_change,
             log,
+            skip_log,
         );
 
         let mut strike_atk = attacker_stats.atk;
@@ -301,7 +304,7 @@ pub fn execute_strikes_with_armor_override(
             if !contributions.is_empty() {
                 entry = entry.with_contributions(contributions.clone());
             }
-            log.push(entry);
+            crate::log_push!(log, skip_log, entry);
         }
 
         // Log HP damage if any (this is the "attack" that got through armor)
@@ -313,7 +316,7 @@ pub fn execute_strikes_with_armor_override(
             if !contributions.is_empty() {
                 entry = entry.with_contributions(contributions.clone());
             }
-            log.push(entry);
+            crate::log_push!(log, skip_log, entry);
         }
 
         // Trigger OnHit effects if any damage was dealt (armor or HP)
@@ -357,6 +360,7 @@ pub fn execute_strikes_with_armor_override(
                 enemy_gold,
                 gold_change,
                 log,
+                skip_log,
             );
             restore_suppressed_flags(triggered_flags, suppressed_execution_emblem);
 
@@ -399,6 +403,7 @@ pub fn execute_strikes_with_armor_override(
                     enemy_gold,
                     gold_change,
                     log,
+                    skip_log,
                 );
                 restore_suppressed_flags(triggered_flags, suppressed_execution_emblem);
 
@@ -426,6 +431,7 @@ pub fn execute_strikes_with_armor_override(
                 enemy_gold,
                 gold_change,
                 log,
+                skip_log,
             );
 
             // Check if rust was applied to defender (for OnApplyRust)
@@ -450,6 +456,7 @@ pub fn execute_strikes_with_armor_override(
                     enemy_gold,
                     gold_change,
                     log,
+                    skip_log,
                 );
             }
 
@@ -470,6 +477,7 @@ pub fn execute_strikes_with_armor_override(
                     enemy_gold,
                     gold_change,
                     log,
+                    skip_log,
                 );
             }
 
@@ -491,6 +499,7 @@ pub fn execute_strikes_with_armor_override(
                     enemy_gold,
                     gold_change,
                     log,
+                    skip_log,
                 );
             }
 
@@ -511,6 +520,7 @@ pub fn execute_strikes_with_armor_override(
                 enemy_gold,
                 gold_change,
                 log,
+                skip_log,
             );
         }
 
@@ -526,13 +536,15 @@ pub fn execute_strikes_with_armor_override(
             );
             let shrapnel_damage = old_attacker_hp - attacker_stats.hp;
             if shrapnel_damage > 0 {
-                log.push(
+                crate::log_push!(
+                    log,
+                    skip_log,
                     CombatLogEntry::shrapnel_retaliation(
                         turn,
-                        is_player_attacking, // The attacker takes the damage
+                        is_player_attacking,
                         shrapnel_damage,
                     )
-                    .with_source(shrapnel_source()),
+                    .with_source(shrapnel_source())
                 );
             }
         }

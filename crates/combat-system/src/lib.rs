@@ -1,5 +1,17 @@
 use anchor_lang::prelude::*;
 
+/// Conditionally push a combat log entry. When `skip_log` is true the push is
+/// elided entirely, avoiding the heap allocation that would otherwise happen
+/// inside Solana's bump allocator (which never frees).
+#[macro_export]
+macro_rules! log_push {
+    ($log:expr, $skip:expr, $entry:expr) => {
+        if !$skip {
+            $log.push($entry);
+        }
+    };
+}
+
 pub mod constants;
 pub mod effects;
 pub mod engine;
@@ -84,22 +96,30 @@ fn is_enemy_boss(combat_state: &CombatState, boss_id: [u8; 12]) -> bool {
     combat_state.enemy_boss_id == Some(boss_id)
 }
 
-fn apply_boss_special_battle_start(combat_state: &mut CombatState, log: &mut Vec<CombatLogEntry>) {
+fn apply_boss_special_battle_start(
+    combat_state: &mut CombatState,
+    log: &mut Vec<CombatLogEntry>,
+    skip_log: bool,
+) {
     if is_enemy_boss(combat_state, BOSS_GILDED_DEVOURER) {
         let gained_armor =
             i16::try_from((combat_state.player_gold / 3).min(12)).unwrap_or(i16::MAX);
         if gained_armor > 0 {
             combat_state.enemy.arm = combat_state.enemy.arm.saturating_add(gained_armor);
-            log.push(CombatLogEntry::armor_change(
-                combat_state.turn,
-                false,
-                gained_armor,
-            ));
+            log_push!(
+                log,
+                skip_log,
+                CombatLogEntry::armor_change(combat_state.turn, false, gained_armor,)
+            );
         }
     }
 }
 
-fn apply_boss_turn_start_overrides(combat_state: &mut CombatState, log: &mut Vec<CombatLogEntry>) {
+fn apply_boss_turn_start_overrides(
+    combat_state: &mut CombatState,
+    log: &mut Vec<CombatLogEntry>,
+    skip_log: bool,
+) {
     if combat_state.turn == 1
         && is_enemy_boss(combat_state, BOSS_MAD_MINER)
         && combat_state.enemy.dig > combat_state.player.dig
@@ -114,16 +134,19 @@ fn apply_boss_turn_start_overrides(combat_state: &mut CombatState, log: &mut Vec
         && combat_state.player.hp > 0
     {
         combat_state.player.status.bleed = combat_state.player.status.bleed.saturating_add(2);
-        log.push(CombatLogEntry::apply_status(
-            combat_state.turn,
-            true,
-            STATUS_BLEED,
-            2,
-        ));
+        log_push!(
+            log,
+            skip_log,
+            CombatLogEntry::apply_status(combat_state.turn, true, STATUS_BLEED, 2,)
+        );
     }
 }
 
-fn apply_threshold_boss_transitions(combat_state: &mut CombatState, log: &mut Vec<CombatLogEntry>) {
+fn apply_threshold_boss_transitions(
+    combat_state: &mut CombatState,
+    log: &mut Vec<CombatLogEntry>,
+    skip_log: bool,
+) {
     if !is_enemy_boss(combat_state, BOSS_ELDRITCH_MOLE) {
         return;
     }
@@ -135,7 +158,11 @@ fn apply_threshold_boss_transitions(combat_state: &mut CombatState, log: &mut Ve
     if !combat_state.enemy.has_flag(Combatant::PHASE_ONE_TRIGGERED) && hp_pct <= 75 {
         combat_state.enemy.set_flag(Combatant::PHASE_ONE_TRIGGERED);
         combat_state.enemy.arm = combat_state.enemy.arm.saturating_add(6);
-        log.push(CombatLogEntry::armor_change(combat_state.turn, false, 6));
+        log_push!(
+            log,
+            skip_log,
+            CombatLogEntry::armor_change(combat_state.turn, false, 6)
+        );
     }
 
     if !combat_state.enemy.has_flag(Combatant::PHASE_TWO_TRIGGERED) && hp_pct <= 50 {
@@ -164,6 +191,7 @@ fn handle_enemy_reflection_depleted_transition(
     reflection_before: u8,
     reflection_after: u8,
     log: &mut Vec<CombatLogEntry>,
+    skip_log: bool,
 ) {
     if !is_enemy_boss(combat_state, BOSS_CRYSTAL_MIMIC)
         || combat_state.enemy.has_flag(Combatant::REFLECTION_DEPLETED)
@@ -175,11 +203,11 @@ fn handle_enemy_reflection_depleted_transition(
 
     combat_state.enemy.set_flag(Combatant::REFLECTION_DEPLETED);
     *enemy_hp = enemy_hp.saturating_sub(2);
-    log.push(CombatLogEntry::non_weapon_damage(
-        combat_state.turn,
-        false,
-        2,
-    ));
+    log_push!(
+        log,
+        skip_log,
+        CombatLogEntry::non_weapon_damage(combat_state.turn, false, 2,)
+    );
 }
 
 fn capture_pvp_tie_snapshot(combat_state: &CombatState) -> PvpTieSnapshot {
@@ -256,13 +284,16 @@ pub fn resolve_combat(
     player_effects: Vec<ItemEffect>,
     enemy_effects: Vec<ItemEffect>,
 ) -> Result<CombatOutcome> {
-    resolve_combat_annotated_with_both_gold(
+    resolve_combat_annotated_with_both_gold_and_boss(
         player_stats,
         enemy_stats,
         annotate_effects(player_effects),
         annotate_effects(enemy_effects),
         0,
         0,
+        None,
+        None,
+        false,
     )
 }
 
@@ -273,13 +304,16 @@ pub fn resolve_combat_with_player_gold(
     enemy_effects: Vec<ItemEffect>,
     player_start_gold: u16,
 ) -> Result<CombatOutcome> {
-    resolve_combat_annotated_with_both_gold(
+    resolve_combat_annotated_with_both_gold_and_boss(
         player_stats,
         enemy_stats,
         annotate_effects(player_effects),
         annotate_effects(enemy_effects),
         player_start_gold,
         0,
+        None,
+        None,
+        false,
     )
 }
 
@@ -300,6 +334,7 @@ pub fn resolve_boss_combat_with_player_gold(
         0,
         Some(boss_id),
         None,
+        false,
     )
 }
 
@@ -320,6 +355,7 @@ pub fn resolve_combat_with_both_gold(
         enemy_start_gold,
         None,
         None,
+        false,
     )
 }
 
@@ -340,6 +376,7 @@ pub fn resolve_combat_annotated_with_both_gold(
         enemy_start_gold,
         None,
         None,
+        false,
     )
 }
 
@@ -361,6 +398,33 @@ pub fn resolve_pvp_combat_annotated_with_both_gold(
         enemy_start_gold,
         None,
         Some(final_tie_player_wins),
+        false,
+    )
+}
+
+/// Resolve PvP combat returning only the outcome (win/loss, final HP, turns).
+/// The combat log is not populated, which avoids heap allocations that would
+/// otherwise cause OOM on Solana's 32 KB BPF heap during gauntlet echo combat
+/// with full gear.
+pub fn resolve_pvp_combat_outcome_only(
+    player_stats: CombatantInput,
+    enemy_stats: CombatantInput,
+    player_effects: Vec<AnnotatedItemEffect>,
+    enemy_effects: Vec<AnnotatedItemEffect>,
+    player_start_gold: u16,
+    enemy_start_gold: u16,
+    final_tie_player_wins: bool,
+) -> Result<CombatOutcome> {
+    resolve_combat_annotated_with_both_gold_and_boss(
+        player_stats,
+        enemy_stats,
+        player_effects,
+        enemy_effects,
+        player_start_gold,
+        enemy_start_gold,
+        None,
+        Some(final_tie_player_wins),
+        true,
     )
 }
 
@@ -381,6 +445,7 @@ pub fn resolve_boss_combat_annotated_with_player_gold(
         0,
         Some(boss_id),
         None,
+        false,
     )
 }
 
@@ -393,6 +458,7 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
     enemy_start_gold: u16,
     enemy_boss_id: Option<[u8; 12]>,
     pvp_final_tie_player_wins: Option<bool>,
+    skip_log: bool,
 ) -> Result<CombatOutcome> {
     validate_combatant(&player_stats)?;
     validate_combatant(&enemy_stats)?;
@@ -408,10 +474,14 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
         .map(|entry| entry.value)
         .sum();
 
-    // Initialize combat log (pre-allocate for typical combat length).
-    // Keep capacity modest — Solana's bump allocator never frees, so
-    // over-allocating wastes heap permanently.
-    let mut log: Vec<CombatLogEntry> = Vec::with_capacity(32);
+    // Initialize combat log. When skip_log is true we avoid all heap
+    // allocation for the log — this prevents OOM on Solana's 32 KB BPF
+    // heap during gauntlet echo combat with full gear.
+    let mut log: Vec<CombatLogEntry> = if skip_log {
+        Vec::new()
+    } else {
+        Vec::with_capacity(32)
+    };
 
     let mut combat_state = CombatState {
         turn: 1,
@@ -499,7 +569,7 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
     let mut pvp_tie_snapshot =
         pvp_final_tie_player_wins.map(|_| capture_pvp_tie_snapshot(&combat_state));
 
-    apply_boss_special_battle_start(&mut combat_state, &mut log);
+    apply_boss_special_battle_start(&mut combat_state, &mut log, skip_log);
 
     apply_status_effects(
         &mut player_effects,
@@ -509,6 +579,7 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
         &mut player_triggered,
         &mut enemy_triggered,
         &mut log,
+        skip_log,
     );
 
     let mut turn = combat_state.turn;
@@ -523,7 +594,7 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
         combat_state.player_temporary_exposed = false;
         combat_state.enemy_temporary_exposed = false;
 
-        apply_boss_turn_start_overrides(&mut combat_state, &mut log);
+        apply_boss_turn_start_overrides(&mut combat_state, &mut log, skip_log);
         if let Some((player_won, resolution_type)) = apply_ordered_start_of_turn_effects(
             &mut player_effects,
             &mut enemy_effects,
@@ -533,8 +604,9 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
             &mut log,
             pvp_final_tie_player_wins,
             &mut pvp_tie_snapshot,
+            skip_log,
         ) {
-            release_stored_damage_on_battle_end(&mut combat_state, &mut log);
+            release_stored_damage_on_battle_end(&mut combat_state, &mut log, skip_log);
             return Ok(CombatOutcome {
                 player_won,
                 final_player_hp: combat_state.player.hp,
@@ -556,6 +628,7 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
             &mut log,
             pvp_final_tie_player_wins,
             &mut pvp_tie_snapshot,
+            skip_log,
         )?;
 
         apply_status_effects(
@@ -566,6 +639,7 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
             &mut player_triggered,
             &mut enemy_triggered,
             &mut log,
+            skip_log,
         );
         apply_status_effects(
             &mut player_effects,
@@ -575,6 +649,7 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
             &mut player_triggered,
             &mut enemy_triggered,
             &mut log,
+            skip_log,
         );
 
         if let Some((player_won, resolution_type)) = resolve_if_ended(
@@ -583,7 +658,7 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
             pvp_final_tie_player_wins,
             pvp_tie_snapshot,
         ) {
-            release_stored_damage_on_battle_end(&mut combat_state, &mut log);
+            release_stored_damage_on_battle_end(&mut combat_state, &mut log, skip_log);
             return Ok(CombatOutcome {
                 player_won,
                 final_player_hp: combat_state.player.hp,
@@ -604,6 +679,7 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
             &mut log,
             pvp_final_tie_player_wins,
             &mut pvp_tie_snapshot,
+            skip_log,
         )?;
 
         apply_status_effects(
@@ -614,9 +690,10 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
             &mut player_triggered,
             &mut enemy_triggered,
             &mut log,
+            skip_log,
         );
 
-        log_status_stacks(&combat_state, &mut log);
+        log_status_stacks(&combat_state, &mut log, skip_log);
 
         if let Some((player_won, resolution_type)) = resolve_if_ended(
             &combat_state,
@@ -624,7 +701,7 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
             pvp_final_tie_player_wins,
             pvp_tie_snapshot,
         ) {
-            release_stored_damage_on_battle_end(&mut combat_state, &mut log);
+            release_stored_damage_on_battle_end(&mut combat_state, &mut log, skip_log);
             return Ok(CombatOutcome {
                 player_won,
                 final_player_hp: combat_state.player.hp,
@@ -649,7 +726,7 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
                 ResolutionType::FailsafeEnemyWin
             };
 
-            release_stored_damage_on_battle_end(&mut combat_state, &mut log);
+            release_stored_damage_on_battle_end(&mut combat_state, &mut log, skip_log);
             return Ok(CombatOutcome {
                 player_won,
                 final_player_hp: combat_state.player.hp,
@@ -693,6 +770,7 @@ fn execute_turn(
     log: &mut Vec<CombatLogEntry>,
     pvp_final_tie_player_wins: Option<bool>,
     pvp_tie_snapshot: &mut Option<PvpTieSnapshot>,
+    skip_log: bool,
 ) -> Result<(i16, i16)> {
     apply_sudden_death(combat_state, turn)?;
 
@@ -757,6 +835,7 @@ fn execute_turn(
             &mut combat_state.gold_change,
             log,
             combat_state.enemy_temporary_exposed,
+            skip_log,
         );
         enemy_stats.hp = enemy_hp;
         player_damage_dealt = damage;
@@ -778,10 +857,11 @@ fn execute_turn(
             enemy_status_before_phase.reflection,
             enemy_status.reflection,
             log,
+            skip_log,
         );
         combat_state.enemy.hp = enemy_stats.hp;
         combat_state.enemy.arm = enemy_stats.arm;
-        apply_threshold_boss_transitions(combat_state, log);
+        apply_threshold_boss_transitions(combat_state, log, skip_log);
         enemy_stats.hp = combat_state.enemy.hp;
         enemy_stats.arm = combat_state.enemy.arm;
         enemy_strikes = apply_chill_to_strikes(
@@ -824,6 +904,7 @@ fn execute_turn(
                 &mut combat_state.gold_change,
                 log,
                 combat_state.player_temporary_exposed,
+                skip_log,
             );
             player_stats.hp = player_hp;
             enemy_damage_dealt = damage;
@@ -844,6 +925,7 @@ fn execute_turn(
                 enemy_status_before_phase.reflection,
                 enemy_status.reflection,
                 log,
+                skip_log,
             );
         }
     } else {
@@ -868,6 +950,7 @@ fn execute_turn(
             &mut combat_state.gold_change,
             log,
             combat_state.player_temporary_exposed,
+            skip_log,
         );
         player_stats.hp = player_hp;
         enemy_damage_dealt = damage;
@@ -887,6 +970,7 @@ fn execute_turn(
             enemy_status_before_phase.reflection,
             enemy_status.reflection,
             log,
+            skip_log,
         );
 
         if player_stats.hp > 0 {
@@ -915,6 +999,7 @@ fn execute_turn(
                 &mut combat_state.gold_change,
                 log,
                 combat_state.enemy_temporary_exposed,
+                skip_log,
             );
             enemy_stats.hp = enemy_hp;
             player_damage_dealt = damage;
@@ -935,10 +1020,11 @@ fn execute_turn(
                 enemy_status_before_phase.reflection,
                 enemy_status.reflection,
                 log,
+                skip_log,
             );
             combat_state.enemy.hp = enemy_stats.hp;
             combat_state.enemy.arm = enemy_stats.arm;
-            apply_threshold_boss_transitions(combat_state, log);
+            apply_threshold_boss_transitions(combat_state, log, skip_log);
             enemy_stats.hp = combat_state.enemy.hp;
             enemy_stats.arm = combat_state.enemy.arm;
         }
@@ -961,6 +1047,7 @@ fn execute_turn(
         log,
         pvp_final_tie_player_wins,
         pvp_tie_snapshot,
+        skip_log,
     );
     check_first_time_exposed(
         combat_state,
@@ -971,6 +1058,7 @@ fn execute_turn(
         log,
         pvp_final_tie_player_wins,
         pvp_tie_snapshot,
+        skip_log,
     );
 
     Ok((player_damage_dealt, enemy_damage_dealt))
@@ -988,6 +1076,7 @@ fn check_first_time_wounded(
     log: &mut Vec<CombatLogEntry>,
     pvp_final_tie_player_wins: Option<bool>,
     pvp_tie_snapshot: &mut Option<PvpTieSnapshot>,
+    skip_log: bool,
 ) {
     let turn = combat_state.turn;
     let (player_acts_first, _) =
@@ -1019,6 +1108,7 @@ fn check_first_time_wounded(
             &mut combat_state.enemy_gold,
             &mut combat_state.gold_change,
             log,
+            skip_log,
         );
 
         combat_state.player.apply_stats(&player_stats);
@@ -1053,6 +1143,7 @@ fn check_first_time_wounded(
             &mut combat_state.enemy_gold,
             &mut combat_state.gold_change,
             log,
+            skip_log,
         );
 
         if is_enemy_boss(combat_state, BOSS_POWDER_KEG_BARON) {
@@ -1077,6 +1168,7 @@ fn check_first_time_exposed(
     log: &mut Vec<CombatLogEntry>,
     pvp_final_tie_player_wins: Option<bool>,
     pvp_tie_snapshot: &mut Option<PvpTieSnapshot>,
+    skip_log: bool,
 ) {
     let turn = combat_state.turn;
     let (player_acts_first, _) =
@@ -1106,12 +1198,13 @@ fn check_first_time_exposed(
             &mut combat_state.enemy_gold,
             &mut combat_state.gold_change,
             log,
+            skip_log,
         );
 
         if player_stats.stored_damage > 0 && enemy_stats.hp > 0 {
             let damage = player_stats.stored_damage;
             enemy_stats.hp = enemy_stats.hp.saturating_sub(damage);
-            log.push(CombatLogEntry::non_weapon_damage(turn, false, damage));
+            log_push!(log, skip_log, CombatLogEntry::non_weapon_damage(turn, false, damage));
             player_stats.stored_damage = 0;
         }
 
@@ -1145,6 +1238,7 @@ fn check_first_time_exposed(
             &mut combat_state.enemy_gold,
             &mut combat_state.gold_change,
             log,
+            skip_log,
         );
 
         if is_enemy_boss(combat_state, BOSS_FROSTBOUND_LEVIATHAN) {
@@ -1154,7 +1248,7 @@ fn check_first_time_exposed(
         if enemy_stats.stored_damage > 0 && player_stats.hp > 0 {
             let damage = enemy_stats.stored_damage;
             player_stats.hp = player_stats.hp.saturating_sub(damage);
-            log.push(CombatLogEntry::non_weapon_damage(turn, true, damage));
+            log_push!(log, skip_log, CombatLogEntry::non_weapon_damage(turn, true, damage));
             enemy_stats.stored_damage = 0;
         }
 
@@ -1201,6 +1295,7 @@ fn apply_end_of_turn_effects(
     log: &mut Vec<CombatLogEntry>,
     pvp_final_tie_player_wins: Option<bool>,
     pvp_tie_snapshot: &mut Option<PvpTieSnapshot>,
+    skip_log: bool,
 ) -> Result<()> {
     let turn = combat_state.turn;
     let player_shrapnel_before_decay = combat_state.player.status.shrapnel;
@@ -1214,7 +1309,7 @@ fn apply_end_of_turn_effects(
             process_rust_decay(combat_state.player.status.rust, combat_state.player.arm);
         let arm_lost = old_arm - combat_state.player.arm;
         if arm_lost > 0 {
-            log.push(CombatLogEntry::armor_change(turn, true, -arm_lost));
+            log_push!(log, skip_log, CombatLogEntry::armor_change(turn, true, -arm_lost));
         }
     }
     if combat_state.enemy.status.rust > 0 {
@@ -1223,7 +1318,7 @@ fn apply_end_of_turn_effects(
             process_rust_decay(combat_state.enemy.status.rust, combat_state.enemy.arm);
         let arm_lost = old_arm - combat_state.enemy.arm;
         if arm_lost > 0 {
-            log.push(CombatLogEntry::armor_change(turn, false, -arm_lost));
+            log_push!(log, skip_log, CombatLogEntry::armor_change(turn, false, -arm_lost));
         }
     }
 
@@ -1237,12 +1332,11 @@ fn apply_end_of_turn_effects(
         );
         let damage = old_hp - combat_state.player.hp;
         if damage > 0 {
-            log.push(CombatLogEntry::status_damage(
-                turn,
-                true,
-                damage,
-                STATUS_BLEED,
-            ));
+            log_push!(
+                log,
+                skip_log,
+                CombatLogEntry::status_damage(turn, true, damage, STATUS_BLEED,)
+            );
 
             let mut enemy_stats = combat_state.enemy.to_stats();
             let mut enemy_status = combat_state.enemy.status;
@@ -1264,6 +1358,7 @@ fn apply_end_of_turn_effects(
                 &mut combat_state.enemy_gold,
                 &mut combat_state.gold_change,
                 log,
+                skip_log,
             );
 
             combat_state.enemy.apply_stats(&enemy_stats);
@@ -1282,12 +1377,11 @@ fn apply_end_of_turn_effects(
         );
         let damage = old_hp - combat_state.enemy.hp;
         if damage > 0 {
-            log.push(CombatLogEntry::status_damage(
-                turn,
-                false,
-                damage,
-                STATUS_BLEED,
-            ));
+            log_push!(
+                log,
+                skip_log,
+                CombatLogEntry::status_damage(turn, false, damage, STATUS_BLEED,)
+            );
 
             let mut player_stats = combat_state.player.to_stats();
             let mut player_status = combat_state.player.status;
@@ -1309,6 +1403,7 @@ fn apply_end_of_turn_effects(
                 &mut combat_state.enemy_gold,
                 &mut combat_state.gold_change,
                 log,
+                skip_log,
             );
 
             combat_state.player.apply_stats(&player_stats);
@@ -1391,6 +1486,7 @@ fn resolve_if_ended(
 fn release_stored_damage_on_battle_end(
     combat_state: &mut CombatState,
     log: &mut Vec<CombatLogEntry>,
+    skip_log: bool,
 ) {
     let turn = combat_state.turn;
 
@@ -1398,14 +1494,14 @@ fn release_stored_damage_on_battle_end(
         let damage = combat_state.player.stored_damage;
         combat_state.enemy.hp = combat_state.enemy.hp.saturating_sub(damage);
         combat_state.player.stored_damage = 0;
-        log.push(CombatLogEntry::non_weapon_damage(turn, false, damage));
+        log_push!(log, skip_log, CombatLogEntry::non_weapon_damage(turn, false, damage));
     }
 
     if combat_state.enemy.stored_damage > 0 && combat_state.player.hp > 0 {
         let damage = combat_state.enemy.stored_damage;
         combat_state.player.hp = combat_state.player.hp.saturating_sub(damage);
         combat_state.enemy.stored_damage = 0;
-        log.push(CombatLogEntry::non_weapon_damage(turn, true, damage));
+        log_push!(log, skip_log, CombatLogEntry::non_weapon_damage(turn, true, damage));
     }
 }
 
@@ -1417,6 +1513,7 @@ fn apply_status_effects(
     player_triggered: &mut [bool],
     enemy_triggered: &mut [bool],
     log: &mut Vec<CombatLogEntry>,
+    skip_log: bool,
 ) {
     let (player_acts_first, _) =
         engine::determine_turn_order(combat_state.player.spd, combat_state.enemy.spd);
@@ -1429,6 +1526,7 @@ fn apply_status_effects(
         player_triggered,
         player_acts_first,
         log,
+        skip_log,
     );
     process_phase_effects(
         enemy_effects,
@@ -1438,6 +1536,7 @@ fn apply_status_effects(
         enemy_triggered,
         !player_acts_first, // Enemy acts first if player doesn't
         log,
+        skip_log,
     );
 }
 
@@ -1462,6 +1561,7 @@ fn apply_start_of_turn_effects_for_side(
     owner_acts_first: bool,
     triggered_flags: &mut [bool],
     log: &mut Vec<CombatLogEntry>,
+    skip_log: bool,
 ) {
     if is_first_turn {
         process_phase_effects(
@@ -1472,6 +1572,7 @@ fn apply_start_of_turn_effects_for_side(
             triggered_flags,
             owner_acts_first,
             log,
+            skip_log,
         );
         process_phase_effects(
             effects,
@@ -1481,6 +1582,7 @@ fn apply_start_of_turn_effects_for_side(
             triggered_flags,
             owner_acts_first,
             log,
+            skip_log,
         );
         process_phase_effects(
             effects,
@@ -1490,6 +1592,7 @@ fn apply_start_of_turn_effects_for_side(
             triggered_flags,
             owner_acts_first,
             log,
+            skip_log,
         );
     }
 
@@ -1501,6 +1604,7 @@ fn apply_start_of_turn_effects_for_side(
         triggered_flags,
         owner_acts_first,
         log,
+        skip_log,
     );
 
     if combat_state.turn >= 5 {
@@ -1509,21 +1613,21 @@ fn apply_start_of_turn_effects_for_side(
                 let damage = combat_state.player.stored_damage;
                 combat_state.enemy.hp = combat_state.enemy.hp.saturating_sub(damage);
                 combat_state.player.stored_damage = 0;
-                log.push(CombatLogEntry::non_weapon_damage(
-                    combat_state.turn,
-                    false,
-                    damage,
-                ));
+                log_push!(
+                    log,
+                    skip_log,
+                    CombatLogEntry::non_weapon_damage(combat_state.turn, false, damage,)
+                );
             }
         } else if combat_state.enemy.stored_damage > 0 && combat_state.player.hp > 0 {
             let damage = combat_state.enemy.stored_damage;
             combat_state.player.hp = combat_state.player.hp.saturating_sub(damage);
             combat_state.enemy.stored_damage = 0;
-            log.push(CombatLogEntry::non_weapon_damage(
-                combat_state.turn,
-                true,
-                damage,
-            ));
+            log_push!(
+                log,
+                skip_log,
+                CombatLogEntry::non_weapon_damage(combat_state.turn, true, damage,)
+            );
         }
     }
 
@@ -1536,6 +1640,7 @@ fn apply_start_of_turn_effects_for_side(
             triggered_flags,
             owner_acts_first,
             log,
+            skip_log,
         );
     }
 
@@ -1550,6 +1655,7 @@ fn apply_start_of_turn_effects_for_side(
         triggered_flags,
         owner_acts_first,
         log,
+        skip_log,
     );
 
     for turns in countdown_turns_for_effects(effects) {
@@ -1561,6 +1667,7 @@ fn apply_start_of_turn_effects_for_side(
             triggered_flags,
             owner_acts_first,
             log,
+            skip_log,
         );
     }
 }
@@ -1574,6 +1681,7 @@ fn apply_ordered_start_of_turn_effects(
     log: &mut Vec<CombatLogEntry>,
     pvp_final_tie_player_wins: Option<bool>,
     pvp_tie_snapshot: &mut Option<PvpTieSnapshot>,
+    skip_log: bool,
 ) -> Option<(bool, ResolutionType)> {
     let (player_acts_first, _) =
         engine::determine_turn_order(combat_state.player.spd, combat_state.enemy.spd);
@@ -1589,6 +1697,7 @@ fn apply_ordered_start_of_turn_effects(
             true,
             player_triggered,
             log,
+            skip_log,
         );
         if let Some(resolution) = resolve_if_ended(
             combat_state,
@@ -1608,6 +1717,7 @@ fn apply_ordered_start_of_turn_effects(
             false,
             enemy_triggered,
             log,
+            skip_log,
         );
         resolve_if_ended(
             combat_state,
@@ -1625,6 +1735,7 @@ fn apply_ordered_start_of_turn_effects(
             true,
             enemy_triggered,
             log,
+            skip_log,
         );
         if let Some(resolution) = resolve_if_ended(
             combat_state,
@@ -1644,6 +1755,7 @@ fn apply_ordered_start_of_turn_effects(
             false,
             player_triggered,
             log,
+            skip_log,
         );
         resolve_if_ended(
             combat_state,
@@ -1654,7 +1766,10 @@ fn apply_ordered_start_of_turn_effects(
     }
 }
 
-fn log_status_stacks(combat_state: &CombatState, log: &mut Vec<CombatLogEntry>) {
+fn log_status_stacks(combat_state: &CombatState, log: &mut Vec<CombatLogEntry>, skip_log: bool) {
+    if skip_log {
+        return;
+    }
     let turn = combat_state.turn;
 
     if combat_state.player.status.chill > 0 {
@@ -1717,6 +1832,7 @@ fn process_phase_effects(
     triggered_flags: &mut [bool],
     owner_acts_first: bool,
     log: &mut Vec<CombatLogEntry>,
+    skip_log: bool,
 ) {
     let (mut working_stats, mut working_status, mut opponent_stats, mut opponent_status) =
         if is_player {
@@ -1753,6 +1869,7 @@ fn process_phase_effects(
         &mut combat_state.enemy_gold,
         &mut combat_state.gold_change,
         log,
+        skip_log,
     );
 
     // Check if rust was applied to opponent (for OnApplyRust)
@@ -1777,6 +1894,7 @@ fn process_phase_effects(
             &mut combat_state.enemy_gold,
             &mut combat_state.gold_change,
             log,
+            skip_log,
         );
     }
 
@@ -1797,6 +1915,7 @@ fn process_phase_effects(
             &mut combat_state.enemy_gold,
             &mut combat_state.gold_change,
             log,
+            skip_log,
         );
 
         let combatant = if is_player {
@@ -1827,6 +1946,7 @@ fn process_phase_effects(
                 &mut combat_state.enemy_gold,
                 &mut combat_state.gold_change,
                 log,
+                skip_log,
             );
         }
     }
@@ -1865,6 +1985,7 @@ fn process_phase_effects(
             opponent_status_before.reflection,
             opponent_status.reflection,
             log,
+            skip_log,
         );
         combat_state.enemy.hp = opponent_stats.hp;
     } else {
@@ -1889,6 +2010,7 @@ fn process_phase_effects(
             owner_status_before.reflection,
             working_status.reflection,
             log,
+            skip_log,
         );
         combat_state.enemy.hp = working_stats.hp;
     }

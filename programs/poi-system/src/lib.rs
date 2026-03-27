@@ -2518,7 +2518,7 @@ pub mod poi_system {
         **dest.try_borrow_mut_lamports()? += info.lamports();
         **info.try_borrow_mut_lamports()? = 0;
         info.assign(&anchor_lang::system_program::ID);
-        info.realloc(0, false)?;
+        info.resize(0)?;
         Ok(())
     }
 

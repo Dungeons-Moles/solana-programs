@@ -56,8 +56,6 @@ pub const CONSUME_RUN_DISCRIMINATOR: [u8; 8] = [0x6b, 0x65, 0x36, 0x52, 0x84, 0x
 /// (circular dependency). If poi-system's initialize_map_pois instruction changes, this must be updated.
 pub const INITIALIZE_MAP_POIS_DISCRIMINATOR: [u8; 8] =
     [0xa8, 0xec, 0xff, 0x37, 0xee, 0xd2, 0x19, 0xfb];
-pub const DISCOVER_VISIBLE_WAYPOINTS_DISCRIMINATOR: [u8; 8] =
-    [0x3b, 0x26, 0x6a, 0x00, 0x3a, 0xb1, 0x50, 0xfc];
 pub const SESSION_MANAGER_AUTHORITY_SEED: &[u8] = b"session_manager_authority";
 fn local_delegate_config(validator: Option<Pubkey>) -> DelegateConfig {
     DelegateConfig {
@@ -1401,7 +1399,7 @@ pub mod session_manager {
     /// Close orphaned child accounts after force_close_session already freed the session PDA.
     /// Session PDA no longer exists, so we validate via game_state (which stores session_signer
     /// and player). Only closes accounts that are on base layer (owned by their programs).
-    /// Call order: map_pois → game_state (game_state last since others depend on it).
+    /// Call order: map_pois, session_discovery, generated_map, inventory → game_state last.
     pub fn close_orphaned_accounts(ctx: Context<CloseOrphanedAccounts>) -> Result<()> {
         // game_state is the auth source — it stores session_signer (validated via has_one)
         // and player (validated via address constraint on player account).
@@ -1415,6 +1413,39 @@ pub mod session_manager {
                 &ctx.accounts.player,
                 &ctx.accounts.session_signer.to_account_info(),
             )?;
+        }
+
+        // Close session_discovery if on base layer (owned by map-generator)
+        if *ctx.accounts.session_discovery.owner == MAP_GENERATOR_PROGRAM_ID {
+            close_session_discovery_orphaned_cpi(
+                &ctx.accounts.map_generator_program,
+                &ctx.accounts.session_discovery,
+                &ctx.accounts.game_state.to_account_info(),
+                &ctx.accounts.player,
+                &ctx.accounts.session_signer.to_account_info(),
+            )?;
+        }
+
+        // Close generated_map if on base layer (owned by map-generator)
+        if *ctx.accounts.generated_map.owner == MAP_GENERATOR_PROGRAM_ID {
+            close_generated_map_orphaned_cpi(
+                &ctx.accounts.map_generator_program,
+                &ctx.accounts.generated_map,
+                &ctx.accounts.game_state.to_account_info(),
+                &ctx.accounts.player,
+                &ctx.accounts.session_signer.to_account_info(),
+            )?;
+        }
+
+        // Close inventory if on base layer (owned by player-inventory)
+        if *ctx.accounts.inventory.owner == player_inventory::ID {
+            player_inventory::cpi::close_inventory(CpiContext::new(
+                ctx.accounts.player_inventory_program.to_account_info(),
+                player_inventory::cpi::accounts::CloseInventory {
+                    inventory: ctx.accounts.inventory.to_account_info(),
+                    player: ctx.accounts.session_signer.to_account_info(),
+                },
+            ))?;
         }
 
         // Close game_state last (others depend on it for auth)
@@ -2562,6 +2593,21 @@ pub struct CloseOrphanedAccounts<'info> {
     /// CHECK: Owner checked in handler before CPI.
     pub map_pois: UncheckedAccount<'info>,
 
+    /// SessionDiscovery account — may be delegated.
+    #[account(mut)]
+    /// CHECK: Owner checked in handler before CPI.
+    pub session_discovery: UncheckedAccount<'info>,
+
+    /// GeneratedMap account — may be delegated.
+    #[account(mut)]
+    /// CHECK: Owner checked in handler before CPI.
+    pub generated_map: UncheckedAccount<'info>,
+
+    /// Inventory account — may be delegated.
+    #[account(mut)]
+    /// CHECK: Owner checked in handler before CPI.
+    pub inventory: UncheckedAccount<'info>,
+
     /// Player wallet receives rent refunds.
     /// CHECK: Validated by child program CPIs via game_state.player.
     #[account(mut)]
@@ -2575,6 +2621,13 @@ pub struct CloseOrphanedAccounts<'info> {
     #[account(address = POI_SYSTEM_PROGRAM_ID)]
     /// CHECK: POI system program for CPI, validated by address constraint
     pub poi_system_program: UncheckedAccount<'info>,
+
+    #[account(address = MAP_GENERATOR_PROGRAM_ID)]
+    /// CHECK: Map generator program for CPI, validated by address constraint
+    pub map_generator_program: UncheckedAccount<'info>,
+
+    /// CHECK: Player inventory program for CPI, validated by address constraint
+    pub player_inventory_program: Program<'info, PlayerInventory>,
 }
 
 /// Abandon session at any time (user-initiated).
@@ -2793,59 +2846,6 @@ pub struct SessionKeyRotated {
 /// 2. Update gameplay-state's END_SESSION_DISCRIMINATOR constant
 pub const END_SESSION_DISCRIMINATOR: [u8; 8] = [0x0b, 0xf4, 0x3d, 0x9a, 0xd4, 0xf9, 0x0f, 0x42];
 
-/// Validates and extracts VRF randomness from an optional MapVrfState account.
-///
-/// Returns `Some((randomness, nonce))` if VRF is provided and valid.
-/// Returns `None` if no VRF account is provided.
-///
-/// Validates: PDA derivation against map-generator program, discriminator, status == Fulfilled,
-/// and session key match.
-fn extract_map_vrf(
-    map_vrf_account: &Option<UncheckedAccount>,
-    session_key: &Pubkey,
-) -> Result<Option<([u8; 32], u64)>> {
-    use map_generator::state::MapVrfState;
-
-    let account = match map_vrf_account {
-        Some(a) => a,
-        None => return Ok(None),
-    };
-
-    // Validate PDA derivation against map-generator program
-    let (expected_pda, _) = Pubkey::find_program_address(
-        &[MapVrfState::SEED_PREFIX, session_key.as_ref()],
-        &map_generator::ID,
-    );
-    require_keys_eq!(
-        account.key(),
-        expected_pda,
-        SessionManagerError::InvalidMapVrfState
-    );
-
-    // Validate owner is map-generator
-    require!(
-        account.owner == &map_generator::ID,
-        SessionManagerError::InvalidMapVrfState
-    );
-
-    // Deserialize and validate status
-    let data = account.try_borrow_data()?;
-    let mut data_slice: &[u8] = &data;
-    let vrf_state = MapVrfState::try_deserialize(&mut data_slice)
-        .map_err(|_| SessionManagerError::InvalidMapVrfState)?;
-
-    require!(
-        vrf_state.session == *session_key,
-        SessionManagerError::InvalidMapVrfState
-    );
-    require!(
-        vrf_state.status == vrf_rng::VrfStatus::Fulfilled,
-        SessionManagerError::VrfNotFulfilled
-    );
-
-    Ok(Some((vrf_state.randomness, vrf_state.nonce)))
-}
-
 /// Try to extract VRF randomness from gameplay_vrf_state or map_vrf_state (in that order).
 /// Returns 32 bytes of randomness if either VRF account is available and fulfilled,
 /// otherwise returns 32 zero bytes.
@@ -3059,26 +3059,6 @@ fn initialize_map_pois_cpi<'info>(
     )
 }
 
-fn discover_visible_waypoints_cpi<'info>(
-    program: &AccountInfo<'info>,
-    map_pois: &AccountInfo<'info>,
-    game_state: &AccountInfo<'info>,
-    session_signer: &AccountInfo<'info>,
-    visibility_radius: u8,
-) -> Result<()> {
-    invoke_manual_cpi(
-        program,
-        POI_SYSTEM_PROGRAM_ID,
-        &DISCOVER_VISIBLE_WAYPOINTS_DISCRIMINATOR,
-        &[visibility_radius],
-        &[
-            (map_pois, true, false),
-            (game_state, false, false),
-            (session_signer, false, true),
-        ],
-    )
-}
-
 pub const RECORD_RUN_RESULT_CPI_DISCRIMINATOR: [u8; 8] =
     [0x09, 0xaf, 0xf6, 0x09, 0x1f, 0x62, 0x79, 0x45];
 
@@ -3127,6 +3107,10 @@ pub const CLOSE_GAUNTLET_ECHOES_DISCRIMINATOR: [u8; 8] =
 pub const CLOSE_MAP_POIS_VIA_SESSION_SIGNER_DISCRIMINATOR: [u8; 8] =
     [35, 38, 19, 18, 250, 66, 39, 150];
 pub const CLOSE_MAP_POIS_ORPHANED_DISCRIMINATOR: [u8; 8] = [218, 44, 98, 133, 139, 114, 27, 98];
+pub const CLOSE_GENERATED_MAP_ORPHANED_DISCRIMINATOR: [u8; 8] =
+    [0x7e, 0xd6, 0xdf, 0xfd, 0x9c, 0xb4, 0xb3, 0x0e];
+pub const CLOSE_SESSION_DISCOVERY_ORPHANED_DISCRIMINATOR: [u8; 8] =
+    [0x0e, 0x15, 0x4e, 0x08, 0x9e, 0x1e, 0x07, 0x54];
 
 fn close_game_state_via_session_signer_cpi<'info>(
     program: &AccountInfo<'info>,
@@ -3248,6 +3232,48 @@ fn close_map_pois_orphaned_cpi<'info>(
             (game_state, false, false),
             (player, false, false),
             (session_signer, true, true),
+        ],
+    )
+}
+
+fn close_generated_map_orphaned_cpi<'info>(
+    program: &AccountInfo<'info>,
+    generated_map: &AccountInfo<'info>,
+    game_state: &AccountInfo<'info>,
+    player: &AccountInfo<'info>,
+    session_signer: &AccountInfo<'info>,
+) -> Result<()> {
+    invoke_manual_cpi(
+        program,
+        MAP_GENERATOR_PROGRAM_ID,
+        &CLOSE_GENERATED_MAP_ORPHANED_DISCRIMINATOR,
+        &[],
+        &[
+            (generated_map, true, false),
+            (game_state, false, false),
+            (player, true, false),
+            (session_signer, false, true),
+        ],
+    )
+}
+
+fn close_session_discovery_orphaned_cpi<'info>(
+    program: &AccountInfo<'info>,
+    session_discovery: &AccountInfo<'info>,
+    game_state: &AccountInfo<'info>,
+    player: &AccountInfo<'info>,
+    session_signer: &AccountInfo<'info>,
+) -> Result<()> {
+    invoke_manual_cpi(
+        program,
+        MAP_GENERATOR_PROGRAM_ID,
+        &CLOSE_SESSION_DISCOVERY_ORPHANED_DISCRIMINATOR,
+        &[],
+        &[
+            (session_discovery, true, false),
+            (game_state, false, false),
+            (player, true, false),
+            (session_signer, false, true),
         ],
     )
 }
@@ -3444,6 +3470,28 @@ mod tests {
         assert_eq!(
             CLOSE_MAP_POIS_ORPHANED_DISCRIMINATOR, expected,
             "CLOSE_MAP_POIS_ORPHANED_DISCRIMINATOR doesn't match"
+        );
+    }
+
+    #[test]
+    fn test_close_generated_map_orphaned_discriminator() {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(b"global:close_generated_map_orphaned");
+        let expected: [u8; 8] = hash[..8].try_into().unwrap();
+        assert_eq!(
+            CLOSE_GENERATED_MAP_ORPHANED_DISCRIMINATOR, expected,
+            "CLOSE_GENERATED_MAP_ORPHANED_DISCRIMINATOR doesn't match"
+        );
+    }
+
+    #[test]
+    fn test_close_session_discovery_orphaned_discriminator() {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(b"global:close_session_discovery_orphaned");
+        let expected: [u8; 8] = hash[..8].try_into().unwrap();
+        assert_eq!(
+            CLOSE_SESSION_DISCOVERY_ORPHANED_DISCRIMINATOR, expected,
+            "CLOSE_SESSION_DISCOVERY_ORPHANED_DISCRIMINATOR doesn't match"
         );
     }
 

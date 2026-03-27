@@ -554,9 +554,7 @@ pub mod map_generator {
     ) -> Result<()> {
         let discovery = &mut ctx.accounts.session_discovery;
         let len = enemies.len().min(constants::MAX_ENEMIES);
-        for i in 0..len {
-            discovery.discovered_enemies[i] = enemies[i];
-        }
+        discovery.discovered_enemies[..len].copy_from_slice(&enemies[..len]);
         for i in len..constants::MAX_ENEMIES {
             discovery.discovered_enemies[i] = state::DiscoveredEnemy::default();
         }
@@ -634,6 +632,110 @@ pub mod map_generator {
 
         emit!(GeneratedMapClosed {
             session: ctx.accounts.generated_map.session,
+        });
+
+        Ok(())
+    }
+
+    /// Close GeneratedMap when the session PDA no longer exists (orphaned).
+    /// Validates session_signer and player via the GameState account instead.
+    pub fn close_generated_map_orphaned(ctx: Context<CloseGeneratedMapOrphaned>) -> Result<()> {
+        const GAME_STATE_PLAYER_OFFSET: usize = 8;
+        const GAME_STATE_SESSION_SIGNER_OFFSET: usize = 40;
+        const GAME_STATE_SESSION_OFFSET: usize = 72;
+
+        let gs_data = ctx.accounts.game_state.try_borrow_data()?;
+        require!(
+            gs_data.len() >= GAME_STATE_SESSION_OFFSET + 32,
+            MapGeneratorError::InvalidSession
+        );
+
+        let stored_session = Pubkey::from(
+            <[u8; 32]>::try_from(&gs_data[GAME_STATE_SESSION_OFFSET..GAME_STATE_SESSION_OFFSET + 32])
+                .unwrap(),
+        );
+        require!(
+            stored_session == ctx.accounts.generated_map.session,
+            MapGeneratorError::InvalidSession
+        );
+
+        let stored_session_signer = Pubkey::from(
+            <[u8; 32]>::try_from(
+                &gs_data[GAME_STATE_SESSION_SIGNER_OFFSET..GAME_STATE_SESSION_SIGNER_OFFSET + 32],
+            )
+            .unwrap(),
+        );
+        require!(
+            stored_session_signer == ctx.accounts.session_signer.key(),
+            MapGeneratorError::Unauthorized
+        );
+
+        let stored_player = Pubkey::from(
+            <[u8; 32]>::try_from(&gs_data[GAME_STATE_PLAYER_OFFSET..GAME_STATE_PLAYER_OFFSET + 32])
+                .unwrap(),
+        );
+        require!(
+            stored_player == ctx.accounts.player.key(),
+            MapGeneratorError::Unauthorized
+        );
+
+        drop(gs_data);
+
+        emit!(GeneratedMapClosed {
+            session: ctx.accounts.generated_map.session,
+        });
+
+        Ok(())
+    }
+
+    /// Close SessionDiscovery when the session PDA no longer exists (orphaned).
+    /// Validates session_signer and player via the GameState account instead.
+    pub fn close_session_discovery_orphaned(
+        ctx: Context<CloseSessionDiscoveryOrphaned>,
+    ) -> Result<()> {
+        const GAME_STATE_PLAYER_OFFSET: usize = 8;
+        const GAME_STATE_SESSION_SIGNER_OFFSET: usize = 40;
+        const GAME_STATE_SESSION_OFFSET: usize = 72;
+
+        let gs_data = ctx.accounts.game_state.try_borrow_data()?;
+        require!(
+            gs_data.len() >= GAME_STATE_SESSION_OFFSET + 32,
+            MapGeneratorError::InvalidSession
+        );
+
+        let stored_session = Pubkey::from(
+            <[u8; 32]>::try_from(&gs_data[GAME_STATE_SESSION_OFFSET..GAME_STATE_SESSION_OFFSET + 32])
+                .unwrap(),
+        );
+        require!(
+            stored_session == ctx.accounts.session_discovery.session,
+            MapGeneratorError::InvalidSession
+        );
+
+        let stored_session_signer = Pubkey::from(
+            <[u8; 32]>::try_from(
+                &gs_data[GAME_STATE_SESSION_SIGNER_OFFSET..GAME_STATE_SESSION_SIGNER_OFFSET + 32],
+            )
+            .unwrap(),
+        );
+        require!(
+            stored_session_signer == ctx.accounts.session_signer.key(),
+            MapGeneratorError::Unauthorized
+        );
+
+        let stored_player = Pubkey::from(
+            <[u8; 32]>::try_from(&gs_data[GAME_STATE_PLAYER_OFFSET..GAME_STATE_PLAYER_OFFSET + 32])
+                .unwrap(),
+        );
+        require!(
+            stored_player == ctx.accounts.player.key(),
+            MapGeneratorError::Unauthorized
+        );
+
+        drop(gs_data);
+
+        emit!(SessionDiscoveryClosed {
+            session: ctx.accounts.session_discovery.session,
         });
 
         Ok(())
@@ -1484,6 +1586,62 @@ pub struct UpdateCurrentEcho<'info> {
         seeds::program = GAMEPLAY_STATE_PROGRAM_ID,
     )]
     pub gameplay_authority: Signer<'info>,
+}
+
+// ============================================================================
+// Orphaned Close Contexts
+// ============================================================================
+
+/// Close orphaned GeneratedMap (session PDA already closed).
+/// Validates via GameState which stores session_signer and player.
+#[derive(Accounts)]
+pub struct CloseGeneratedMapOrphaned<'info> {
+    #[account(
+        mut,
+        seeds = [GeneratedMap::SEED_PREFIX, generated_map.session.as_ref()],
+        bump = generated_map.bump,
+        close = player,
+    )]
+    pub generated_map: Account<'info, GeneratedMap>,
+
+    /// GameState for auth — must belong to the same session.
+    /// CHECK: Owner checked (gameplay-state program). Fields validated via raw-byte reads.
+    #[account(owner = GAMEPLAY_STATE_PROGRAM_ID)]
+    pub game_state: UncheckedAccount<'info>,
+
+    /// Player wallet receives the rent refund.
+    /// CHECK: Validated against game_state.player in handler.
+    #[account(mut)]
+    pub player: AccountInfo<'info>,
+
+    /// Session key signer — validated against game_state.session_signer.
+    pub session_signer: Signer<'info>,
+}
+
+/// Close orphaned SessionDiscovery (session PDA already closed).
+/// Validates via GameState which stores session_signer and player.
+#[derive(Accounts)]
+pub struct CloseSessionDiscoveryOrphaned<'info> {
+    #[account(
+        mut,
+        seeds = [SessionDiscovery::SEED_PREFIX, session_discovery.session.as_ref()],
+        bump = session_discovery.bump,
+        close = player,
+    )]
+    pub session_discovery: Account<'info, SessionDiscovery>,
+
+    /// GameState for auth — must belong to the same session.
+    /// CHECK: Owner checked (gameplay-state program). Fields validated via raw-byte reads.
+    #[account(owner = GAMEPLAY_STATE_PROGRAM_ID)]
+    pub game_state: UncheckedAccount<'info>,
+
+    /// Player wallet receives the rent refund.
+    /// CHECK: Validated against game_state.player in handler.
+    #[account(mut)]
+    pub player: AccountInfo<'info>,
+
+    /// Session key signer — validated against game_state.session_signer.
+    pub session_signer: Signer<'info>,
 }
 
 // ============================================================================

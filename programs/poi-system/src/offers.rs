@@ -687,7 +687,7 @@ pub fn generate_smuggler_hatch_offers(
 
         // Check pool membership and deduplication
         let in_pool =
-            item_id_to_pool_index(&item_id).map_or(false, |idx| is_item_in_pool(pool, idx));
+            item_id_to_pool_index(&item_id).is_some_and(|idx| is_item_in_pool(pool, idx));
         let is_duplicate = used_ids[..count].contains(&item_id);
 
         if in_pool && !is_duplicate {
@@ -716,7 +716,7 @@ pub fn generate_smuggler_hatch_offers(
         let price = calculate_price(ItemType::Gear, rarity);
 
         let in_pool =
-            item_id_to_pool_index(&item_id).map_or(false, |idx| is_item_in_pool(pool, idx));
+            item_id_to_pool_index(&item_id).is_some_and(|idx| is_item_in_pool(pool, idx));
         let is_duplicate = used_ids[..count].contains(&item_id);
 
         if in_pool && !is_duplicate {

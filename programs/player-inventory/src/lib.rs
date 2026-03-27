@@ -632,8 +632,8 @@ const GAME_STATE_CAMPAIGN_LEVEL_OFFSET: usize = 122;
 fn base_hp(campaign_level: u8) -> i16 {
     match campaign_level {
         1..=9 => 25,
-        10..=19 => 20,
-        _ => 15,
+        10..=19 => 22,
+        _ => 18,
     }
 }
 

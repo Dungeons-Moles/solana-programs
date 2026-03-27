@@ -408,8 +408,10 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
         .map(|entry| entry.value)
         .sum();
 
-    // Initialize combat log (pre-allocate for typical combat length)
-    let mut log: Vec<CombatLogEntry> = Vec::with_capacity(64);
+    // Initialize combat log (pre-allocate for typical combat length).
+    // Keep capacity modest — Solana's bump allocator never frees, so
+    // over-allocating wastes heap permanently.
+    let mut log: Vec<CombatLogEntry> = Vec::with_capacity(32);
 
     let mut combat_state = CombatState {
         turn: 1,

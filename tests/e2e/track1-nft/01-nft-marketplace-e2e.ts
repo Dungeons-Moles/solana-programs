@@ -1002,12 +1002,17 @@ describe("Quests", function () {
       questId
     );
 
-    // Increment by 3 (partial)
-    await playerMarketplace.methods
+    // Increment by 3 (partial) — must be called by the marketplace authority
+    const adminProvider = createProvider(RPC_URL, walletFromKeypair(admin));
+    const adminMarketplace = loadProgram("nft_marketplace", adminProvider);
+
+    await adminMarketplace.methods
       .updateQuestProgress(questId, 3)
       .accounts({
         questDefinition: questDefPda,
         questProgress: questProgressPda,
+        marketplaceConfig: marketplaceConfigPda,
+        authority: admin.publicKey,
         player: questPlayer.publicKey,
       } as any)
       .rpc();
@@ -1019,11 +1024,13 @@ describe("Quests", function () {
     expect(progress.completed).to.be.false;
 
     // Increment by 2 more to complete (total = 5)
-    await playerMarketplace.methods
+    await adminMarketplace.methods
       .updateQuestProgress(questId, 2)
       .accounts({
         questDefinition: questDefPda,
         questProgress: questProgressPda,
+        marketplaceConfig: marketplaceConfigPda,
+        authority: admin.publicKey,
         player: questPlayer.publicKey,
       } as any)
       .rpc();

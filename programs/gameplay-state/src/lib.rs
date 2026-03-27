@@ -1,6 +1,5 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
-use anchor_lang::solana_program::program::invoke;
 use anchor_lang::system_program;
 use core::str::FromStr;
 use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
@@ -21,11 +20,11 @@ use combat_system::state::{
 };
 use combat_system::{
     resolve_boss_combat_annotated_with_player_gold, resolve_combat_annotated_with_both_gold,
-    resolve_combat_with_player_gold, resolve_pvp_combat_annotated_with_both_gold, EffectType,
+    resolve_pvp_combat_annotated_with_both_gold, EffectType,
     ItemEffect, TriggerType,
 };
 use constants::{
-    base_hp, BASE_ARM, BASE_ATK, BASE_SPD, COMPANY_TREASURY_ADDRESS, DAY_MOVES, PVP_BASE_HP,
+    base_hp, COMPANY_TREASURY_ADDRESS, DAY_MOVES, PVP_BASE_HP,
     DUEL_ENTRY_LAMPORTS, DUEL_ENTRY_SEED, DUEL_OPEN_QUEUE_SEED, DUEL_QUEUE_SEED, DUEL_VAULT_SEED,
     GAME_STATE_SEED, GAUNTLET_BOOTSTRAP_ECHOES_PER_WEEK, GAUNTLET_CAMPAIGN_LEVEL,
     GAUNTLET_ECHOES_SEED,
@@ -181,8 +180,6 @@ pub const POI_SYSTEM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
 pub const NIGHT_VISION_RADIUS: u8 = 2;
 pub const DAY_VISION_RADIUS: u8 = 4;
 pub const PIT_DRAFT_MAX_START_GOLD: u16 = 30;
-pub const DISCOVER_VISIBLE_WAYPOINTS_DISCRIMINATOR: [u8; 8] =
-    [0x3b, 0x26, 0x6a, 0x00, 0x3a, 0xb1, 0x50, 0xfc];
 pub const DISCOVER_VISIBLE_WAYPOINTS_AUTHORIZED_DISCRIMINATOR: [u8; 8] =
     [0xe8, 0x21, 0x93, 0x9c, 0x32, 0x7a, 0x1e, 0x8f];
 /// Player inventory program ID for authorized HP modifications via CPI
@@ -1250,14 +1247,14 @@ pub mod gameplay_state {
                     game_state.run_mode,
                 );
                 let all_creator_effects = generate_annotated_combat_effects(&creator_inventory);
-                let creator_effects =
-                    strip_baked_battle_start_stat_effects(all_creator_effects.clone());
                 let all_opponent_effects = generate_annotated_combat_effects(&opponent_inventory);
-                let opponent_effects =
-                    strip_baked_battle_start_stat_effects(all_opponent_effects.clone());
+                let creator_combatant = build_full_hp_combatant(&creator_stats, &all_creator_effects);
+                let opponent_combatant = build_full_hp_combatant(&opponent_stats, &all_opponent_effects);
+                let creator_effects = strip_baked_battle_start_stat_effects(all_creator_effects);
+                let opponent_effects = strip_baked_battle_start_stat_effects(all_opponent_effects);
                 let combat_outcome = resolve_pvp_combat_annotated_with_both_gold(
-                    build_full_hp_combatant(&creator_stats, &all_creator_effects),
-                    build_full_hp_combatant(&opponent_stats, &all_opponent_effects),
+                    creator_combatant,
+                    opponent_combatant,
                     creator_effects,
                     opponent_effects,
                     creator.loadout.gold_at_battle_start,
@@ -1618,13 +1615,18 @@ pub mod gameplay_state {
             gold_rng.next_bounded(u64::from(PIT_DRAFT_MAX_START_GOLD) + 1) as u16;
 
         let all_waiting_effects = generate_annotated_combat_effects(&waiting_inventory);
-        let waiting_effects = strip_baked_battle_start_stat_effects(all_waiting_effects.clone());
         let all_entrant_effects = generate_annotated_combat_effects(&entrant_inventory);
-        let entrant_effects = strip_baked_battle_start_stat_effects(all_entrant_effects.clone());
+
+        // Build combatant inputs first (borrows effects by ref), then consume
+        // effects via strip (takes ownership) — avoids clone() heap waste.
+        let waiting_combatant = build_full_hp_combatant(&waiting_stats, &all_waiting_effects);
+        let entrant_combatant = build_full_hp_combatant(&entrant_stats, &all_entrant_effects);
+        let waiting_effects = strip_baked_battle_start_stat_effects(all_waiting_effects);
+        let entrant_effects = strip_baked_battle_start_stat_effects(all_entrant_effects);
 
         let combat_outcome = resolve_pvp_combat_annotated_with_both_gold(
-            build_full_hp_combatant(&waiting_stats, &all_waiting_effects),
-            build_full_hp_combatant(&entrant_stats, &all_entrant_effects),
+            waiting_combatant,
+            entrant_combatant,
             waiting_effects,
             entrant_effects,
             waiting_start_gold,
@@ -2272,13 +2274,10 @@ pub mod gameplay_state {
             target_enemy_idx.is_some(),
         ) {
             let enemy_idx = target_enemy_idx.expect("checked is_some above");
-            combat_triggered = true;
             let player_won = resolve_enemy_combat(game_state, inventory, enemy_idx)?;
             if !player_won {
                 return Ok(());
             }
-        } else {
-            combat_triggered = combat_triggered || is_last_move_of_week;
         }
 
         // Sync visible enemies to SessionDiscovery (AFTER combat so defeated enemies are excluded)
@@ -2669,7 +2668,7 @@ pub mod gameplay_state {
         **dest.try_borrow_mut_lamports()? += info.lamports();
         **info.try_borrow_mut_lamports()? = 0;
         info.assign(&anchor_lang::system_program::ID);
-        info.realloc(0, false)?;
+        info.resize(0)?;
         Ok(())
     }
 
@@ -3059,8 +3058,8 @@ fn maybe_insert_player_echo_vrf(
 ) -> Result<()> {
     let capacity = gauntlet_gear_capacity(week);
     let mut capped_gear = inventory.gear;
-    for slot in capacity..capped_gear.len() {
-        capped_gear[slot] = None;
+    for gear in &mut capped_gear[capacity..] {
+        *gear = None;
     }
     let snapshot = GauntletEchoSnapshot {
         week,
@@ -3315,9 +3314,9 @@ fn resolve_enemy_combat(
 
     let player_stats = calculate_stats(inventory, game_state.campaign_level, game_state.run_mode);
     let all_player_effects = generate_annotated_combat_effects(inventory);
-    let player_effects = strip_baked_battle_start_stat_effects(all_player_effects.clone());
-    let gold_multiplier = compute_gold_gain_multiplier_annotated(&player_effects);
     let player_input = build_player_combatant(game_state.hp, &player_stats, &all_player_effects);
+    let player_effects = strip_baked_battle_start_stat_effects(all_player_effects);
+    let gold_multiplier = compute_gold_gain_multiplier_annotated(&player_effects);
     let enemy_effects = preprocess_enemy_effects(enemy.archetype_id, game_state.gold);
 
     emit!(CombatStarted {
@@ -3394,7 +3393,7 @@ fn resolve_enemy_combat(
 #[allow(clippy::too_many_arguments)]
 fn resolve_boss_fight<'info>(
     game_state: &mut GameState,
-    map_seed: u64,
+    _map_seed: u64,
     inventory: &PlayerInventory,
     inventory_info: &AccountInfo<'info>,
     gameplay_authority: &AccountInfo<'info>,
@@ -3425,8 +3424,8 @@ fn resolve_boss_fight<'info>(
 
     let player_stats = calculate_stats(inventory, game_state.campaign_level, game_state.run_mode);
     let all_player_effects = generate_annotated_combat_effects(inventory);
-    let player_effects = strip_baked_battle_start_stat_effects(all_player_effects.clone());
     let player_input = build_player_combatant(game_state.hp, &player_stats, &all_player_effects);
+    let player_effects = strip_baked_battle_start_stat_effects(all_player_effects);
 
     emit!(BossCombatStarted {
         player: game_state.player,
@@ -3600,7 +3599,8 @@ fn resolve_gauntlet_echo_inline<'info>(
 
     let player_stats = calculate_stats(inventory, GAUNTLET_CAMPAIGN_LEVEL, game_state.run_mode);
     let all_player_effects = generate_annotated_combat_effects(inventory);
-    let player_effects = strip_baked_battle_start_stat_effects(all_player_effects.clone());
+    let player_input = build_player_combatant(game_state.hp, &player_stats, &all_player_effects);
+    let player_effects = strip_baked_battle_start_stat_effects(all_player_effects);
     let echo_inventory = snapshot_to_inventory(echo, game_state.session, game_state.player);
     let echo_stats = calculate_stats(
         &echo_inventory,
@@ -3608,11 +3608,12 @@ fn resolve_gauntlet_echo_inline<'info>(
         game_state.run_mode,
     );
     let all_echo_effects = generate_annotated_combat_effects(&echo_inventory);
-    let echo_effects = strip_baked_battle_start_stat_effects(all_echo_effects.clone());
+    let echo_combatant = build_full_hp_combatant(&echo_stats, &all_echo_effects);
+    let echo_effects = strip_baked_battle_start_stat_effects(all_echo_effects);
 
     let outcome = resolve_pvp_combat_annotated_with_both_gold(
-        build_player_combatant(game_state.hp, &player_stats, &all_player_effects),
-        build_full_hp_combatant(&echo_stats, &all_echo_effects),
+        player_input,
+        echo_combatant,
         player_effects,
         echo_effects,
         game_state.gold,
@@ -3787,58 +3788,7 @@ fn reveal_radius_cpi<'info>(
     Ok(())
 }
 
-fn discover_visible_waypoints_cpi<'info>(
-    map_pois: &AccountInfo<'info>,
-    game_state: &AccountInfo<'info>,
-    player: &AccountInfo<'info>,
-    poi_system_program: &AccountInfo<'info>,
-    visibility_radius: u8,
-    session_discovery: Option<&AccountInfo<'info>>,
-    session: Option<&AccountInfo<'info>>,
-    map_generator_program: Option<&AccountInfo<'info>>,
-) -> Result<()> {
-    let mut data = [0u8; 9];
-    data[..8].copy_from_slice(&DISCOVER_VISIBLE_WAYPOINTS_DISCRIMINATOR);
-    data[8] = visibility_radius;
 
-    let sd_key = session_discovery.map(|a| a.key()).unwrap_or(POI_SYSTEM_PROGRAM_ID);
-    let sess_key = session.map(|a| a.key()).unwrap_or(POI_SYSTEM_PROGRAM_ID);
-    let mgp_key = map_generator_program.map(|a| a.key()).unwrap_or(POI_SYSTEM_PROGRAM_ID);
-
-    let instruction = Instruction {
-        program_id: POI_SYSTEM_PROGRAM_ID,
-        accounts: vec![
-            AccountMeta::new(map_pois.key(), false),
-            AccountMeta::new_readonly(game_state.key(), false),
-            AccountMeta::new_readonly(player.key(), true),
-            // Optional accounts: real PDA or program ID sentinel for None
-            AccountMeta::new(sd_key, false),
-            AccountMeta::new_readonly(sess_key, false),
-            AccountMeta::new_readonly(mgp_key, false),
-        ],
-        data: data.to_vec(),
-    };
-
-    let mut account_infos = vec![
-        map_pois.clone(),
-        game_state.clone(),
-        player.clone(),
-        poi_system_program.clone(),
-    ];
-    if let Some(sd) = session_discovery {
-        account_infos.push(sd.clone());
-    }
-    if let Some(sess) = session {
-        account_infos.push(sess.clone());
-    }
-    if let Some(mgp) = map_generator_program {
-        account_infos.push(mgp.clone());
-    }
-
-    invoke(&instruction, &account_infos)?;
-
-    Ok(())
-}
 
 #[allow(clippy::too_many_arguments)]
 fn discover_visible_waypoints_authorized_cpi<'info>(

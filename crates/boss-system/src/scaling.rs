@@ -19,7 +19,7 @@ pub fn calculate_tier(level_in_act: u8) -> u8 {
 /// Scale Week 1 boss stats based on tier
 /// +1 HP per tier, +1 ARM per tier
 pub fn scale_week1_stats(base_hp: u16, base_arm: u8, tier: u8) -> (u16, u8, u8) {
-    let hp_bonus = 1 * tier as u16;
+    let hp_bonus = tier as u16;
     let arm_bonus = tier;
     let atk_bonus = 0u8;
 

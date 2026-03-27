@@ -366,7 +366,7 @@ pub mod nft_marketplace {
         Ok(())
     }
 
-    /// Update quest progress. For hackathon, admin can also call this.
+    /// Update quest progress. Only callable by the marketplace authority.
     pub fn update_quest_progress(
         ctx: Context<UpdateQuestProgress>,
         _quest_id: u16,
@@ -719,8 +719,19 @@ pub struct UpdateQuestProgress<'info> {
     )]
     pub quest_progress: Account<'info, QuestProgress>,
 
-    /// For hackathon: admin or player can update progress.
-    pub player: Signer<'info>,
+    #[account(
+        seeds = [MarketplaceConfig::SEED_PREFIX],
+        bump = marketplace_config.bump,
+    )]
+    pub marketplace_config: Account<'info, MarketplaceConfig>,
+
+    /// Authority that must match marketplace_config.authority.
+    #[account(address = marketplace_config.authority @ MarketplaceError::Unauthorized)]
+    pub authority: Signer<'info>,
+
+    /// CHECK: Player whose quest progress is being updated. Not a signer —
+    /// only the authority can advance quest progress.
+    pub player: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]

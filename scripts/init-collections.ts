@@ -38,7 +38,7 @@ import * as os from "os";
 
 // ── Constants ────────────────────────────────────────────────────────────
 const NFT_MARKETPLACE_PROGRAM_ID = new anchor.web3.PublicKey(
-  "ApUAEEKYsRMjxoMA65WV2xiG8xGwWzFhHjTMGGefcumK"
+  "GLKxBpZ8hc7qzvD9VHAVsJEjHSu2JVp1HaPrGH4fpTci"
 );
 
 const COMPANY_TREASURY = new anchor.web3.PublicKey(
@@ -47,7 +47,7 @@ const COMPANY_TREASURY = new anchor.web3.PublicKey(
 
 // Derive the gameplay-state gauntlet_pool_vault PDA
 const GAMEPLAY_STATE_PROGRAM_ID = new anchor.web3.PublicKey(
-  "C8hK4qsqsSYQeqyXuTPTUUS3T7N74WnZCuzvChTpK1Mo"
+  "3rzGGgHRRnMATmYJkjidPMapEMesvA16PTs5HhfAep4V"
 );
 
 const [gauntletPoolVault] = anchor.web3.PublicKey.findProgramAddressSync(

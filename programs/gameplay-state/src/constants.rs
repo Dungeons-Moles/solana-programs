@@ -71,6 +71,10 @@ pub const DUEL_ENTRY_SEED: &[u8] = b"duel_entry";
 // DuelCreatorEntry::INIT_SPACE is currently 201 bytes, so 50 entries keeps the queue account safely below the limit
 // (8-byte discriminator + DuelOpenQueue::INIT_SPACE = 10,063 bytes total).
 pub const DUEL_OPEN_QUEUE_CAPACITY: usize = 50;
+/// PDA seed prefix for ER-only duel queue (permanently delegated, never undelegated).
+pub const DUEL_ER_QUEUE_SEED: &[u8] = b"duel_er_queue";
+/// Maximum entries in the ER-only duel queue.
+pub const DUEL_ER_QUEUE_CAPACITY: usize = 50;
 
 /// PDA seed prefix for per-session gauntlet echoes account
 pub const GAUNTLET_ECHOES_SEED: &[u8] = b"gauntlet_echoes";

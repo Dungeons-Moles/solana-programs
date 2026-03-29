@@ -23,16 +23,16 @@ pub const MIN_LISTING_PRICE: u64 = 10_000;
 /// Royalty bps for collection creation: 500 bps = 5%
 pub const ROYALTY_BPS: u16 = 500;
 
-/// Player Profile program ID (Ch3bbL1oQk2z5rX1jiun3KuSWZqnXZ1MnrfrtKj4MKun)
+/// Player Profile program ID (GSLNDrNoHeZXVxB7Yu7tUe8417PpZ5XV7JPYupPw9WQy)
 pub const PLAYER_PROFILE_PROGRAM_ID: Pubkey =
-    pubkey!("Ch3bbL1oQk2z5rX1jiun3KuSWZqnXZ1MnrfrtKj4MKun");
+    pubkey!("GSLNDrNoHeZXVxB7Yu7tUe8417PpZ5XV7JPYupPw9WQy");
 
 /// PDA seed for player profile: ["player", owner]
 pub const PLAYER_PROFILE_SEED: &[u8] = b"player";
 
-/// Gameplay-state program ID (C8hK4qsqsSYQeqyXuTPTUUS3T7N74WnZCuzvChTpK1Mo)
+/// Gameplay-state program ID (3rzGGgHRRnMATmYJkjidPMapEMesvA16PTs5HhfAep4V)
 pub const GAMEPLAY_STATE_PROGRAM_ID: Pubkey =
-    pubkey!("C8hK4qsqsSYQeqyXuTPTUUS3T7N74WnZCuzvChTpK1Mo");
+    pubkey!("3rzGGgHRRnMATmYJkjidPMapEMesvA16PTs5HhfAep4V");
 
 /// Seed used by gameplay-state for the canonical gauntlet pool vault PDA
 pub const GAUNTLET_POOL_VAULT_SEED: &[u8] = b"gauntlet_pool_vault";

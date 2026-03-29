@@ -10,10 +10,10 @@ describe("poi-system", () => {
 
   const program = anchor.workspace.PoiSystem as Program<PoiSystem>;
   const sessionManagerProgramId = new anchor.web3.PublicKey(
-    "6w1XVMSTRmZU9AWCKVvKohGAHSFMENhda7vqhKPQ8TPn",
+    "CrU4bUFreKy2XsoU2oksdJWKim11w2VpagKBQ2MTkyMz",
   );
   const mapGeneratorProgramId = new anchor.web3.PublicKey(
-    "GCy5GqvnJN99rgGtV6fMn8NtL9E7RoAyHDGzQv8me65j",
+    "E6kc5Edg1s3AXVQQFRoYdAq4vPAFbkYbP7B5ujiuZwz4",
   );
 
   const getMapPoisPDA = (sessionPubkey: anchor.web3.PublicKey) => {

@@ -27,7 +27,7 @@ import * as os from "os";
 
 // ── Constants ────────────────────────────────────────────────────────────
 const NFT_MARKETPLACE_PROGRAM_ID = new anchor.web3.PublicKey(
-  "ApUAEEKYsRMjxoMA65WV2xiG8xGwWzFhHjTMGGefcumK"
+  "GLKxBpZ8hc7qzvD9VHAVsJEjHSu2JVp1HaPrGH4fpTci"
 );
 
 const MPL_CORE_PROGRAM_ID = new anchor.web3.PublicKey(

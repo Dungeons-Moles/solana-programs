@@ -11,7 +11,7 @@ describe("map-generator", () => {
 
   const program = anchor.workspace.MapGenerator as Program<MapGenerator>;
   const SESSION_MANAGER_PROGRAM_ID = new anchor.web3.PublicKey(
-    "6w1XVMSTRmZU9AWCKVvKohGAHSFMENhda7vqhKPQ8TPn",
+    "CrU4bUFreKy2XsoU2oksdJWKim11w2VpagKBQ2MTkyMz",
   );
 
   // Helper to derive map config PDA

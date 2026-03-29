@@ -113,6 +113,40 @@ pub fn get_duel_boss_id_vrf(
     Ok(boss.id)
 }
 
+/// Derive deterministic RNG from map seed for boss selection.
+/// Both matched duel players share the same map seed, so they get the same bosses.
+fn duel_boss_rng_from_seed(map_seed: u64, week: u8) -> vrf_rng::GameRng {
+    let seed_bytes = map_seed.to_le_bytes();
+    let mut randomness = [0u8; 32];
+    randomness[..8].copy_from_slice(&seed_bytes);
+    randomness[8..16].copy_from_slice(&seed_bytes);
+    randomness[16..24].copy_from_slice(&seed_bytes);
+    randomness[24..32].copy_from_slice(&seed_bytes);
+    vrf_rng::GameRng::from_vrf(&randomness, week as u64, vrf_rng::domains::DUEL_BOSS)
+}
+
+/// Select boss ID from the shared map seed so both duel players get the same boss.
+pub fn get_duel_boss_id_from_seed(map_seed: u64, week: u8) -> Result<[u8; 12]> {
+    let boss_week = to_boss_week(week)?;
+    let mut rng = duel_boss_rng_from_seed(map_seed, week);
+    let boss = boss_system::select_duel_week_boss_vrf(&mut rng, boss_week)
+        .ok_or(GameplayStateError::InvalidWeek)?;
+    Ok(boss.id)
+}
+
+/// Select boss combatant from the shared map seed for combat resolution.
+pub fn get_duel_boss_for_combat_from_seed(
+    map_seed: u64,
+    week: u8,
+) -> Result<combat_system::state::CombatantInput> {
+    let boss_week = to_boss_week(week)?;
+    let mut rng = duel_boss_rng_from_seed(map_seed, week);
+    let boss = boss_system::select_duel_week_boss_vrf(&mut rng, boss_week)
+        .ok_or(GameplayStateError::InvalidWeek)?;
+    let scaled = boss_system::scale_boss(boss, 20, boss_week);
+    Ok(boss_system::scaling::to_combatant_input(&scaled))
+}
+
 /// Compute all enemies on discovered tiles for SessionDiscovery sync.
 pub fn compute_visible_enemies(
     game_state: &GameState,
@@ -263,6 +297,7 @@ mod tests {
             gauntlet_defender_credit: None,
             gauntlet_highest_week_won: 0,
             gauntlet_settled: false,
+            duel_map_seed: 0,
             enemies: vec![
                 EnemyInstance {
                     archetype_id: 0,

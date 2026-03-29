@@ -3,7 +3,8 @@ use player_inventory::state::ItemInstance;
 use vrf_rng::{VrfStatus, VRF_STATE_SPACE};
 
 use crate::constants::{
-    DAY_MOVES, DUEL_OPEN_QUEUE_CAPACITY, GAME_STATE_SEED, GAUNTLET_ECHOES_SEED, NIGHT_MOVES,
+    DAY_MOVES, DUEL_ER_QUEUE_CAPACITY, DUEL_OPEN_QUEUE_CAPACITY, GAME_STATE_SEED,
+    GAUNTLET_ECHOES_SEED, NIGHT_MOVES,
 };
 
 /// VRF state account for gameplay-state program.
@@ -176,6 +177,11 @@ pub struct GameState {
     /// Whether gauntlet points have been settled to global accounts.
     pub gauntlet_settled: bool,
 
+    /// Pre-assigned duel map seed from base layer (before delegation).
+    /// Non-zero means this player was matched and should reuse the creator's seed.
+    /// Zero means this player is the creator and should derive seed from VRF.
+    pub duel_map_seed: u64,
+
     /// Embedded enemy instances (max 48, 5 bytes each).
     /// Replaces the old separate MapEnemies account.
     pub enemies: Vec<EnemyInstance>,
@@ -201,11 +207,12 @@ impl GameState {
     //   gauntlet_highest_week_won: 1
     //   gauntlet_settled: 1
     // Total gauntlet: 59
+    // Duel map seed: 8
     // Enemy fields (merged from MapEnemies):
     //   enemies: 4 (vec prefix) + 48 × 5 (EnemyInstance) = 244
     //   enemy_count: 1
     // Total enemies: 245
-    pub const INIT_SPACE: usize = 119 + 59 + 245;
+    pub const INIT_SPACE: usize = 119 + 59 + 8 + 245;
 }
 
 /// A spawned enemy instance on the map
@@ -301,12 +308,14 @@ pub struct DuelLoadoutSnapshot {
     pub gear: [Option<ItemInstance>; 12],
     /// Gold held by this player when duel PvP combat starts.
     pub gold_at_battle_start: u16,
+    /// Player HP at the moment the run was finalized (before PvP).
+    pub hp_at_finish: i16,
 }
 
 impl DuelLoadoutSnapshot {
     /// Option<ItemInstance> is 1-byte tag + 10-byte payload.
     pub const ITEM_OPTION_SPACE: usize = 11;
-    pub const INIT_SPACE: usize = Self::ITEM_OPTION_SPACE + (12 * Self::ITEM_OPTION_SPACE) + 2;
+    pub const INIT_SPACE: usize = Self::ITEM_OPTION_SPACE + (12 * Self::ITEM_OPTION_SPACE) + 2 + 2;
 }
 
 /// One participant in a duel queue for a specific seed.
@@ -391,6 +400,21 @@ pub struct DuelOpenQueue {
 impl DuelOpenQueue {
     pub const INIT_SPACE: usize =
         4 + (DUEL_OPEN_QUEUE_CAPACITY * DuelCreatorEntry::INIT_SPACE) + 1 + 1;
+}
+
+/// ER-only FIFO queue of finished duel creators. Permanently delegated to ER,
+/// never undelegated — seeds stay private inside the TEE.
+#[account]
+pub struct DuelErQueue {
+    pub entries: Vec<DuelCreatorEntry>,
+    /// Explicit init sentinel (do not rely on bump value).
+    pub initialized: bool,
+    pub bump: u8,
+}
+
+impl DuelErQueue {
+    pub const INIT_SPACE: usize =
+        4 + (DUEL_ER_QUEUE_CAPACITY * DuelCreatorEntry::INIT_SPACE) + 1 + 1;
 }
 
 /// Per-session duel staking/match state.
@@ -569,6 +593,7 @@ mod tests {
             tool: Some(sample_item(seed)),
             gear: [Some(sample_item(seed)); 12],
             gold_at_battle_start: u16::MAX,
+            hp_at_finish: i16::MAX,
         }
     }
 

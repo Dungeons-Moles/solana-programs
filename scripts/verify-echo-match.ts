@@ -4,8 +4,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 const WALLET = new PublicKey('bcNTWp8U8kDWrFkgwPjWxXE9WZf3iLeTmJx93PZgAQ8');
-const SESSION_MANAGER_PROGRAM_ID = new PublicKey('6w1XVMSTRmZU9AWCKVvKohGAHSFMENhda7vqhKPQ8TPn');
-const GAMEPLAY_STATE_PROGRAM_ID = new PublicKey('C8hK4qsqsSYQeqyXuTPTUUS3T7N74WnZCuzvChTpK1Mo');
+const SESSION_MANAGER_PROGRAM_ID = new PublicKey('CrU4bUFreKy2XsoU2oksdJWKim11w2VpagKBQ2MTkyMz');
+const GAMEPLAY_STATE_PROGRAM_ID = new PublicKey('3rzGGgHRRnMATmYJkjidPMapEMesvA16PTs5HhfAep4V');
 
 function itemIdStr(bytes: number[]): string {
   return String.fromCharCode(...bytes).replace(/\0/g, '');

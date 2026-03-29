@@ -68,13 +68,17 @@ async function main() {
     }
   }
 
-  console.log("Initializing Duels (vault)...");
+  console.log("Initializing Duels (vault + queues)...");
   const [duelVaultPda] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("duel_vault")],
     gameplayState.programId,
   );
   const [duelOpenQueuePda] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("duel_open_queue")],
+    gameplayState.programId,
+  );
+  const [duelErQueuePda] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("duel_er_queue")],
     gameplayState.programId,
   );
 
@@ -84,16 +88,38 @@ async function main() {
       .accounts({
         duelVault: duelVaultPda,
         duelOpenQueue: duelOpenQueuePda,
+        duelErQueue: duelErQueuePda,
         admin: provider.wallet.publicKey,
         systemProgram: anchor.web3.SystemProgram.programId,
       } as any)
       .rpc();
-    console.log("Success! Duels vault initialized. Sig:", tx);
+    console.log("Success! Duels initialized (vault + queues). Sig:", tx);
   } catch (e: any) {
     if (e.toString().includes("already in use")) {
-      console.log("Duels vault already initialized.");
+      console.log("Duels already initialized.");
     } else {
-      console.error("Failed to initialize duels vault:", e);
+      console.error("Failed to initialize duels:", e);
+    }
+  }
+
+  // Permanently delegate DuelErQueue to ER (seeds stay private inside TEE).
+  console.log("Delegating DuelErQueue to ER...");
+  try {
+    const delegateTx = await (gameplayState.methods as any)
+      .delegateDuelErQueue()
+      .accounts({
+        duelErQueue: duelErQueuePda,
+        admin: provider.wallet.publicKey,
+      } as any)
+      .rpc();
+    console.log("Success! DuelErQueue delegated to ER. Sig:", delegateTx);
+  } catch (e: any) {
+    const msg = e.toString();
+    if (msg.includes("already delegated")) {
+      console.log("DuelErQueue already delegated.");
+    } else {
+      console.error("Failed to delegate DuelErQueue:", e);
+      if (e.logs) console.error("Logs:", e.logs);
     }
   }
 

@@ -5,22 +5,22 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-gameplay_state = "C8hK4qsqsSYQeqyXuTPTUUS3T7N74WnZCuzvChTpK1Mo"
-map_generator = "GCy5GqvnJN99rgGtV6fMn8NtL9E7RoAyHDGzQv8me65j"
-nft_marketplace = "ApUAEEKYsRMjxoMA65WV2xiG8xGwWzFhHjTMGGefcumK"
-player_inventory = "APRnvp41jEYnT1EnrdBTim7bodqE6v2RSgzv1CG7Qv7u"
-player_profile = "Ch3bbL1oQk2z5rX1jiun3KuSWZqnXZ1MnrfrtKj4MKun"
-poi_system = "KiT25b86BSAF8yErcWwyuuWNaoXMpNf859NjH41TpSj"
-session_manager = "6w1XVMSTRmZU9AWCKVvKohGAHSFMENhda7vqhKPQ8TPn"
+gameplay_state = "3rzGGgHRRnMATmYJkjidPMapEMesvA16PTs5HhfAep4V"
+map_generator = "E6kc5Edg1s3AXVQQFRoYdAq4vPAFbkYbP7B5ujiuZwz4"
+nft_marketplace = "GLKxBpZ8hc7qzvD9VHAVsJEjHSu2JVp1HaPrGH4fpTci"
+player_inventory = "GrXaTaf7wZ74mTaWQ9QSUPAKG6M3Sf4xaZjNytTLa8yC"
+player_profile = "GSLNDrNoHeZXVxB7Yu7tUe8417PpZ5XV7JPYupPw9WQy"
+poi_system = "7rTRqR6H8ztxpcPVKtAwXGi7PQFDYLgMkWSBRLPcYMH2"
+session_manager = "CrU4bUFreKy2XsoU2oksdJWKim11w2VpagKBQ2MTkyMz"
 
 [programs.localnet]
-gameplay_state = "C8hK4qsqsSYQeqyXuTPTUUS3T7N74WnZCuzvChTpK1Mo"
-map_generator = "GCy5GqvnJN99rgGtV6fMn8NtL9E7RoAyHDGzQv8me65j"
-nft_marketplace = "ApUAEEKYsRMjxoMA65WV2xiG8xGwWzFhHjTMGGefcumK"
-player_inventory = "APRnvp41jEYnT1EnrdBTim7bodqE6v2RSgzv1CG7Qv7u"
-player_profile = "Ch3bbL1oQk2z5rX1jiun3KuSWZqnXZ1MnrfrtKj4MKun"
-poi_system = "KiT25b86BSAF8yErcWwyuuWNaoXMpNf859NjH41TpSj"
-session_manager = "6w1XVMSTRmZU9AWCKVvKohGAHSFMENhda7vqhKPQ8TPn"
+gameplay_state = "3rzGGgHRRnMATmYJkjidPMapEMesvA16PTs5HhfAep4V"
+map_generator = "E6kc5Edg1s3AXVQQFRoYdAq4vPAFbkYbP7B5ujiuZwz4"
+nft_marketplace = "GLKxBpZ8hc7qzvD9VHAVsJEjHSu2JVp1HaPrGH4fpTci"
+player_inventory = "GrXaTaf7wZ74mTaWQ9QSUPAKG6M3Sf4xaZjNytTLa8yC"
+player_profile = "GSLNDrNoHeZXVxB7Yu7tUe8417PpZ5XV7JPYupPw9WQy"
+poi_system = "7rTRqR6H8ztxpcPVKtAwXGi7PQFDYLgMkWSBRLPcYMH2"
+session_manager = "CrU4bUFreKy2XsoU2oksdJWKim11w2VpagKBQ2MTkyMz"
 
 [registry]
 url = "https://api.apr.dev"

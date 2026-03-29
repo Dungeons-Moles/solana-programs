@@ -16,18 +16,18 @@ use errors::MapGeneratorError;
 use state::{GeneratedMap, MapConfig, MapVrfState, SessionDiscovery};
 use vrf_rng::VrfStatus;
 
-declare_id!("GCy5GqvnJN99rgGtV6fMn8NtL9E7RoAyHDGzQv8me65j");
+declare_id!("E6kc5Edg1s3AXVQQFRoYdAq4vPAFbkYbP7B5ujiuZwz4");
 
 /// Gameplay state program ID for authorized tile modifications (wall breaking)
 pub const GAMEPLAY_STATE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
-    0xa5, 0x69, 0x33, 0xc3, 0x32, 0x44, 0x5d, 0xb7, 0x52, 0x8d, 0x7a, 0x6b, 0xc3, 0x01, 0x56, 0x1e,
-    0x68, 0x50, 0xaa, 0x96, 0x7a, 0x85, 0xea, 0x62, 0xb5, 0x79, 0xe3, 0x23, 0xe4, 0xa8, 0x88, 0x36,
+    0x2a, 0x85, 0x94, 0xcf, 0xca, 0x5f, 0x00, 0x45, 0x30, 0xce, 0x64, 0xd1, 0x54, 0x94, 0x6b, 0x36,
+    0xcb, 0xd4, 0x94, 0x56, 0x16, 0x97, 0xa1, 0x82, 0x0d, 0x72, 0x1b, 0x7e, 0x89, 0xb7, 0xbf, 0x7e,
 ]);
 
 /// Session manager program ID for session ownership checks
 pub const SESSION_MANAGER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
-    0x58, 0x20, 0x64, 0x87, 0xdf, 0xd8, 0x68, 0xf1, 0xa4, 0x79, 0x15, 0x8b, 0xb2, 0x8a, 0x56, 0x0c,
-    0xa9, 0x4f, 0x56, 0x2e, 0x62, 0x85, 0x26, 0xb7, 0x4f, 0x8b, 0xa1, 0x4d, 0x08, 0x36, 0x20, 0x99,
+    0xb0, 0x1c, 0x9d, 0x6a, 0x40, 0xc6, 0xe0, 0xa9, 0xe4, 0xaf, 0xa9, 0xa9, 0xd9, 0xad, 0x02, 0x15,
+    0x89, 0xbd, 0xf1, 0x36, 0x79, 0x88, 0x02, 0x94, 0xc2, 0x24, 0x9f, 0xd9, 0xa4, 0x21, 0xd7, 0x39,
 ]);
 fn local_delegate_config(validator: Option<Pubkey>) -> DelegateConfig {
     DelegateConfig {
@@ -151,6 +151,39 @@ pub mod map_generator {
         generated_map.reveal_radius(spawn_x, spawn_y, 6);
 
         // Populate SessionDiscovery with initial map metadata and spawn-area reveal
+        if let Some(ref mut discovery) = ctx.accounts.session_discovery {
+            discovery.spawn_x = generated_map.spawn_x;
+            discovery.spawn_y = generated_map.spawn_y;
+            discovery.mole_den_x = generated_map.mole_den_x;
+            discovery.mole_den_y = generated_map.mole_den_y;
+            discovery.map_width = generated_map.width;
+            discovery.map_height = generated_map.height;
+            discovery.sync_all_discovered(generated_map);
+        }
+
+        Ok(())
+    }
+
+    /// Fills the map with a deterministic seed, authorized by gameplay-state via CPI.
+    /// Used for duel map generation where gameplay-state controls seed selection.
+    pub fn fill_map_with_seed_authorized(
+        ctx: Context<FillMapWithSeedAuthorized>,
+        seed: u64,
+        campaign_level: u8,
+    ) -> Result<()> {
+        require!(
+            campaign_level > 0 && campaign_level <= MAX_LEVEL,
+            MapGeneratorError::InvalidLevel
+        );
+
+        let generated_map = &mut ctx.accounts.generated_map;
+        let success = maze::generate_map(generated_map, seed, campaign_level);
+        require!(success, MapGeneratorError::MapGenerationFailed);
+        generated_map.clear_discovery();
+        let spawn_x = generated_map.spawn_x;
+        let spawn_y = generated_map.spawn_y;
+        generated_map.reveal_radius(spawn_x, spawn_y, 6);
+
         if let Some(ref mut discovery) = ctx.accounts.session_discovery {
             discovery.spawn_x = generated_map.spawn_x;
             discovery.spawn_y = generated_map.spawn_y;
@@ -1133,6 +1166,36 @@ pub struct FillMapWithSeed<'info> {
         has_one = session,
     )]
     pub generated_map: Box<Account<'info, GeneratedMap>>,
+
+    /// Optional SessionDiscovery to populate with initial map data.
+    #[account(mut)]
+    pub session_discovery: Option<Box<Account<'info, SessionDiscovery>>>,
+}
+
+/// Context for filling a map with a seed, authorized by gameplay-state via CPI.
+/// Uses gameplay_authority PDA from gameplay-state as signer.
+#[derive(Accounts)]
+pub struct FillMapWithSeedAuthorized<'info> {
+    #[account(
+        mut,
+        seeds = [GeneratedMap::SEED_PREFIX, session.key().as_ref()],
+        bump = generated_map.bump,
+        has_one = session,
+    )]
+    pub generated_map: Box<Account<'info, GeneratedMap>>,
+
+    /// CHECK: Session PDA used for PDA derivation of generated_map.
+    #[account(owner = SESSION_MANAGER_PROGRAM_ID @ MapGeneratorError::InvalidSessionOwner)]
+    pub session: UncheckedAccount<'info>,
+
+    /// Gameplay authority PDA from gameplay-state that must sign.
+    /// This ensures only gameplay-state can call this instruction.
+    #[account(
+        seeds = [b"gameplay_authority"],
+        bump,
+        seeds::program = GAMEPLAY_STATE_PROGRAM_ID,
+    )]
+    pub gameplay_authority: Signer<'info>,
 
     /// Optional SessionDiscovery to populate with initial map data.
     #[account(mut)]

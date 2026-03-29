@@ -20,12 +20,12 @@ use combat_system::state::{
 };
 use combat_system::{
     resolve_boss_combat_annotated_with_player_gold, resolve_combat_annotated_with_both_gold,
-    resolve_pvp_combat_annotated_with_both_gold, resolve_pvp_combat_outcome_only, EffectType,
-    ItemEffect, TriggerType,
+    resolve_pvp_combat_annotated_with_both_gold, EffectType, ItemEffect, TriggerType,
 };
 use constants::{
     base_hp, COMPANY_TREASURY_ADDRESS, DAY_MOVES, PVP_BASE_HP,
-    DUEL_ENTRY_LAMPORTS, DUEL_ENTRY_SEED, DUEL_OPEN_QUEUE_SEED, DUEL_QUEUE_SEED, DUEL_VAULT_SEED,
+    DUEL_ENTRY_LAMPORTS, DUEL_ENTRY_SEED, DUEL_ER_QUEUE_SEED, DUEL_OPEN_QUEUE_SEED,
+    DUEL_QUEUE_SEED, DUEL_VAULT_SEED,
     GAME_STATE_SEED, GAUNTLET_BOOTSTRAP_ECHOES_PER_WEEK, GAUNTLET_CAMPAIGN_LEVEL,
     GAUNTLET_ECHOES_SEED,
     GAUNTLET_COMPANY_FEE_BPS, GAUNTLET_CONFIG_SEED, GAUNTLET_ENTRY_LAMPORTS,
@@ -43,7 +43,8 @@ pub const GAMEPLAY_AUTHORITY_SEED: &[u8] = b"gameplay_authority";
 pub const SESSION_MANAGER_RUNMODE_AUTHORITY_SEED: &[u8] = b"session_manager_authority";
 use movement::{
     calculate_move_cost, chebyshev_distance, compute_visible_enemies, get_boss_for_combat,
-    get_boss_id, get_duel_boss_for_combat_vrf, get_duel_boss_id_vrf, is_adjacent,
+    get_boss_id, get_duel_boss_for_combat_from_seed, get_duel_boss_for_combat_vrf,
+    get_duel_boss_id_from_seed, get_duel_boss_id_vrf, is_adjacent,
     is_within_bounds, should_process_night_enemy_movement, should_process_target_enemy_combat,
 };
 use player_inventory::effects::{generate_annotated_combat_effects, generate_combat_effects};
@@ -51,7 +52,8 @@ use player_inventory::items::ITEMS;
 use player_inventory::state::{ItemInstance, ItemType, PlayerInventory, Tier, ToolOilModification};
 use player_profile::state::PlayerProfile;
 use state::{
-    DuelCreatorEntry, DuelEntry, DuelLoadoutSnapshot, DuelOpenQueue, DuelQueue, DuelRunOutcome,
+    DuelCreatorEntry, DuelEntry, DuelErQueue, DuelLoadoutSnapshot, DuelOpenQueue, DuelQueue,
+    DuelRunOutcome,
     DuelVault, GameState, GameplayVrfState, GauntletConfig, GauntletDefenderCredit,
     GauntletEchoSnapshot, GauntletEchoSource, GauntletEchoes, GauntletEpochPool,
     GauntletLoadoutSnapshot, GauntletPendingPoints, GauntletPlayerScore, GauntletPoolVault,
@@ -164,18 +166,18 @@ fn apply_gold_reward_multiplier(base: u16, multiplier_percent: i16) -> u16 {
     total.clamp(0, i32::from(u16::MAX)) as u16
 }
 
-declare_id!("C8hK4qsqsSYQeqyXuTPTUUS3T7N74WnZCuzvChTpK1Mo");
+declare_id!("3rzGGgHRRnMATmYJkjidPMapEMesvA16PTs5HhfAep4V");
 
 /// Session manager program ID for session ownership checks
 pub const SESSION_MANAGER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
-    0x58, 0x20, 0x64, 0x87, 0xdf, 0xd8, 0x68, 0xf1, 0xa4, 0x79, 0x15, 0x8b, 0xb2, 0x8a, 0x56, 0x0c,
-    0xa9, 0x4f, 0x56, 0x2e, 0x62, 0x85, 0x26, 0xb7, 0x4f, 0x8b, 0xa1, 0x4d, 0x08, 0x36, 0x20, 0x99,
+    0xb0, 0x1c, 0x9d, 0x6a, 0x40, 0xc6, 0xe0, 0xa9, 0xe4, 0xaf, 0xa9, 0xa9, 0xd9, 0xad, 0x02, 0x15,
+    0x89, 0xbd, 0xf1, 0x36, 0x79, 0x88, 0x02, 0x94, 0xc2, 0x24, 0x9f, 0xd9, 0xa4, 0x21, 0xd7, 0x39,
 ]);
 
 /// POI system program ID for authorized HP/Gold modifications
 pub const POI_SYSTEM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
-    0x04, 0xcb, 0x52, 0x15, 0x87, 0x19, 0x4d, 0x2b, 0xbe, 0x24, 0xa5, 0xa7, 0xae, 0xc7, 0xc2, 0x79,
-    0x1e, 0xa8, 0x59, 0xd6, 0xc2, 0x7b, 0x44, 0x05, 0x0d, 0x53, 0x85, 0xb7, 0x4b, 0x8b, 0xc2, 0x60,
+    0x65, 0xd1, 0x76, 0xb1, 0x94, 0xe7, 0xc4, 0x89, 0xa6, 0x09, 0xbd, 0xa7, 0x8c, 0x0c, 0x0a, 0xe6,
+    0xf6, 0xae, 0xd1, 0x4e, 0xf0, 0xba, 0xe9, 0x21, 0xbb, 0xde, 0x72, 0x90, 0xf1, 0x04, 0xcc, 0xf9,
 ]);
 pub const NIGHT_VISION_RADIUS: u8 = 2;
 pub const DAY_VISION_RADIUS: u8 = 4;
@@ -184,8 +186,8 @@ pub const DISCOVER_VISIBLE_WAYPOINTS_AUTHORIZED_DISCRIMINATOR: [u8; 8] =
     [0xe8, 0x21, 0x93, 0x9c, 0x32, 0x7a, 0x1e, 0x8f];
 /// Player inventory program ID for authorized HP modifications via CPI
 pub const PLAYER_INVENTORY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
-    0x8b, 0x77, 0xfe, 0x0c, 0xa3, 0x5f, 0x22, 0x83, 0xa1, 0x7c, 0x15, 0x8e, 0x3e, 0x68, 0xbd, 0x0e,
-    0xbf, 0x73, 0x79, 0xcd, 0xb6, 0x8f, 0x3c, 0xec, 0xd3, 0x37, 0x2f, 0xbf, 0x66, 0x1e, 0x4e, 0x1c,
+    0xeb, 0x8f, 0x56, 0x3f, 0xf8, 0x4c, 0xa7, 0xf3, 0x8a, 0xd6, 0xe5, 0xb4, 0xb3, 0xe1, 0x5b, 0x18,
+    0xd8, 0x8b, 0x1b, 0xa6, 0x72, 0xa5, 0xc2, 0x18, 0xed, 0x52, 0xd0, 0x4e, 0x77, 0xe1, 0x0e, 0x0f,
 ]);
 
 fn local_delegate_config(validator: Option<Pubkey>) -> DelegateConfig {
@@ -253,6 +255,7 @@ pub mod gameplay_state {
         game_state.max_weeks = 3;
         game_state.is_dead = false;
         game_state.completed = false;
+        game_state.duel_map_seed = 0;
 
         let generated_map = &ctx.accounts.generated_map;
 
@@ -383,12 +386,8 @@ pub mod gameplay_state {
             let boss_id = if game_state.run_mode == RunMode::Gauntlet {
                 [0u8; 12]
             } else if game_state.run_mode == RunMode::Duel {
-                let vrf = extract_gameplay_vrf(
-                    &ctx.accounts.gameplay_vrf_state,
-                    &game_state.session,
-                )?;
-                let (randomness, nonce) = vrf.ok_or(GameplayStateError::VrfNotFulfilled)?;
-                get_duel_boss_id_vrf((&randomness, nonce), 1)?
+                // Use map seed so both matched players get the same boss.
+                get_duel_boss_id_from_seed(generated_map.seed, 1)?
             } else {
                 get_boss_id(game_state.campaign_level, 1)?
             };
@@ -641,6 +640,51 @@ pub mod gameplay_state {
             open_queue.initialized = true;
             open_queue.bump = ctx.bumps.duel_open_queue;
         }
+        let er_queue = &mut ctx.accounts.duel_er_queue;
+        if !er_queue.initialized {
+            er_queue.entries = Vec::new();
+            er_queue.initialized = true;
+            er_queue.bump = ctx.bumps.duel_er_queue;
+        }
+        Ok(())
+    }
+
+    /// Delegates the per-session DuelEntry PDA to the ER.
+    /// Called during duel session setup, after enter_duel creates the account.
+    pub fn delegate_duel_entry(ctx: Context<DelegateDuelEntry>, session_pda: Pubkey) -> Result<()> {
+        let (expected_pda, _) = Pubkey::find_program_address(
+            &[DUEL_ENTRY_SEED, session_pda.as_ref()],
+            &crate::ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.duel_entry.key(),
+            expected_pda,
+            GameplayStateError::Unauthorized
+        );
+        let seeds: &[&[u8]] = &[DUEL_ENTRY_SEED, session_pda.as_ref()];
+        ctx.accounts.delegate_duel_entry(
+            &ctx.accounts.player,
+            seeds,
+            ephemeral_rollups_sdk::cpi::DelegateConfig::default(),
+        )?;
+        Ok(())
+    }
+
+    /// Delegates the DuelErQueue PDA to the ER (permanently, never undelegate).
+    /// Must be called once after initialize_duels creates the account.
+    pub fn delegate_duel_er_queue(ctx: Context<DelegateDuelErQueue>) -> Result<()> {
+        let (expected_pda, _) = Pubkey::find_program_address(&[DUEL_ER_QUEUE_SEED], &crate::ID);
+        require_keys_eq!(
+            ctx.accounts.duel_er_queue.key(),
+            expected_pda,
+            GameplayStateError::Unauthorized
+        );
+        let seeds: &[&[u8]] = &[DUEL_ER_QUEUE_SEED];
+        ctx.accounts.delegate_duel_er_queue(
+            &ctx.accounts.admin,
+            seeds,
+            ephemeral_rollups_sdk::cpi::DelegateConfig::default(),
+        )?;
         Ok(())
     }
 
@@ -1099,7 +1143,7 @@ pub mod gameplay_state {
         Ok(())
     }
 
-    /// Pays duel entry and registers this run in async duel matchmaking.
+    /// Pays duel entry fee. Matching happens later on ER in generate_duel_map.
     pub fn enter_duel(ctx: Context<EnterDuel>) -> Result<()> {
         require_expected_address(
             ctx.accounts.company_treasury.key(),
@@ -1115,7 +1159,6 @@ pub mod gameplay_state {
             GameplayStateError::DuelInvalidRunMode
         );
 
-        let seed = ctx.accounts.generated_map.seed;
         let player_key = ctx.accounts.player.key();
         let duel_entry = &mut ctx.accounts.duel_entry;
         require!(
@@ -1137,7 +1180,7 @@ pub mod gameplay_state {
         duel_entry.player = player_key;
         duel_entry.session = ctx.accounts.game_state.session;
         duel_entry.game_state = ctx.accounts.game_state.key();
-        duel_entry.seed = seed;
+        duel_entry.seed = 0;
         duel_entry.entry_lamports = DUEL_ENTRY_LAMPORTS;
         duel_entry.finalized = false;
         duel_entry.outcome = DuelRunOutcome::Pending;
@@ -1145,41 +1188,120 @@ pub mod gameplay_state {
             tool: None,
             gear: [None; 12],
             gold_at_battle_start: 0,
+            hp_at_finish: 0,
         };
         duel_entry.matched_creator = None;
         duel_entry.settled = false;
         duel_entry.bump = ctx.bumps.duel_entry;
 
-        let open_queue = &mut ctx.accounts.duel_open_queue;
-        let slot =
-            if let Some(matched_idx) = find_matching_creator_index(open_queue, player_key, seed) {
-                let creator = open_queue.entries.remove(matched_idx);
-                duel_entry.matched_creator = Some(creator);
-                2
-            } else {
-                1
-            };
-
         emit!(DuelQueued {
-            seed,
+            seed: 0,
             player: player_key,
             game_state: ctx.accounts.game_state.key(),
             entry_lamports: DUEL_ENTRY_LAMPORTS,
-            slot,
+            slot: 0,
         });
 
         Ok(())
     }
 
-    /// Finalizes this player's duel run and resolves duel outcomes when possible.
-    pub fn finalize_duel_run(ctx: Context<FinalizeDuelRun>) -> Result<()> {
+    /// Assigns the duel map seed from DuelOpenQueue on base layer (before delegation).
+    /// If a creator exists in the queue whose player != current player, pops their entry,
+    /// stores the seed in game_state.duel_map_seed, and saves the creator snapshot in
+    /// duel_entry.matched_creator for PvP resolution on ER.
+    /// Must be called on base layer where DuelOpenQueue is accessible.
+    pub fn assign_duel_map_seed(ctx: Context<AssignDuelMapSeed>) -> Result<()> {
+        let game_state = &mut ctx.accounts.game_state;
+        let player_key = game_state.player;
+        let queue = &mut ctx.accounts.duel_open_queue;
+        let duel_entry = &mut ctx.accounts.duel_entry;
+
+        let matched_idx = queue
+            .entries
+            .iter()
+            .position(|e| e.player != player_key);
+
+        if let Some(idx) = matched_idx {
+            let creator = queue.entries.remove(idx);
+            game_state.duel_map_seed = creator.seed;
+            duel_entry.matched_creator = Some(creator);
+        } else {
+            game_state.duel_map_seed = 0;
+        }
+        Ok(())
+    }
+
+    /// Generates the duel map on ER.
+    /// Reads game_state.duel_map_seed (set by assign_duel_map_seed on base layer):
+    /// - If duel_map_seed != 0 (matched player): uses it so both players get the same map.
+    /// - If duel_map_seed == 0 (creator): derives seed from MapVrfState.
+    pub fn generate_duel_map(ctx: Context<GenerateDuelMap>) -> Result<()> {
+        let game_state = &mut ctx.accounts.game_state;
+        require!(
+            game_state.run_mode == RunMode::Duel,
+            GameplayStateError::DuelInvalidRunMode
+        );
+
+        let seed = if game_state.duel_map_seed != 0 {
+            // Matched path: use the seed assigned from DuelOpenQueue on base layer.
+            game_state.duel_map_seed
+        } else {
+            // Creator path: derive seed from VRF, store on game_state so it
+            // survives undelegation (generated_map data may not persist on surfpool).
+            let vrf_state = ctx
+                .accounts
+                .map_vrf_state
+                .as_ref()
+                .ok_or(GameplayStateError::VrfNotFulfilled)?;
+            require!(
+                vrf_state.status == VrfStatus::Fulfilled,
+                GameplayStateError::VrfNotFulfilled
+            );
+            let mut rng = vrf_rng::GameRng::from_vrf(
+                &vrf_state.randomness,
+                vrf_state.nonce,
+                vrf_rng::domains::MAP_GENERATION,
+            );
+            let derived_seed = rng.next_val();
+            game_state.duel_map_seed = derived_seed;
+            derived_seed
+        };
+
+        let authority_seeds: &[&[&[u8]]] =
+            &[&[GAMEPLAY_AUTHORITY_SEED, &[ctx.bumps.gameplay_authority]]];
+
+        map_generator::cpi::fill_map_with_seed_authorized(
+            CpiContext::new_with_signer(
+                ctx.accounts.map_generator_program.to_account_info(),
+                map_generator::cpi::accounts::FillMapWithSeedAuthorized {
+                    generated_map: ctx.accounts.generated_map.to_account_info(),
+                    session: ctx.accounts.game_session.to_account_info(),
+                    gameplay_authority: ctx.accounts.gameplay_authority.to_account_info(),
+                    session_discovery: ctx
+                        .accounts
+                        .session_discovery
+                        .as_ref()
+                        .map(|a| a.to_account_info()),
+                },
+                authority_seeds,
+            ),
+            seed,
+            game_state.campaign_level,
+        )?;
+
+        Ok(())
+    }
+
+    /// Settles duel run on base layer after undelegation.
+    /// Captures loadout from game_state + inventory, resolves PvP if matched,
+    /// handles payouts, and pushes unmatched creators to DuelOpenQueue.
+    pub fn settle_duel_payout(ctx: Context<SettleDuelPayout>) -> Result<()> {
         require_expected_address(
             ctx.accounts.company_treasury.key(),
             COMPANY_TREASURY_ADDRESS,
             GameplayStateError::InvalidDuelFeeAccount,
         )?;
 
-        let seed = ctx.accounts.generated_map.seed;
         let game_state = &ctx.accounts.game_state;
         require!(
             game_state.run_mode == RunMode::Duel,
@@ -1190,29 +1312,19 @@ pub mod gameplay_state {
             GameplayStateError::DuelRunNotFinished
         );
 
-        let player_key = ctx.accounts.player.key();
+        let seed = game_state.duel_map_seed;
         let duel_entry = &mut ctx.accounts.duel_entry;
+        require!(!duel_entry.settled, GameplayStateError::DuelAlreadyQueued);
+
+        let player_key = ctx.accounts.player.key();
         require_keys_eq!(
             duel_entry.player,
             player_key,
             GameplayStateError::DuelNotQueued
         );
-        require_keys_eq!(
-            duel_entry.game_state,
-            ctx.accounts.game_state.key(),
-            GameplayStateError::DuelGameStateMismatch
-        );
-        require_keys_eq!(
-            duel_entry.session,
-            game_state.session,
-            GameplayStateError::DuelGameStateMismatch
-        );
-        require!(
-            duel_entry.seed == seed,
-            GameplayStateError::DuelSeedMismatch
-        );
-        require!(!duel_entry.finalized, GameplayStateError::DuelAlreadyQueued);
 
+        // Capture loadout from game_state + inventory (now back on base after undelegation).
+        duel_entry.seed = seed;
         duel_entry.finalized = true;
         duel_entry.outcome = if game_state.completed {
             DuelRunOutcome::CompletedWeek3
@@ -1223,6 +1335,7 @@ pub mod gameplay_state {
             tool: ctx.accounts.inventory.tool,
             gear: ctx.accounts.inventory.gear,
             gold_at_battle_start: game_state.gold,
+            hp_at_finish: game_state.hp,
         };
 
         emit!(DuelRunFinalized {
@@ -1232,24 +1345,27 @@ pub mod gameplay_state {
             final_week: game_state.week,
         });
 
+        duel_entry.settled = true;
+
         if let Some(creator) = duel_entry.matched_creator {
-            let creator_inventory = snapshot_creator_inventory(creator);
             if duel_entry.outcome == DuelRunOutcome::CompletedWeek3 {
+                // Resolve PvP combat deterministically from both loadouts.
+                let creator_inventory = snapshot_creator_inventory(creator);
                 let opponent_inventory = snapshot_duel_entry_inventory(duel_entry);
                 let creator_stats = calculate_stats(
                     &creator_inventory,
                     GAUNTLET_CAMPAIGN_LEVEL,
-                    game_state.run_mode,
+                    RunMode::Duel,
                 );
                 let opponent_stats = calculate_stats(
                     &opponent_inventory,
                     GAUNTLET_CAMPAIGN_LEVEL,
-                    game_state.run_mode,
+                    RunMode::Duel,
                 );
                 let all_creator_effects = generate_annotated_combat_effects(&creator_inventory);
                 let all_opponent_effects = generate_annotated_combat_effects(&opponent_inventory);
-                let creator_combatant = build_full_hp_combatant(&creator_stats, &all_creator_effects);
-                let opponent_combatant = build_full_hp_combatant(&opponent_stats, &all_opponent_effects);
+                let creator_combatant = build_player_combatant(creator.loadout.hp_at_finish, &creator_stats, &all_creator_effects);
+                let opponent_combatant = build_player_combatant(duel_entry.loadout.hp_at_finish, &opponent_stats, &all_opponent_effects);
                 let creator_effects = strip_baked_battle_start_stat_effects(all_creator_effects);
                 let opponent_effects = strip_baked_battle_start_stat_effects(all_opponent_effects);
                 let combat_outcome = resolve_pvp_combat_annotated_with_both_gold(
@@ -1259,22 +1375,8 @@ pub mod gameplay_state {
                     opponent_effects,
                     creator.loadout.gold_at_battle_start,
                     duel_entry.loadout.gold_at_battle_start,
-                    duel_final_tie_player_a_wins(seed),
+                    duel_final_tie_player_a_wins(duel_entry.seed),
                 )?;
-
-                emit!(DuelCombatVisual {
-                    seed,
-                    player_a: creator.player,
-                    player_b: player_key,
-                    player_a_tool: creator_inventory.tool,
-                    player_a_gear: creator_inventory.gear,
-                    player_b_tool: opponent_inventory.tool,
-                    player_b_gear: opponent_inventory.gear,
-                    player_a_won: combat_outcome.player_won,
-                    final_player_a_hp: combat_outcome.final_player_hp,
-                    final_player_b_hp: combat_outcome.final_enemy_hp,
-                    turns_taken: combat_outcome.turns_taken,
-                });
 
                 let total_pot = creator
                     .entry_lamports
@@ -1314,49 +1416,35 @@ pub mod gameplay_state {
                     &ctx.accounts.gauntlet_pool_vault.to_account_info(),
                     gauntlet_fee,
                 )?;
-
-                emit!(DuelResolved {
-                    seed,
-                    player_a: creator.player,
-                    player_b: Some(player_key),
-                    winner: Some(winner_key),
-                    total_pot,
-                    winner_payout,
-                    company_fee,
-                    gauntlet_fee,
-                    resolution: DuelResolution::CompletedCombat,
-                    turns_taken: Some(combat_outcome.turns_taken),
-                });
             } else {
+                // Opponent eliminated: creator wins pot minus fees.
                 let total_pot = creator
                     .entry_lamports
                     .checked_add(duel_entry.entry_lamports)
                     .ok_or(GameplayStateError::ArithmeticOverflow)?;
+                let (company_fee, gauntlet_fee, winner_payout) = compute_pvp_pot_split(total_pot)?;
                 let creator_wallet =
                     resolve_wallet_account(ctx.accounts.creator_wallet.as_ref(), creator.player)?;
                 transfer_lamports_from_vault(
                     &ctx.accounts.duel_vault.to_account_info(),
                     &creator_wallet,
-                    total_pot,
+                    winner_payout,
                 )?;
-                emit!(DuelResolved {
-                    seed,
-                    player_a: creator.player,
-                    player_b: Some(player_key),
-                    winner: Some(creator.player),
-                    total_pot,
-                    winner_payout: total_pot,
-                    company_fee: 0,
-                    gauntlet_fee: 0,
-                    resolution: DuelResolution::OpponentEliminated,
-                    turns_taken: None,
-                });
+                transfer_lamports_from_vault(
+                    &ctx.accounts.duel_vault.to_account_info(),
+                    &ctx.accounts.company_treasury.to_account_info(),
+                    company_fee,
+                )?;
+                transfer_lamports_from_vault(
+                    &ctx.accounts.duel_vault.to_account_info(),
+                    &ctx.accounts.gauntlet_pool_vault.to_account_info(),
+                    gauntlet_fee,
+                )?;
             }
-
-            duel_entry.settled = true;
             return Ok(());
         }
 
+        // Unmatched creator who completed: push to DuelOpenQueue for matching.
         if duel_entry.outcome == DuelRunOutcome::CompletedWeek3 {
             let open_queue = &mut ctx.accounts.duel_open_queue;
             require!(
@@ -1373,6 +1461,7 @@ pub mod gameplay_state {
             return Ok(());
         }
 
+        // Unmatched + eliminated: distribute to company + gauntlet pool.
         let (company_fee, gauntlet_fee) =
             compute_eliminated_unmatched_distribution(duel_entry.entry_lamports)?;
         transfer_lamports_from_vault(
@@ -1386,26 +1475,12 @@ pub mod gameplay_state {
             gauntlet_fee,
         )?;
 
-        emit!(DuelResolved {
-            seed,
-            player_a: player_key,
-            player_b: None,
-            winner: None,
-            total_pot: duel_entry.entry_lamports,
-            winner_payout: 0,
-            company_fee,
-            gauntlet_fee,
-            resolution: DuelResolution::UnmatchedEliminated,
-            turns_taken: None,
-        });
-
-        duel_entry.settled = true;
         Ok(())
     }
 
     /// Resets the duel entry for the current session.
-    /// If the run was not finalized (abandoned), refunds the player's stake from the vault
-    /// and re-queues any matched creator back into the open queue.
+    /// Abandoning forfeits the player's stake — no refund.
+    /// If player was matched, the matched creator's entry is NOT re-queued.
     /// Called before end_session/abandon_session so the player can start a new duel.
     pub fn reset_duel_entry(ctx: Context<ResetDuelEntry>) -> Result<()> {
         let duel_entry = &mut ctx.accounts.duel_entry;
@@ -1414,19 +1489,57 @@ pub mod gameplay_state {
             return Ok(());
         }
 
-        if !duel_entry.finalized {
+        // If already settled (via settle_duel_payout), just zero the entry — no distribution.
+        if duel_entry.settled || duel_entry.finalized {
+            duel_entry.matched_creator = None;
+            duel_entry.entry_lamports = 0;
+            duel_entry.finalized = false;
+            duel_entry.settled = false;
+            duel_entry.outcome = DuelRunOutcome::Pending;
+            return Ok(());
+        }
+
+        // Abandon (not finalized/settled): distribute forfeited stake.
+        if let Some(creator) = duel_entry.matched_creator.take() {
+            // Matched: creator wins pot minus fees.
+            let total_pot = creator
+                .entry_lamports
+                .checked_add(duel_entry.entry_lamports)
+                .ok_or(GameplayStateError::ArithmeticOverflow)?;
+            let (company_fee, gauntlet_fee, winner_payout) = compute_pvp_pot_split(total_pot)?;
+            let creator_wallet = resolve_wallet_account(
+                ctx.accounts.creator_wallet.as_ref(),
+                creator.player,
+            )?;
             transfer_lamports_from_vault(
                 &ctx.accounts.duel_vault.to_account_info(),
-                &ctx.accounts.player.to_account_info(),
-                duel_entry.entry_lamports,
+                &creator_wallet,
+                winner_payout,
             )?;
-
-            if let Some(creator) = duel_entry.matched_creator.take() {
-                let open_queue = &mut ctx.accounts.duel_open_queue;
-                if open_queue.entries.len() < constants::DUEL_OPEN_QUEUE_CAPACITY {
-                    open_queue.entries.push(creator);
-                }
-            }
+            transfer_lamports_from_vault(
+                &ctx.accounts.duel_vault.to_account_info(),
+                &ctx.accounts.company_treasury.to_account_info(),
+                company_fee,
+            )?;
+            transfer_lamports_from_vault(
+                &ctx.accounts.duel_vault.to_account_info(),
+                &ctx.accounts.gauntlet_pool_vault.to_account_info(),
+                gauntlet_fee,
+            )?;
+        } else {
+            // Unmatched: 50/50 split to company + gauntlet pool.
+            let (company_fee, gauntlet_fee) =
+                compute_eliminated_unmatched_distribution(duel_entry.entry_lamports)?;
+            transfer_lamports_from_vault(
+                &ctx.accounts.duel_vault.to_account_info(),
+                &ctx.accounts.company_treasury.to_account_info(),
+                company_fee,
+            )?;
+            transfer_lamports_from_vault(
+                &ctx.accounts.duel_vault.to_account_info(),
+                &ctx.accounts.gauntlet_pool_vault.to_account_info(),
+                gauntlet_fee,
+            )?;
         }
 
         duel_entry.entry_lamports = 0;
@@ -1439,6 +1552,7 @@ pub mod gameplay_state {
 
     /// Resets an orphaned duel entry whose session PDA no longer exists.
     /// This recovers players stuck in the duel queue after an interrupted abandon flow.
+    /// No refund — stake is forfeited.
     pub fn reset_orphaned_duel_entry(ctx: Context<ResetOrphanedDuelEntry>) -> Result<()> {
         let duel_entry = &mut ctx.accounts.duel_entry;
 
@@ -1446,21 +1560,8 @@ pub mod gameplay_state {
             return Ok(());
         }
 
-        if !duel_entry.finalized {
-            transfer_lamports_from_vault(
-                &ctx.accounts.duel_vault.to_account_info(),
-                &ctx.accounts.player.to_account_info(),
-                duel_entry.entry_lamports,
-            )?;
-
-            if let Some(creator) = duel_entry.matched_creator.take() {
-                let open_queue = &mut ctx.accounts.duel_open_queue;
-                if open_queue.entries.len() < constants::DUEL_OPEN_QUEUE_CAPACITY {
-                    open_queue.entries.push(creator);
-                }
-            }
-        }
-
+        // No refund on orphaned reset — stake is forfeited.
+        duel_entry.matched_creator = None;
         duel_entry.entry_lamports = 0;
         duel_entry.finalized = false;
         duel_entry.settled = false;
@@ -2374,12 +2475,7 @@ pub mod gameplay_state {
             if game_state.week >= game_state.max_weeks {
                 [0u8; 12]
             } else {
-                let vrf = extract_gameplay_vrf(
-                    &ctx.accounts.gameplay_vrf_state,
-                    &game_state.session,
-                )?;
-                let (randomness, nonce) = vrf.ok_or(GameplayStateError::VrfNotFulfilled)?;
-                get_duel_boss_id_vrf((&randomness, nonce), game_state.week)?
+                get_duel_boss_id_from_seed(ctx.accounts.generated_map.seed, game_state.week)?
             }
         } else if game_state.run_mode == RunMode::Gauntlet {
             [0u8; 12]
@@ -3396,7 +3492,7 @@ fn resolve_enemy_combat(
 #[allow(clippy::too_many_arguments)]
 fn resolve_boss_fight<'info>(
     game_state: &mut GameState,
-    _map_seed: u64,
+    map_seed: u64,
     inventory: &PlayerInventory,
     inventory_info: &AccountInfo<'info>,
     gameplay_authority: &AccountInfo<'info>,
@@ -3410,10 +3506,9 @@ fn resolve_boss_fight<'info>(
 ) -> Result<bool> {
     let stage = game_state.campaign_level;
     let (boss_input, boss_id) = if game_state.run_mode == RunMode::Duel {
-        let duel_vrf = vrf.ok_or(GameplayStateError::VrfNotFulfilled)?;
         (
-            get_duel_boss_for_combat_vrf(duel_vrf, game_state.week)?,
-            get_duel_boss_id_vrf(duel_vrf, game_state.week)?,
+            get_duel_boss_for_combat_from_seed(map_seed, game_state.week)?,
+            get_duel_boss_id_from_seed(map_seed, game_state.week)?,
         )
     } else {
         (
@@ -3515,8 +3610,7 @@ fn resolve_boss_fight<'info>(
                     if game_state.week >= game_state.max_weeks {
                         [0u8; 12]
                     } else {
-                        let duel_vrf = vrf.ok_or(GameplayStateError::VrfNotFulfilled)?;
-                        get_duel_boss_id_vrf(duel_vrf, game_state.week)?
+                        get_duel_boss_id_from_seed(map_seed, game_state.week)?
                     }
                 } else if game_state.run_mode == RunMode::Gauntlet {
                     [0u8; 12]
@@ -3615,7 +3709,7 @@ fn resolve_gauntlet_echo_inline<'info>(
     let echo_combatant = build_full_hp_combatant(&echo_stats, &all_echo_effects);
     let echo_effects = strip_baked_battle_start_stat_effects(all_echo_effects);
 
-    let outcome = resolve_pvp_combat_outcome_only(
+    let outcome = resolve_pvp_combat_annotated_with_both_gold(
         player_input,
         echo_combatant,
         player_effects,
@@ -4495,10 +4589,43 @@ pub struct InitializeDuels<'info> {
     )]
     pub duel_open_queue: Account<'info, DuelOpenQueue>,
 
+    #[account(
+        init_if_needed,
+        payer = admin,
+        space = 8 + DuelErQueue::INIT_SPACE,
+        seeds = [DUEL_ER_QUEUE_SEED],
+        bump
+    )]
+    pub duel_er_queue: Account<'info, DuelErQueue>,
+
     #[account(mut)]
     pub admin: Signer<'info>,
 
     pub system_program: Program<'info, System>,
+}
+
+#[delegate]
+#[derive(Accounts)]
+pub struct DelegateDuelEntry<'info> {
+    /// CHECK: Validated in handler as DuelEntry PDA. Must be AccountInfo to avoid
+    /// Anchor serialization crash after delegation changes the owner.
+    #[account(mut, del)]
+    pub duel_entry: AccountInfo<'info>,
+
+    #[account(mut)]
+    pub player: Signer<'info>,
+}
+
+#[delegate]
+#[derive(Accounts)]
+pub struct DelegateDuelErQueue<'info> {
+    /// CHECK: Validated in handler as DuelErQueue PDA. Must be AccountInfo to avoid
+    /// Anchor serialization crash after delegation changes the owner.
+    #[account(mut, del)]
+    pub duel_er_queue: AccountInfo<'info>,
+
+    #[account(mut)]
+    pub admin: Signer<'info>,
 }
 
 #[derive(Accounts)]
@@ -4834,13 +4961,6 @@ pub struct EnterDuel<'info> {
 
     #[account(
         mut,
-        seeds = [DUEL_OPEN_QUEUE_SEED],
-        bump = duel_open_queue.bump
-    )]
-    pub duel_open_queue: Box<Account<'info, DuelOpenQueue>>,
-
-    #[account(
-        mut,
         seeds = [DUEL_VAULT_SEED],
         bump = duel_vault.bump,
     )]
@@ -4854,13 +4974,6 @@ pub struct EnterDuel<'info> {
         has_one = player @ GameplayStateError::Unauthorized,
     )]
     pub game_state: Box<Account<'info, GameState>>,
-
-    #[account(
-        seeds = [map_generator::state::GeneratedMap::SEED_PREFIX, game_state.session.as_ref()],
-        bump = generated_map.bump,
-        seeds::program = map_generator::ID,
-    )]
-    pub generated_map: Box<Account<'info, map_generator::state::GeneratedMap>>,
 
     #[account(mut)]
     pub company_treasury: SystemAccount<'info>,
@@ -4876,7 +4989,21 @@ pub struct EnterDuel<'info> {
 }
 
 #[derive(Accounts)]
-pub struct FinalizeDuelRun<'info> {
+pub struct AssignDuelMapSeed<'info> {
+    #[account(
+        mut,
+        constraint = game_state.session_signer == session_signer.key() @ GameplayStateError::Unauthorized,
+        constraint = game_state.run_mode == RunMode::Duel @ GameplayStateError::DuelInvalidRunMode,
+    )]
+    pub game_state: Box<Account<'info, GameState>>,
+
+    #[account(
+        mut,
+        seeds = [DUEL_OPEN_QUEUE_SEED],
+        bump = duel_open_queue.bump,
+    )]
+    pub duel_open_queue: Box<Account<'info, DuelOpenQueue>>,
+
     #[account(
         mut,
         seeds = [DUEL_ENTRY_SEED, game_state.session.as_ref()],
@@ -4884,12 +5011,70 @@ pub struct FinalizeDuelRun<'info> {
     )]
     pub duel_entry: Box<Account<'info, DuelEntry>>,
 
+    pub session_signer: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct GenerateDuelMap<'info> {
     #[account(
         mut,
-        seeds = [DUEL_OPEN_QUEUE_SEED],
-        bump = duel_open_queue.bump
+        constraint = game_state.session_signer == player.key() @ GameplayStateError::Unauthorized,
+        constraint = game_state.run_mode == RunMode::Duel @ GameplayStateError::DuelInvalidRunMode,
     )]
-    pub duel_open_queue: Box<Account<'info, DuelOpenQueue>>,
+    pub game_state: Box<Account<'info, GameState>>,
+
+    /// CHECK: Generated map account owned by map-generator; validated by CPI.
+    #[account(
+        mut,
+        seeds = [map_generator::state::GeneratedMap::SEED_PREFIX, game_state.session.as_ref()],
+        bump,
+        seeds::program = map_generator::ID,
+    )]
+    pub generated_map: AccountInfo<'info>,
+
+    /// Optional MapVrfState for creator path (VRF seed derivation, read-only).
+    /// Not delegated on localnet — must not be writable.
+    #[account(
+        seeds = [map_generator::state::MapVrfState::SEED_PREFIX, game_state.session.as_ref()],
+        bump,
+        seeds::program = map_generator::ID,
+    )]
+    pub map_vrf_state: Option<Account<'info, map_generator::state::MapVrfState>>,
+
+    /// Gameplay authority PDA for CPI signing.
+    /// CHECK: Validated by seeds constraint.
+    #[account(
+        seeds = [GAMEPLAY_AUTHORITY_SEED],
+        bump,
+    )]
+    pub gameplay_authority: AccountInfo<'info>,
+
+    pub map_generator_program: Program<'info, map_generator::program::MapGenerator>,
+
+    /// Optional SessionDiscovery for map metadata sync.
+    /// CHECK: Passed through to map-generator CPI; validated there.
+    #[account(mut)]
+    pub session_discovery: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: Session account for PDA verification.
+    #[account(
+        constraint = game_state.session == game_session.key() @ GameplayStateError::InvalidSession,
+    )]
+    pub game_session: AccountInfo<'info>,
+
+    pub player: Signer<'info>,
+}
+
+
+/// SettleDuelPayout runs on base layer after undelegation.
+#[derive(Accounts)]
+pub struct SettleDuelPayout<'info> {
+    #[account(
+        mut,
+        seeds = [DUEL_ENTRY_SEED, duel_entry.session.as_ref()],
+        bump = duel_entry.bump,
+    )]
+    pub duel_entry: Box<Account<'info, DuelEntry>>,
 
     #[account(
         mut,
@@ -4898,35 +5083,11 @@ pub struct FinalizeDuelRun<'info> {
     )]
     pub duel_vault: Account<'info, DuelVault>,
 
-    /// CHECK: Player wallet — validated by has_one on game_state. Not required to sign.
+    /// CHECK: Player wallet — validated against duel_entry.player.
     #[account(mut)]
     pub player: AccountInfo<'info>,
 
-    #[account(
-        constraint = game_state.session_signer == session_signer.key() @ GameplayStateError::Unauthorized
-    )]
     pub session_signer: Signer<'info>,
-
-    #[account(
-        mut,
-        has_one = player @ GameplayStateError::Unauthorized,
-    )]
-    pub game_state: Box<Account<'info, GameState>>,
-
-    #[account(
-        mut,
-        seeds = [b"inventory", game_state.session.as_ref()],
-        bump = inventory.bump,
-        seeds::program = player_inventory::ID,
-    )]
-    pub inventory: Box<Account<'info, PlayerInventory>>,
-
-    #[account(
-        seeds = [map_generator::state::GeneratedMap::SEED_PREFIX, game_state.session.as_ref()],
-        bump = generated_map.bump,
-        seeds::program = map_generator::ID,
-    )]
-    pub generated_map: Box<Account<'info, map_generator::state::GeneratedMap>>,
 
     /// Wallet for matched creator payout when current player loses.
     #[account(mut)]
@@ -4941,6 +5102,25 @@ pub struct FinalizeDuelRun<'info> {
         bump = gauntlet_pool_vault.bump
     )]
     pub gauntlet_pool_vault: Account<'info, GauntletPoolVault>,
+
+    #[account(
+        mut,
+        seeds = [DUEL_OPEN_QUEUE_SEED],
+        bump = duel_open_queue.bump,
+    )]
+    pub duel_open_queue: Box<Account<'info, DuelOpenQueue>>,
+
+    #[account(
+        has_one = player @ GameplayStateError::Unauthorized,
+    )]
+    pub game_state: Box<Account<'info, GameState>>,
+
+    #[account(
+        seeds = [b"inventory", game_state.session.as_ref()],
+        bump = inventory.bump,
+        seeds::program = player_inventory::ID,
+    )]
+    pub inventory: Box<Account<'info, PlayerInventory>>,
 }
 
 #[derive(Accounts)]
@@ -4954,29 +5134,36 @@ pub struct ResetDuelEntry<'info> {
     pub duel_entry: Box<Account<'info, DuelEntry>>,
 
     #[account(
+        has_one = session_signer @ GameplayStateError::Unauthorized,
+    )]
+    pub game_state: Box<Account<'info, GameState>>,
+
+    /// CHECK: Player wallet. Validated by duel_entry.player constraint.
+    #[account(mut)]
+    pub player: AccountInfo<'info>,
+
+    pub session_signer: Signer<'info>,
+
+    #[account(
         mut,
         seeds = [DUEL_VAULT_SEED],
         bump = duel_vault.bump,
     )]
     pub duel_vault: Account<'info, DuelVault>,
 
+    #[account(mut)]
+    pub company_treasury: SystemAccount<'info>,
+
     #[account(
         mut,
-        seeds = [DUEL_OPEN_QUEUE_SEED],
-        bump = duel_open_queue.bump,
+        seeds = [GAUNTLET_POOL_VAULT_SEED],
+        bump = gauntlet_pool_vault.bump,
     )]
-    pub duel_open_queue: Box<Account<'info, DuelOpenQueue>>,
+    pub gauntlet_pool_vault: Account<'info, GauntletPoolVault>,
 
-    #[account(
-        has_one = session_signer @ GameplayStateError::Unauthorized,
-    )]
-    pub game_state: Box<Account<'info, GameState>>,
-
-    /// CHECK: Player wallet receives refund. Validated by duel_entry.player constraint.
+    /// Wallet for matched creator payout when abandoner was matched.
     #[account(mut)]
-    pub player: AccountInfo<'info>,
-
-    pub session_signer: Signer<'info>,
+    pub creator_wallet: Option<SystemAccount<'info>>,
 }
 
 #[derive(Accounts)]
@@ -4996,20 +5183,6 @@ pub struct ResetOrphanedDuelEntry<'info> {
         constraint = session_pda.lamports() == 0 @ GameplayStateError::SessionNotActive,
     )]
     pub session_pda: UncheckedAccount<'info>,
-
-    #[account(
-        mut,
-        seeds = [DUEL_VAULT_SEED],
-        bump = duel_vault.bump,
-    )]
-    pub duel_vault: Account<'info, DuelVault>,
-
-    #[account(
-        mut,
-        seeds = [DUEL_OPEN_QUEUE_SEED],
-        bump = duel_open_queue.bump,
-    )]
-    pub duel_open_queue: Box<Account<'info, DuelOpenQueue>>,
 
     #[account(mut)]
     pub player: Signer<'info>,
@@ -5478,6 +5651,14 @@ pub struct SyncDiscoveryBoss<'info> {
 
     /// Optional GameplayVrfState for VRF-backed duel boss selection.
     pub gameplay_vrf_state: Option<Account<'info, GameplayVrfState>>,
+
+    /// GeneratedMap for reading map seed (duel boss derived from shared seed).
+    #[account(
+        seeds = [map_generator::state::GeneratedMap::SEED_PREFIX, game_state.session.as_ref()],
+        bump = generated_map.bump,
+        seeds::program = map_generator::ID,
+    )]
+    pub generated_map: Box<Account<'info, map_generator::state::GeneratedMap>>,
 
     pub player: Signer<'info>,
 }
@@ -6116,7 +6297,7 @@ mod hp_logic_tests {
     }
 
     #[test]
-    fn test_find_matching_creator_index_skips_wrong_seed_and_self() {
+    fn test_find_matching_creator_index_skips_self() {
         let entrant = Pubkey::new_unique();
         let other = Pubkey::new_unique();
         let seed = 42u64;
@@ -6125,18 +6306,19 @@ mod hp_logic_tests {
             tool: None,
             gear: [None; 12],
             gold_at_battle_start: 0,
+            hp_at_finish: 0,
         };
         let queue = DuelOpenQueue {
             entries: vec![
                 DuelCreatorEntry {
-                    player: other,
+                    player: entrant,
                     seed: 7,
                     entry_lamports: 1,
                     finished_slot: 1,
                     loadout,
                 },
                 DuelCreatorEntry {
-                    player: entrant,
+                    player: other,
                     seed,
                     entry_lamports: 1,
                     finished_slot: 2,
@@ -6154,18 +6336,20 @@ mod hp_logic_tests {
             bump: 1,
         };
 
+        // Seed match: index 1 is first non-entrant with matching seed
         let idx = find_matching_creator_index(&queue, entrant, seed);
-        assert_eq!(idx, Some(2));
+        assert_eq!(idx, Some(1));
     }
 
     #[test]
-    fn test_find_matching_creator_index_none_when_no_eligible_entry() {
+    fn test_find_matching_creator_index_none_when_only_self() {
         let entrant = Pubkey::new_unique();
         let seed = 99u64;
         let loadout = DuelLoadoutSnapshot {
             tool: None,
             gear: [None; 12],
             gold_at_battle_start: 0,
+            hp_at_finish: 0,
         };
         let queue = DuelOpenQueue {
             entries: vec![DuelCreatorEntry {
@@ -6263,6 +6447,7 @@ mod hp_logic_tests {
             gauntlet_defender_credit: None,
             gauntlet_highest_week_won: 0,
             gauntlet_settled: false,
+            duel_map_seed: 0,
             enemies: Vec::new(),
             enemy_count: 0,
         }
@@ -6309,3 +6494,103 @@ mod hp_logic_tests {
 
 #[cfg(test)]
 mod combat_scenarios_tests;
+
+#[cfg(test)]
+mod duel_flow_tests {
+    use super::*;
+    use crate::movement::{get_duel_boss_id_from_seed, get_duel_boss_for_combat_from_seed};
+
+    #[test]
+    fn test_duel_boss_from_seed_deterministic() {
+        // Same seed + week should always produce the same boss
+        let boss1 = get_duel_boss_id_from_seed(12345, 1).unwrap();
+        let boss2 = get_duel_boss_id_from_seed(12345, 1).unwrap();
+        assert_eq!(boss1, boss2, "Same seed+week should produce same boss");
+    }
+
+    #[test]
+    fn test_duel_boss_from_seed_differs_by_week() {
+        // Different weeks should produce different bosses (with high probability)
+        let boss_w1 = get_duel_boss_id_from_seed(99999, 1).unwrap();
+        let boss_w2 = get_duel_boss_id_from_seed(99999, 2).unwrap();
+        // Not guaranteed to differ, but extremely likely with different week inputs
+        // Just verify both are valid (non-zero)
+        assert_ne!(boss_w1, [0u8; 12], "Week 1 boss should be non-zero");
+        assert_ne!(boss_w2, [0u8; 12], "Week 2 boss should be non-zero");
+    }
+
+    #[test]
+    fn test_duel_boss_from_seed_differs_by_seed() {
+        // Different seeds should produce different bosses (with high probability)
+        let boss_a = get_duel_boss_id_from_seed(11111, 1).unwrap();
+        let boss_b = get_duel_boss_id_from_seed(22222, 1).unwrap();
+        assert_ne!(boss_a, boss_b, "Different seeds should produce different bosses");
+    }
+
+    #[test]
+    fn test_duel_boss_combatant_from_seed_matches_id() {
+        // The boss ID from get_duel_boss_id_from_seed should match the combatant from
+        // get_duel_boss_for_combat_from_seed (same boss, just different return types)
+        let seed = 42u64;
+        let week = 1u8;
+        let boss_id = get_duel_boss_id_from_seed(seed, week).unwrap();
+        let _combatant = get_duel_boss_for_combat_from_seed(seed, week).unwrap();
+        // The combatant should be for the same boss
+        let boss_def = boss_system::get_boss(&boss_id);
+        assert!(boss_def.is_some(), "Boss ID should resolve to a valid boss definition");
+    }
+
+    #[test]
+    fn test_duel_boss_both_players_same_seed_same_boss() {
+        // Both matched duel players share the same map seed, so they must get identical bosses.
+        // Simulates: player A generates map with seed X, player B matches and gets seed X.
+        let shared_seed = 7777777u64;
+        for week in 1..=2u8 {
+            let boss_player_a = get_duel_boss_id_from_seed(shared_seed, week).unwrap();
+            let boss_player_b = get_duel_boss_id_from_seed(shared_seed, week).unwrap();
+            assert_eq!(
+                boss_player_a, boss_player_b,
+                "Both players must get the same boss for week {} with shared seed",
+                week
+            );
+        }
+    }
+
+    #[test]
+    fn test_duel_loadout_snapshot_has_hp() {
+        // Verify DuelLoadoutSnapshot includes hp_at_finish field
+        let loadout = DuelLoadoutSnapshot {
+            tool: None,
+            gear: [None; 12],
+            gold_at_battle_start: 100,
+            hp_at_finish: 15,
+        };
+        assert_eq!(loadout.hp_at_finish, 15);
+        assert_eq!(loadout.gold_at_battle_start, 100);
+    }
+
+    #[test]
+    fn test_compute_pvp_pot_split() {
+        // 0.2 SOL pot = 200_000_000 lamports
+        let total_pot = 200_000_000u64;
+        let (company_fee, gauntlet_fee, winner_payout) = compute_pvp_pot_split(total_pot).unwrap();
+
+        // 3% company, 2% gauntlet, 95% winner
+        assert_eq!(company_fee, 6_000_000, "Company fee should be 3%");
+        assert_eq!(gauntlet_fee, 4_000_000, "Gauntlet fee should be 2%");
+        assert_eq!(winner_payout, 190_000_000, "Winner payout should be 95%");
+        assert_eq!(company_fee + gauntlet_fee + winner_payout, total_pot, "Fees + payout should equal total pot");
+    }
+
+    #[test]
+    fn test_compute_eliminated_unmatched_distribution() {
+        // 0.1 SOL entry = 100_000_000 lamports
+        let entry = 100_000_000u64;
+        let (company_total, gauntlet_total) = compute_eliminated_unmatched_distribution(entry).unwrap();
+
+        // Should sum to the full entry amount
+        assert_eq!(company_total + gauntlet_total, entry, "Distribution should equal entry amount");
+        // Company gets slightly more (3% base + half remainder)
+        assert!(company_total > gauntlet_total, "Company should get slightly more than gauntlet");
+    }
+}

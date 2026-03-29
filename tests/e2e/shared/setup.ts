@@ -18,13 +18,13 @@ import * as path from "path";
 
 // ── Program IDs ─────────────────────────────────────────────────────────────
 export const PROGRAM_IDS = {
-  playerProfile: new PublicKey("Ch3bbL1oQk2z5rX1jiun3KuSWZqnXZ1MnrfrtKj4MKun"),
-  sessionManager: new PublicKey("6w1XVMSTRmZU9AWCKVvKohGAHSFMENhda7vqhKPQ8TPn"),
-  mapGenerator: new PublicKey("GCy5GqvnJN99rgGtV6fMn8NtL9E7RoAyHDGzQv8me65j"),
-  gameplayState: new PublicKey("C8hK4qsqsSYQeqyXuTPTUUS3T7N74WnZCuzvChTpK1Mo"),
-  playerInventory: new PublicKey("APRnvp41jEYnT1EnrdBTim7bodqE6v2RSgzv1CG7Qv7u"),
-  poiSystem: new PublicKey("KiT25b86BSAF8yErcWwyuuWNaoXMpNf859NjH41TpSj"),
-  nftMarketplace: new PublicKey("ApUAEEKYsRMjxoMA65WV2xiG8xGwWzFhHjTMGGefcumK"),
+  playerProfile: new PublicKey("GSLNDrNoHeZXVxB7Yu7tUe8417PpZ5XV7JPYupPw9WQy"),
+  sessionManager: new PublicKey("CrU4bUFreKy2XsoU2oksdJWKim11w2VpagKBQ2MTkyMz"),
+  mapGenerator: new PublicKey("E6kc5Edg1s3AXVQQFRoYdAq4vPAFbkYbP7B5ujiuZwz4"),
+  gameplayState: new PublicKey("3rzGGgHRRnMATmYJkjidPMapEMesvA16PTs5HhfAep4V"),
+  playerInventory: new PublicKey("GrXaTaf7wZ74mTaWQ9QSUPAKG6M3Sf4xaZjNytTLa8yC"),
+  poiSystem: new PublicKey("7rTRqR6H8ztxpcPVKtAwXGi7PQFDYLgMkWSBRLPcYMH2"),
+  nftMarketplace: new PublicKey("GLKxBpZ8hc7qzvD9VHAVsJEjHSu2JVp1HaPrGH4fpTci"),
   mplCore: new PublicKey("CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d"),
   delegation: new PublicKey("DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"),
 };

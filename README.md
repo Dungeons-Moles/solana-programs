@@ -86,12 +86,12 @@ anchor build
 
 ```bash
 mb-test-validator --reset --ledger .mb-ledger --rpc-port 8899 --faucet-port 9902 \
-  --bpf-program C8hK4qsqsSYQeqyXuTPTUUS3T7N74WnZCuzvChTpK1Mo target/deploy/gameplay_state.so \
-  --bpf-program GCy5GqvnJN99rgGtV6fMn8NtL9E7RoAyHDGzQv8me65j target/deploy/map_generator.so \
-  --bpf-program KiT25b86BSAF8yErcWwyuuWNaoXMpNf859NjH41TpSj target/deploy/poi_system.so \
-  --bpf-program 6w1XVMSTRmZU9AWCKVvKohGAHSFMENhda7vqhKPQ8TPn target/deploy/session_manager.so \
-  --bpf-program APRnvp41jEYnT1EnrdBTim7bodqE6v2RSgzv1CG7Qv7u target/deploy/player_inventory.so \
-  --bpf-program Ch3bbL1oQk2z5rX1jiun3KuSWZqnXZ1MnrfrtKj4MKun target/deploy/player_profile.so
+  --bpf-program 3rzGGgHRRnMATmYJkjidPMapEMesvA16PTs5HhfAep4V target/deploy/gameplay_state.so \
+  --bpf-program E6kc5Edg1s3AXVQQFRoYdAq4vPAFbkYbP7B5ujiuZwz4 target/deploy/map_generator.so \
+  --bpf-program 7rTRqR6H8ztxpcPVKtAwXGi7PQFDYLgMkWSBRLPcYMH2 target/deploy/poi_system.so \
+  --bpf-program CrU4bUFreKy2XsoU2oksdJWKim11w2VpagKBQ2MTkyMz target/deploy/session_manager.so \
+  --bpf-program GrXaTaf7wZ74mTaWQ9QSUPAKG6M3Sf4xaZjNytTLa8yC target/deploy/player_inventory.so \
+  --bpf-program GSLNDrNoHeZXVxB7Yu7tUe8417PpZ5XV7JPYupPw9WQy target/deploy/player_profile.so
 ```
 
 3. Initialize the on-chain program state:

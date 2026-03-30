@@ -1,0 +1,710 @@
+import { expect } from "chai";
+import {
+  anchor,
+  Keypair,
+  LAMPORTS_PER_SOL,
+  PublicKey,
+  SystemProgram,
+  Connection,
+  loadAllPrograms,
+  loadWalletKeypair,
+  createProvider,
+  walletFromKeypair,
+  airdropAndConfirm,
+  PROGRAM_IDS,
+  COMPANY_TREASURY,
+  AllPrograms,
+} from "../shared/setup";
+import {
+  getSessionCounterPda,
+  getSessionNoncesPda,
+  getSessionManagerAuthorityPda,
+  getPlayerProfilePda,
+  getMapConfigPda,
+  getGeneratedMapPda,
+  getGameStatePda,
+  getMapEnemiesPda,
+  getGameplayAuthorityPda,
+  getDuelVaultPda,
+  getDuelOpenQueuePda,
+  getDuelEntryPda,
+  getDuelSessionPda,
+  getInventoryPda,
+  getMapPoisPda,
+  getSessionDiscoveryPda,
+  getGauntletPoolVaultPda,
+} from "../shared/pda-helpers";
+import {
+  Transaction,
+  TransactionInstruction,
+  ComputeBudgetProgram,
+} from "@solana/web3.js";
+
+// ── Connections ─────────────────────────────────────────────────────────────
+const RPC_URL = process.env.ANCHOR_PROVIDER_URL || "http://127.0.0.1:8899";
+
+const DUEL_ENTRY_LAMPORTS = 100_000_000; // 0.1 SOL
+const DUEL_CAMPAIGN_LEVEL = 20;
+
+// ── Shared mutable state ────────────────────────────────────────────────────
+let connection: Connection;
+let provider: anchor.AnchorProvider;
+let programs: AllPrograms;
+let admin: Keypair;
+
+// Global PDAs
+let sessionCounterPda: PublicKey;
+let mapConfigPda: PublicKey;
+let sessionManagerAuthorityPda: PublicKey;
+let duelVaultPda: PublicKey;
+let duelOpenQueuePda: PublicKey;
+let gauntletPoolVaultPda: PublicKey;
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+const sendBaseTx = async (
+  label: string,
+  ixs: TransactionInstruction[],
+  signers: Keypair[]
+): Promise<string> => {
+  const tx = new Transaction().add(...ixs);
+  tx.feePayer = signers[0].publicKey;
+  const bh = await connection.getLatestBlockhash("confirmed");
+  tx.recentBlockhash = bh.blockhash;
+  tx.sign(...signers);
+  const sig = await connection.sendRawTransaction(tx.serialize(), {
+    skipPreflight: true,
+    maxRetries: 3,
+  });
+  await connection.confirmTransaction({ signature: sig, ...bh }, "confirmed");
+  const status = await connection.getSignatureStatuses([sig], {
+    searchTransactionHistory: true,
+  });
+  if (status.value[0]?.err) {
+    throw new Error(`${label} failed: ${JSON.stringify(status.value[0].err)}`);
+  }
+  return sig;
+};
+
+interface PlayerContext {
+  user: Keypair;
+  sessionSigner: Keypair;
+  playerProfilePda: PublicKey;
+  sessionPda: PublicKey;
+  gameStatePda: PublicKey;
+  mapEnemiesPda: PublicKey;
+  generatedMapPda: PublicKey;
+  inventoryPda: PublicKey;
+  mapPoisPda: PublicKey;
+  duelEntryPda: PublicKey;
+  sessionNoncesPda: PublicKey;
+  sessionDiscoveryPda: PublicKey;
+}
+
+async function setupPlayer(label: string): Promise<PlayerContext> {
+  const user = Keypair.generate();
+  const sessionSigner = Keypair.generate();
+  await airdropAndConfirm(connection, user.publicKey, 10 * LAMPORTS_PER_SOL);
+  await airdropAndConfirm(connection, sessionSigner.publicKey, 5 * LAMPORTS_PER_SOL);
+
+  const [playerProfilePda] = getPlayerProfilePda(user.publicKey);
+  const [sessionPda] = getDuelSessionPda(user.publicKey);
+  const [gameStatePda] = getGameStatePda(sessionPda);
+  const [mapEnemiesPda] = getMapEnemiesPda(sessionPda);
+  const [generatedMapPda] = getGeneratedMapPda(sessionPda);
+  const [inventoryPda] = getInventoryPda(sessionPda);
+  const [mapPoisPda] = getMapPoisPda(sessionPda);
+  const [duelEntryPda] = getDuelEntryPda(sessionPda);
+  const [sessionNoncesPda] = getSessionNoncesPda(user.publicKey);
+  const [sessionDiscoveryPda] = getSessionDiscoveryPda(sessionPda);
+
+  return {
+    user,
+    sessionSigner,
+    playerProfilePda,
+    sessionPda,
+    gameStatePda,
+    mapEnemiesPda,
+    generatedMapPda,
+    inventoryPda,
+    mapPoisPda,
+    duelEntryPda,
+    sessionNoncesPda,
+    sessionDiscoveryPda,
+  };
+}
+
+async function createProfileAndStartDuelSession(p: PlayerContext): Promise<void> {
+  const name = `duel-${p.user.publicKey.toBase58().slice(0, 6)}`;
+  await programs.playerProfile.methods
+    .initializeProfile(name)
+    .accounts({
+      playerProfile: p.playerProfilePda,
+      owner: p.user.publicKey,
+      systemProgram: SystemProgram.programId,
+    } as any)
+    .signers([p.user])
+    .rpc();
+
+  await programs.sessionManager.methods
+    .startDuelSession()
+    .accounts({
+      sessionNonces: p.sessionNoncesPda,
+      gameSession: p.sessionPda,
+      sessionCounter: sessionCounterPda,
+      playerProfile: p.playerProfilePda,
+      player: p.user.publicKey,
+      sessionSigner: p.sessionSigner.publicKey,
+      sessionManagerAuthority: sessionManagerAuthorityPda,
+      mapConfig: mapConfigPda,
+      generatedMap: p.generatedMapPda,
+      sessionDiscovery: p.sessionDiscoveryPda,
+      gameState: p.gameStatePda,
+      mapEnemies: p.mapEnemiesPda,
+      mapPois: p.mapPoisPda,
+      inventory: p.inventoryPda,
+      mapVrfState: null,
+      poiVrfState: null,
+      gameplayVrfState: null,
+      mapGeneratorProgram: PROGRAM_IDS.mapGenerator,
+      gameplayStateProgram: PROGRAM_IDS.gameplayState,
+      poiSystemProgram: PROGRAM_IDS.poiSystem,
+      playerInventoryProgram: PROGRAM_IDS.playerInventory,
+      systemProgram: SystemProgram.programId,
+    } as any)
+    .preInstructions([
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+      ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
+    ])
+    .signers([p.user, p.sessionSigner])
+    .rpc();
+}
+
+async function enterDuel(p: PlayerContext): Promise<void> {
+  await programs.gameplayState.methods
+    .enterDuel()
+    .accounts({
+      duelEntry: p.duelEntryPda,
+      duelVault: duelVaultPda,
+      player: p.user.publicKey,
+      gameState: p.gameStatePda,
+      companyTreasury: COMPANY_TREASURY,
+      gauntletPoolVault: gauntletPoolVaultPda,
+      systemProgram: SystemProgram.programId,
+    } as any)
+    .signers([p.user])
+    .rpc();
+}
+
+async function assignDuelMapSeed(p: PlayerContext): Promise<void> {
+  await programs.gameplayState.methods
+    .assignDuelMapSeed()
+    .accounts({
+      gameState: p.gameStatePda,
+      duelOpenQueue: duelOpenQueuePda,
+      duelEntry: p.duelEntryPda,
+      sessionSigner: p.sessionSigner.publicKey,
+    } as any)
+    .signers([p.sessionSigner])
+    .rpc();
+}
+
+async function testSetCompleted(p: PlayerContext): Promise<void> {
+  await programs.gameplayState.methods
+    .testSetCompleted()
+    .accounts({
+      gameState: p.gameStatePda,
+      sessionSigner: p.sessionSigner.publicKey,
+    } as any)
+    .signers([p.sessionSigner])
+    .rpc();
+}
+
+async function settleDuelPayout(
+  p: PlayerContext,
+  creatorWallet: PublicKey | null
+): Promise<void> {
+  await programs.gameplayState.methods
+    .settleDuelPayout()
+    .accountsPartial({
+      duelEntry: p.duelEntryPda,
+      duelVault: duelVaultPda,
+      player: p.user.publicKey,
+      sessionSigner: p.sessionSigner.publicKey,
+      creatorWallet: creatorWallet,
+      companyTreasury: COMPANY_TREASURY,
+      gauntletPoolVault: gauntletPoolVaultPda,
+      duelOpenQueue: duelOpenQueuePda,
+      gameState: p.gameStatePda,
+      inventory: p.inventoryPda,
+    } as any)
+    .signers([p.sessionSigner])
+    .rpc();
+}
+
+async function resetDuelEntryAndEndSession(p: PlayerContext): Promise<void> {
+  const resetIx = await programs.gameplayState.methods
+    .resetDuelEntry()
+    .accountsPartial({
+      duelEntry: p.duelEntryPda,
+      gameState: p.gameStatePda,
+      player: p.user.publicKey,
+      sessionSigner: p.sessionSigner.publicKey,
+      duelVault: duelVaultPda,
+      companyTreasury: COMPANY_TREASURY,
+      gauntletPoolVault: gauntletPoolVaultPda,
+      creatorWallet: null,
+    } as any)
+    .instruction();
+
+  const endIx = await programs.sessionManager.methods
+    .endSession(DUEL_CAMPAIGN_LEVEL)
+    .accounts({
+      gameSession: p.sessionPda,
+      gameState: p.gameStatePda,
+      mapEnemies: p.mapEnemiesPda,
+      generatedMap: p.generatedMapPda,
+      mapPois: p.mapPoisPda,
+      sessionDiscovery: p.sessionDiscoveryPda,
+      playerProfile: p.playerProfilePda,
+      player: p.user.publicKey,
+      sessionSigner: p.sessionSigner.publicKey,
+      sessionManagerAuthority: sessionManagerAuthorityPda,
+      inventory: p.inventoryPda,
+      mapVrfState: null,
+      poiVrfState: null,
+      gameplayVrfState: null,
+      gauntletEchoes: null,
+      playerInventoryProgram: PROGRAM_IDS.playerInventory,
+      gameplayStateProgram: PROGRAM_IDS.gameplayState,
+      playerProfileProgram: PROGRAM_IDS.playerProfile,
+      mapGeneratorProgram: PROGRAM_IDS.mapGenerator,
+      poiSystemProgram: PROGRAM_IDS.poiSystem,
+    } as any)
+    .instruction();
+
+  await sendBaseTx("reset-duel-entry+end-session", [resetIx, endIx], [p.sessionSigner, p.user]);
+
+  // Verify session closed
+  const sessionInfo = await connection.getAccountInfo(p.sessionPda, "confirmed");
+  expect(sessionInfo).to.be.null;
+}
+
+async function fetchGameState(gameStatePda: PublicKey): Promise<any> {
+  const accountInfo = await connection.getAccountInfo(gameStatePda, "confirmed");
+  if (!accountInfo) {
+    throw new Error("GameState account missing");
+  }
+  return (programs.gameplayState as any).coder.accounts.decode(
+    "gameState",
+    accountInfo.data
+  );
+}
+
+// ── Setup ───────────────────────────────────────────────────────────────────
+before(async function () {
+  this.timeout(30_000);
+
+  admin = loadWalletKeypair();
+  const wallet = walletFromKeypair(admin);
+  connection = new Connection(RPC_URL, "confirmed");
+  provider = createProvider(RPC_URL, wallet);
+  anchor.setProvider(provider);
+  programs = loadAllPrograms(provider);
+
+  [sessionCounterPda] = getSessionCounterPda();
+  [mapConfigPda] = getMapConfigPda();
+  [sessionManagerAuthorityPda] = getSessionManagerAuthorityPda();
+  [duelVaultPda] = getDuelVaultPda();
+  [duelOpenQueuePda] = getDuelOpenQueuePda();
+  [gauntletPoolVaultPda] = getGauntletPoolVaultPda();
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Duel Matching E2E
+// ─────────────────────────────────────────────────────────────────────────────
+describe("Duel Matching E2E", function () {
+  this.timeout(300_000);
+
+  // ── Setup: initialize global duel accounts ──────────────────────────────
+  describe("Setup", function () {
+    this.timeout(60_000);
+
+    it("initializes duels (vault + queues)", async () => {
+      // Session counter
+      try {
+        await programs.sessionManager.methods
+          .initializeCounter()
+          .accounts({
+            sessionCounter: sessionCounterPda,
+            admin: admin.publicKey,
+            systemProgram: SystemProgram.programId,
+          } as any)
+          .rpc();
+      } catch (e: any) {
+        if (!String(e).includes("already in use")) throw e;
+      }
+
+      // Map config
+      try {
+        await programs.mapGenerator.methods
+          .initializeMapConfig()
+          .accounts({
+            mapConfig: mapConfigPda,
+            admin: admin.publicKey,
+            systemProgram: SystemProgram.programId,
+          } as any)
+          .rpc();
+      } catch (e: any) {
+        if (!String(e).includes("already in use")) throw e;
+      }
+
+      // Duels
+      try {
+        await programs.gameplayState.methods
+          .initializeDuels()
+          .accounts({
+            duelVault: duelVaultPda,
+            duelOpenQueue: duelOpenQueuePda,
+            admin: admin.publicKey,
+            systemProgram: SystemProgram.programId,
+          } as any)
+          .rpc();
+      } catch (e: any) {
+        if (!String(e).includes("already in use")) throw e;
+      }
+
+      // Verify
+      const queue = await (programs.gameplayState.account as any).duelOpenQueue.fetch(
+        duelOpenQueuePda
+      );
+      expect(queue.initialized).to.be.true;
+    });
+  });
+
+  // ── Player A creates unmatched duel ─────────────────────────────────────
+  describe("Player A creates unmatched duel", function () {
+    this.timeout(120_000);
+
+    let playerA: PlayerContext;
+    let queueLengthBefore: number;
+
+    before(async function () {
+      this.timeout(30_000);
+      playerA = await setupPlayer("playerA");
+
+      // Record queue length before test
+      const queue = await (programs.gameplayState.account as any).duelOpenQueue.fetch(
+        duelOpenQueuePda
+      );
+      queueLengthBefore = queue.entries.length;
+    });
+
+    it("creates profile + starts duel session for player A", async () => {
+      await createProfileAndStartDuelSession(playerA);
+
+      // Verify game state exists with duel run mode
+      const gs = await fetchGameState(playerA.gameStatePda);
+      expect(gs.runMode).to.deep.include({ duel: {} });
+    });
+
+    it("enters duel (pays entry fee)", async () => {
+      const vaultBefore = await connection.getBalance(duelVaultPda);
+      await enterDuel(playerA);
+      const vaultAfter = await connection.getBalance(duelVaultPda);
+
+      // Verify entry fee deposited
+      expect(vaultAfter - vaultBefore).to.equal(DUEL_ENTRY_LAMPORTS);
+
+      // Verify duel entry created
+      const duelEntry = await (programs.gameplayState.account as any).duelEntry.fetch(
+        playerA.duelEntryPda
+      );
+      expect(duelEntry.player.toBase58()).to.equal(playerA.user.publicKey.toBase58());
+      expect(Number(duelEntry.entryLamports)).to.equal(DUEL_ENTRY_LAMPORTS);
+      expect(duelEntry.finalized).to.be.false;
+      expect(duelEntry.settled).to.be.false;
+    });
+
+    it("assign_duel_map_seed (no match, creator path)", async () => {
+      await assignDuelMapSeed(playerA);
+
+      // No match available => duel_map_seed = 0 (creator path)
+      const gs = await fetchGameState(playerA.gameStatePda);
+      expect(Number(gs.duelMapSeed)).to.equal(0);
+
+      // duel_entry.matched_creator should be null
+      const duelEntry = await (programs.gameplayState.account as any).duelEntry.fetch(
+        playerA.duelEntryPda
+      );
+      expect(duelEntry.matchedCreator).to.be.null;
+    });
+
+    it("marks game as completed via test_set_completed", async () => {
+      await testSetCompleted(playerA);
+
+      const gs = await fetchGameState(playerA.gameStatePda);
+      expect(gs.completed).to.be.true;
+    });
+
+    it("settle_duel_payout pushes to queue", async () => {
+      await settleDuelPayout(playerA, null);
+
+      const duelEntry = await (programs.gameplayState.account as any).duelEntry.fetch(
+        playerA.duelEntryPda
+      );
+      expect(duelEntry.settled).to.be.true;
+      expect(duelEntry.finalized).to.be.true;
+    });
+
+    it("verifies DuelOpenQueue has 1 new entry with player A", async () => {
+      const queue = await (programs.gameplayState.account as any).duelOpenQueue.fetch(
+        duelOpenQueuePda
+      );
+      expect(queue.entries.length).to.equal(queueLengthBefore + 1);
+
+      const lastEntry = queue.entries[queue.entries.length - 1];
+      expect(lastEntry.player.toBase58()).to.equal(playerA.user.publicKey.toBase58());
+      expect(Number(lastEntry.entryLamports)).to.equal(DUEL_ENTRY_LAMPORTS);
+    });
+
+    it("ends session for player A", async () => {
+      await resetDuelEntryAndEndSession(playerA);
+    });
+  });
+
+  // ── Player B matches with player A ──────────────────────────────────────
+  describe("Player B matches with player A", function () {
+    this.timeout(120_000);
+
+    let playerA2: PlayerContext; // We need a fresh Player A to put in the queue
+    let playerB: PlayerContext;
+    let queueLengthBefore: number;
+    let vaultBalanceBefore: number;
+    let playerAWallet: PublicKey;
+
+    before(async function () {
+      this.timeout(60_000);
+
+      // First, create player A and push them to the queue (creator flow)
+      playerA2 = await setupPlayer("playerA2");
+      await createProfileAndStartDuelSession(playerA2);
+      await enterDuel(playerA2);
+      await assignDuelMapSeed(playerA2);
+      await testSetCompleted(playerA2);
+      await settleDuelPayout(playerA2, null);
+
+      // Record player A's wallet for payout verification
+      playerAWallet = playerA2.user.publicKey;
+
+      // End A's session
+      await resetDuelEntryAndEndSession(playerA2);
+
+      // Record queue state and vault balance
+      const queue = await (programs.gameplayState.account as any).duelOpenQueue.fetch(
+        duelOpenQueuePda
+      );
+      queueLengthBefore = queue.entries.length;
+      expect(queueLengthBefore).to.be.greaterThan(0);
+
+      // Set up player B
+      playerB = await setupPlayer("playerB");
+      vaultBalanceBefore = await connection.getBalance(duelVaultPda);
+    });
+
+    it("creates profile + starts duel session for player B", async () => {
+      await createProfileAndStartDuelSession(playerB);
+
+      const gs = await fetchGameState(playerB.gameStatePda);
+      expect(gs.runMode).to.deep.include({ duel: {} });
+    });
+
+    it("enters duel (pays entry fee)", async () => {
+      await enterDuel(playerB);
+
+      const duelEntry = await (programs.gameplayState.account as any).duelEntry.fetch(
+        playerB.duelEntryPda
+      );
+      expect(Number(duelEntry.entryLamports)).to.equal(DUEL_ENTRY_LAMPORTS);
+    });
+
+    it("assign_duel_map_seed (matches with player A)", async () => {
+      await assignDuelMapSeed(playerB);
+
+      // Should have matched — duel_map_seed != 0
+      const gs = await fetchGameState(playerB.gameStatePda);
+      expect(Number(gs.duelMapSeed)).to.not.equal(0);
+    });
+
+    it("verifies DuelOpenQueue lost one entry", async () => {
+      const queue = await (programs.gameplayState.account as any).duelOpenQueue.fetch(
+        duelOpenQueuePda
+      );
+      expect(queue.entries.length).to.equal(queueLengthBefore - 1);
+    });
+
+    it("verifies duel_entry.matched_creator is set", async () => {
+      const duelEntry = await (programs.gameplayState.account as any).duelEntry.fetch(
+        playerB.duelEntryPda
+      );
+      expect(duelEntry.matchedCreator).to.not.be.null;
+      expect(duelEntry.matchedCreator.player.toBase58()).to.equal(
+        playerAWallet.toBase58()
+      );
+    });
+
+    it("marks game as completed via test_set_completed", async () => {
+      await testSetCompleted(playerB);
+
+      const gs = await fetchGameState(playerB.gameStatePda);
+      expect(gs.completed).to.be.true;
+    });
+
+    it("settle_duel_payout resolves PvP and pays winner", async () => {
+      const vaultBefore = await connection.getBalance(duelVaultPda);
+
+      // Pass creator wallet for potential payout
+      await settleDuelPayout(playerB, playerAWallet);
+
+      const duelEntry = await (programs.gameplayState.account as any).duelEntry.fetch(
+        playerB.duelEntryPda
+      );
+      expect(duelEntry.settled).to.be.true;
+      expect(duelEntry.finalized).to.be.true;
+
+      // Vault balance should have decreased (total pot distributed)
+      const vaultAfter = await connection.getBalance(duelVaultPda);
+      const totalPot = DUEL_ENTRY_LAMPORTS * 2;
+      expect(vaultBefore - vaultAfter).to.equal(totalPot);
+    });
+
+    it("ends session for player B", async () => {
+      await resetDuelEntryAndEndSession(playerB);
+    });
+  });
+
+  // ── Self-matching prevention ────────────────────────────────────────────
+  describe("Self-matching prevention", function () {
+    this.timeout(120_000);
+
+    let player: PlayerContext;
+
+    before(async function () {
+      this.timeout(60_000);
+
+      // Create a player, complete their duel, and push to queue (creator)
+      player = await setupPlayer("selfMatch");
+      await createProfileAndStartDuelSession(player);
+      await enterDuel(player);
+      await assignDuelMapSeed(player);
+      await testSetCompleted(player);
+      await settleDuelPayout(player, null);
+      await resetDuelEntryAndEndSession(player);
+
+      // Verify the player's entry is now in the queue
+      const queue = await (programs.gameplayState.account as any).duelOpenQueue.fetch(
+        duelOpenQueuePda
+      );
+      const hasOwnEntry = queue.entries.some(
+        (e: any) => e.player.toBase58() === player.user.publicKey.toBase58()
+      );
+      expect(hasOwnEntry).to.be.true;
+    });
+
+    it("player starts another duel session", async () => {
+      // Need to bump the nonce for the new session
+      const [sessionNoncesPda] = getSessionNoncesPda(player.user.publicKey);
+      const noncesAccount = await (
+        programs.sessionManager.account as any
+      ).sessionNonces.fetch(sessionNoncesPda);
+      const newNonce = Number(noncesAccount.duelNonce);
+
+      // Re-derive PDAs with new nonce
+      const [sessionPda] = getDuelSessionPda(player.user.publicKey, newNonce);
+      const [gameStatePda] = getGameStatePda(sessionPda);
+      const [mapEnemiesPda] = getMapEnemiesPda(sessionPda);
+      const [generatedMapPda] = getGeneratedMapPda(sessionPda);
+      const [inventoryPda] = getInventoryPda(sessionPda);
+      const [mapPoisPda] = getMapPoisPda(sessionPda);
+      const [duelEntryPda] = getDuelEntryPda(sessionPda);
+      const [sessionDiscoveryPda] = getSessionDiscoveryPda(sessionPda);
+
+      // Update player context with new PDAs
+      player = {
+        ...player,
+        sessionSigner: Keypair.generate(),
+        sessionPda,
+        gameStatePda,
+        mapEnemiesPda,
+        generatedMapPda,
+        inventoryPda,
+        mapPoisPda,
+        duelEntryPda,
+        sessionDiscoveryPda,
+      };
+      await airdropAndConfirm(connection, player.sessionSigner.publicKey, 5 * LAMPORTS_PER_SOL);
+
+      await programs.sessionManager.methods
+        .startDuelSession()
+        .accounts({
+          sessionNonces: player.sessionNoncesPda,
+          gameSession: player.sessionPda,
+          sessionCounter: sessionCounterPda,
+          playerProfile: player.playerProfilePda,
+          player: player.user.publicKey,
+          sessionSigner: player.sessionSigner.publicKey,
+          sessionManagerAuthority: sessionManagerAuthorityPda,
+          mapConfig: mapConfigPda,
+          generatedMap: player.generatedMapPda,
+          sessionDiscovery: player.sessionDiscoveryPda,
+          gameState: player.gameStatePda,
+          mapEnemies: player.mapEnemiesPda,
+          mapPois: player.mapPoisPda,
+          inventory: player.inventoryPda,
+          mapVrfState: null,
+          poiVrfState: null,
+          gameplayVrfState: null,
+          mapGeneratorProgram: PROGRAM_IDS.mapGenerator,
+          gameplayStateProgram: PROGRAM_IDS.gameplayState,
+          poiSystemProgram: PROGRAM_IDS.poiSystem,
+          playerInventoryProgram: PROGRAM_IDS.playerInventory,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .preInstructions([
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+          ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
+        ])
+        .signers([player.user, player.sessionSigner])
+        .rpc();
+
+      const gs = await fetchGameState(player.gameStatePda);
+      expect(gs.runMode).to.deep.include({ duel: {} });
+    });
+
+    it("enters duel", async () => {
+      await enterDuel(player);
+    });
+
+    it("assign_duel_map_seed skips own entry in queue", async () => {
+      await assignDuelMapSeed(player);
+
+      // Should NOT have matched with own entry => duel_map_seed = 0
+      const gs = await fetchGameState(player.gameStatePda);
+      expect(Number(gs.duelMapSeed)).to.equal(0);
+
+      // matched_creator should be null
+      const duelEntry = await (programs.gameplayState.account as any).duelEntry.fetch(
+        player.duelEntryPda
+      );
+      expect(duelEntry.matchedCreator).to.be.null;
+    });
+
+    after(async function () {
+      this.timeout(60_000);
+      // Cleanup: complete and end this session
+      await testSetCompleted(player);
+      await settleDuelPayout(player, null);
+      await resetDuelEntryAndEndSession(player);
+    });
+  });
+});

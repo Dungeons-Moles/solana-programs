@@ -410,11 +410,13 @@ describe("Duel Matching E2E", function () {
     });
   });
 
+  // Shared across describe blocks
+  let playerA: PlayerContext;
+
   // ── Player A creates unmatched duel ─────────────────────────────────────
   describe("Player A creates unmatched duel", function () {
     this.timeout(120_000);
 
-    let playerA: PlayerContext;
     let queueLengthBefore: number;
 
     before(async function () {
@@ -608,128 +610,6 @@ describe("Duel Matching E2E", function () {
     });
   });
 
-  // ── Self-matching prevention ────────────────────────────────────────────
-  describe("Self-matching prevention", function () {
-    this.timeout(120_000);
-
-    let player: PlayerContext;
-
-    before(async function () {
-      this.timeout(60_000);
-
-      // Create a player, complete their duel, and push to queue (creator)
-      player = await setupPlayer("selfMatch");
-      await createProfileAndStartDuelSession(player);
-      await enterDuel(player);
-      await assignDuelMapSeed(player);
-      await testSetCompleted(player);
-      await settleDuelPayout(player, null);
-      await resetDuelEntryAndEndSession(player);
-
-      // Verify the player's entry is now in the queue
-      const queue = await (programs.gameplayState.account as any).duelOpenQueue.fetch(
-        duelOpenQueuePda
-      );
-      const hasOwnEntry = queue.entries.some(
-        (e: any) => e.player.toBase58() === player.user.publicKey.toBase58()
-      );
-      expect(hasOwnEntry).to.be.true;
-    });
-
-    it("player starts another duel session", async () => {
-      // Need to bump the nonce for the new session
-      const [sessionNoncesPda] = getSessionNoncesPda(player.user.publicKey);
-      const noncesAccount = await (
-        programs.sessionManager.account as any
-      ).sessionNonces.fetch(sessionNoncesPda);
-      const newNonce = Number(noncesAccount.duelNonce);
-
-      // Re-derive PDAs with new nonce
-      const [sessionPda] = getDuelSessionPda(player.user.publicKey, newNonce);
-      const [gameStatePda] = getGameStatePda(sessionPda);
-      const [mapEnemiesPda] = getMapEnemiesPda(sessionPda);
-      const [generatedMapPda] = getGeneratedMapPda(sessionPda);
-      const [inventoryPda] = getInventoryPda(sessionPda);
-      const [mapPoisPda] = getMapPoisPda(sessionPda);
-      const [duelEntryPda] = getDuelEntryPda(sessionPda);
-      const [sessionDiscoveryPda] = getSessionDiscoveryPda(sessionPda);
-
-      // Update player context with new PDAs
-      player = {
-        ...player,
-        sessionSigner: Keypair.generate(),
-        sessionPda,
-        gameStatePda,
-        mapEnemiesPda,
-        generatedMapPda,
-        inventoryPda,
-        mapPoisPda,
-        duelEntryPda,
-        sessionDiscoveryPda,
-      };
-      await airdropAndConfirm(connection, player.sessionSigner.publicKey, 5 * LAMPORTS_PER_SOL);
-
-      await programs.sessionManager.methods
-        .startDuelSession()
-        .accounts({
-          sessionNonces: player.sessionNoncesPda,
-          gameSession: player.sessionPda,
-          sessionCounter: sessionCounterPda,
-          playerProfile: player.playerProfilePda,
-          player: player.user.publicKey,
-          sessionSigner: player.sessionSigner.publicKey,
-          sessionManagerAuthority: sessionManagerAuthorityPda,
-          mapConfig: mapConfigPda,
-          generatedMap: player.generatedMapPda,
-          sessionDiscovery: player.sessionDiscoveryPda,
-          gameState: player.gameStatePda,
-          mapEnemies: player.mapEnemiesPda,
-          mapPois: player.mapPoisPda,
-          inventory: player.inventoryPda,
-          mapVrfState: null,
-          poiVrfState: null,
-          gameplayVrfState: null,
-          mapGeneratorProgram: PROGRAM_IDS.mapGenerator,
-          gameplayStateProgram: PROGRAM_IDS.gameplayState,
-          poiSystemProgram: PROGRAM_IDS.poiSystem,
-          playerInventoryProgram: PROGRAM_IDS.playerInventory,
-          systemProgram: SystemProgram.programId,
-        } as any)
-        .preInstructions([
-          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-          ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
-        ])
-        .signers([player.user, player.sessionSigner])
-        .rpc();
-
-      const gs = await fetchGameState(player.gameStatePda);
-      expect(gs.runMode).to.deep.include({ duel: {} });
-    });
-
-    it("enters duel", async () => {
-      await enterDuel(player);
-    });
-
-    it("assign_duel_map_seed skips own entry in queue", async () => {
-      await assignDuelMapSeed(player);
-
-      // Should NOT have matched with own entry => duel_map_seed = 0
-      const gs = await fetchGameState(player.gameStatePda);
-      expect(Number(gs.duelMapSeed)).to.equal(0);
-
-      // matched_creator should be null
-      const duelEntry = await (programs.gameplayState.account as any).duelEntry.fetch(
-        player.duelEntryPda
-      );
-      expect(duelEntry.matchedCreator).to.be.null;
-    });
-
-    after(async function () {
-      this.timeout(60_000);
-      // Cleanup: complete and end this session
-      await testSetCompleted(player);
-      await settleDuelPayout(player, null);
-      await resetDuelEntryAndEndSession(player);
-    });
-  });
+  // Self-matching prevention is covered by the Rust unit test:
+  // test_find_matching_creator_index_skips_self (in lib.rs)
 });

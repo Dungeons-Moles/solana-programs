@@ -1,8 +1,7 @@
 use crate::constants::{MAX_TURNS, SUDDEN_DEATH_RAMP_TURN, SUDDEN_DEATH_TURN};
 use crate::effects::{chill_damage_bonus, process_shrapnel_retaliation};
 use crate::state::{
-    AnnotatedItemEffect, CombatContribution, CombatLogEntry, CombatSourceKind, CombatSourceRef,
-    EffectType, StatusEffects, TriggerType,
+    AnnotatedItemEffect, CombatSourceKind, CombatSourceRef, EffectType, StatusEffects, TriggerType,
 };
 use crate::triggers::{process_triggers_for_phase, CombatantStats};
 
@@ -136,56 +135,6 @@ pub fn execute_strike(
     (new_hp, new_arm, hp_damage, arm_damage)
 }
 
-fn shrapnel_source() -> CombatSourceRef {
-    let mut id = [0u8; 16];
-    id[..8].copy_from_slice(b"shrapnel");
-    CombatSourceRef {
-        kind: CombatSourceKind::Status,
-        id,
-    }
-}
-
-fn attack_contributions(
-    attacker_stats: &CombatantStats,
-    strike_value: i16,
-) -> Vec<CombatContribution> {
-    if strike_value <= 0 {
-        return Vec::new();
-    }
-
-    let mut contributions = Vec::new();
-
-    if attacker_stats.attack_base_value > 0 {
-        if let Some(source) = attacker_stats.attack_source {
-            contributions.push(CombatContribution {
-                source,
-                value: attacker_stats.attack_base_value,
-            });
-        }
-    }
-
-    contributions.extend(attacker_stats.atk_contributions.iter().cloned());
-    let total: i16 = contributions.iter().map(|entry| entry.value).sum();
-    if total < strike_value {
-        if let Some(source) = attacker_stats.attack_source {
-            if let Some(existing) = contributions
-                .iter_mut()
-                .find(|entry| entry.source == source)
-            {
-                existing.value = existing.value.saturating_add(strike_value - total);
-            } else {
-                contributions.push(CombatContribution {
-                    source,
-                    value: strike_value - total,
-                });
-            }
-        }
-    }
-
-    contributions.retain(|entry| entry.value > 0);
-    contributions
-}
-
 #[allow(clippy::too_many_arguments)]
 pub fn execute_strikes(
     strikes: u8,
@@ -202,7 +151,6 @@ pub fn execute_strikes(
     player_gold: &mut u16,
     enemy_gold: &mut u16,
     gold_change: &mut i16,
-    log: &mut Vec<CombatLogEntry>,
 ) -> (i16, i16) {
     execute_strikes_with_armor_override(
         strikes,
@@ -219,8 +167,6 @@ pub fn execute_strikes(
         player_gold,
         enemy_gold,
         gold_change,
-        log,
-        false,
         false,
     )
 }
@@ -241,9 +187,7 @@ pub fn execute_strikes_with_armor_override(
     player_gold: &mut u16,
     enemy_gold: &mut u16,
     gold_change: &mut i16,
-    log: &mut Vec<CombatLogEntry>,
     ignore_defender_armor: bool,
-    skip_log: bool,
 ) -> (i16, i16) {
     let mut total_hp_damage: i16 = 0;
 
@@ -262,8 +206,6 @@ pub fn execute_strikes_with_armor_override(
             player_gold,
             enemy_gold,
             gold_change,
-            log,
-            skip_log,
         );
 
         let mut strike_atk = attacker_stats.atk;
@@ -272,8 +214,6 @@ pub fn execute_strikes_with_armor_override(
             let non_gear_atk = attacker_stats.atk.saturating_sub(gear_bonus);
             strike_atk = non_gear_atk.saturating_add(gear_bonus / 2);
         }
-
-        let contributions = attack_contributions(attacker_stats, strike_atk);
 
         let (new_hp, new_arm, hp_damage, arm_damage) = execute_strike(
             strike_atk,
@@ -290,34 +230,6 @@ pub fn execute_strikes_with_armor_override(
         defender_stats.hp = new_hp;
         defender_stats.arm = new_arm;
         total_hp_damage = total_hp_damage.saturating_add(hp_damage);
-
-        // Log armor damage if any
-        if arm_damage > 0 {
-            let mut entry = CombatLogEntry::armor_change(
-                turn,
-                !is_player_attacking, // Defender's armor is being reduced
-                -arm_damage,
-            );
-            if let Some(source) = attacker_stats.attack_source {
-                entry = entry.with_source(source);
-            }
-            if !contributions.is_empty() {
-                entry = entry.with_contributions(contributions.clone());
-            }
-            crate::log_push!(log, skip_log, entry);
-        }
-
-        // Log HP damage if any (this is the "attack" that got through armor)
-        if hp_damage > 0 {
-            let mut entry = CombatLogEntry::attack(turn, is_player_attacking, hp_damage);
-            if let Some(source) = attacker_stats.attack_source {
-                entry = entry.with_source(source);
-            }
-            if !contributions.is_empty() {
-                entry = entry.with_contributions(contributions.clone());
-            }
-            crate::log_push!(log, skip_log, entry);
-        }
 
         // Trigger OnHit effects if any damage was dealt (armor or HP)
         if arm_damage > 0 || hp_damage > 0 {
@@ -359,8 +271,6 @@ pub fn execute_strikes_with_armor_override(
                 player_gold,
                 enemy_gold,
                 gold_change,
-                log,
-                skip_log,
             );
             restore_suppressed_flags(triggered_flags, suppressed_execution_emblem);
 
@@ -402,8 +312,6 @@ pub fn execute_strikes_with_armor_override(
                     player_gold,
                     enemy_gold,
                     gold_change,
-                    log,
-                    skip_log,
                 );
                 restore_suppressed_flags(triggered_flags, suppressed_execution_emblem);
 
@@ -430,8 +338,6 @@ pub fn execute_strikes_with_armor_override(
                 player_gold,
                 enemy_gold,
                 gold_change,
-                log,
-                skip_log,
             );
 
             // Check if rust was applied to defender (for OnApplyRust)
@@ -455,8 +361,6 @@ pub fn execute_strikes_with_armor_override(
                     player_gold,
                     enemy_gold,
                     gold_change,
-                    log,
-                    skip_log,
                 );
             }
 
@@ -476,8 +380,6 @@ pub fn execute_strikes_with_armor_override(
                     player_gold,
                     enemy_gold,
                     gold_change,
-                    log,
-                    skip_log,
                 );
             }
 
@@ -498,8 +400,6 @@ pub fn execute_strikes_with_armor_override(
                     player_gold,
                     enemy_gold,
                     gold_change,
-                    log,
-                    skip_log,
                 );
             }
 
@@ -519,34 +419,21 @@ pub fn execute_strikes_with_armor_override(
                 player_gold,
                 enemy_gold,
                 gold_change,
-                log,
-                skip_log,
             );
         }
 
-        // Shrapnel: defender retaliates with damage when struck
+        // Shrapnel: defender retaliates with damage when struck (goes through armor first)
         if defender_status.shrapnel > 0 {
-            let old_attacker_hp = attacker_stats.hp;
             defender_status.shrapnel = defender_status.shrapnel.saturating_sub(1);
-            attacker_stats.hp = process_shrapnel_retaliation(
+            let (new_hp, new_arm) = process_shrapnel_retaliation(
                 strike_atk,
                 defender_stats.shrapnel_reflect_bonus,
                 attacker_status.chill,
                 attacker_stats.hp,
+                attacker_stats.arm,
             );
-            let shrapnel_damage = old_attacker_hp - attacker_stats.hp;
-            if shrapnel_damage > 0 {
-                crate::log_push!(
-                    log,
-                    skip_log,
-                    CombatLogEntry::shrapnel_retaliation(
-                        turn,
-                        is_player_attacking,
-                        shrapnel_damage,
-                    )
-                    .with_source(shrapnel_source())
-                );
-            }
+            attacker_stats.hp = new_hp;
+            attacker_stats.arm = new_arm;
         }
 
         if defender_stats.hp <= 0 {
@@ -560,7 +447,7 @@ pub fn execute_strikes_with_armor_override(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{AnnotatedItemEffect, ItemEffect, LogAction};
+    use crate::state::{AnnotatedItemEffect, ItemEffect};
 
     fn make_combatant(atk: i16, spd: i16, arm: i16) -> CombatantStats {
         CombatantStats {
@@ -674,7 +561,6 @@ mod tests {
         let mut player_gold: u16 = 0;
         let mut enemy_gold: u16 = 0;
         let mut gold_change: i16 = 0;
-        let mut log: Vec<CombatLogEntry> = Vec::new();
 
         // 2 strikes with ATK 2 vs ARM 1, HP 8:
         // Strike 1: 2 damage -> 1 to ARM (depleted), 1 to HP -> HP 7
@@ -694,7 +580,6 @@ mod tests {
             &mut player_gold,
             &mut enemy_gold,
             &mut gold_change,
-            &mut log,
         );
         let hp_after_first = defender.hp;
         let arm_after_first = defender.arm;
@@ -748,7 +633,6 @@ mod tests {
         let mut player_gold_again: u16 = 0;
         let mut enemy_gold_again: u16 = 0;
         let mut gold_change_again: i16 = 0;
-        let mut log_again: Vec<CombatLogEntry> = Vec::new();
 
         let (_, total_hp_damage_second) = execute_strikes(
             2,
@@ -765,14 +649,11 @@ mod tests {
             &mut player_gold_again,
             &mut enemy_gold_again,
             &mut gold_change_again,
-            &mut log_again,
         );
 
         assert_eq!(total_hp_damage_first, total_hp_damage_second);
         assert_eq!(hp_after_first, defender_again.hp);
         assert_eq!(arm_after_first, defender_again.arm);
-        // Both should have the same log length
-        assert_eq!(log.len(), log_again.len());
 
         // Verify expected values with new ARM mechanic
         assert_eq!(hp_after_first, 5, "HP should be 5 after 2 strikes");
@@ -838,7 +719,6 @@ mod tests {
         let mut player_gold: u16 = 0;
         let mut enemy_gold: u16 = 0;
         let mut gold_change: i16 = 0;
-        let mut log: Vec<CombatLogEntry> = Vec::new();
 
         let (_, total_hp_damage) = execute_strikes(
             3,
@@ -855,7 +735,6 @@ mod tests {
             &mut player_gold,
             &mut enemy_gold,
             &mut gold_change,
-            &mut log,
         );
 
         // Strike 1: 5, strike 2: 5, strike 3: 1 + floor(4/2) = 3
@@ -952,7 +831,6 @@ mod tests {
         let mut player_gold = 0u16;
         let mut enemy_gold = 0u16;
         let mut gold_change = 0i16;
-        let mut log = Vec::new();
 
         execute_strikes(
             1,
@@ -969,20 +847,9 @@ mod tests {
             &mut player_gold,
             &mut enemy_gold,
             &mut gold_change,
-            &mut log,
         );
 
         assert_eq!(defender_status.bleed, 2);
-
-        let bleed_logs = log
-            .iter()
-            .filter(|entry| {
-                entry.action == LogAction::ApplyStatus
-                    && entry.value == 1
-                    && entry.extra == crate::state::STATUS_BLEED
-            })
-            .count();
-        assert_eq!(bleed_logs, 2);
     }
 
     #[test]
@@ -1010,7 +877,6 @@ mod tests {
         let mut player_gold = 0u16;
         let mut enemy_gold = 0u16;
         let mut gold_change = 0i16;
-        let mut log = Vec::new();
 
         let (_, total_hp_damage) = execute_strikes(
             1,
@@ -1027,7 +893,6 @@ mod tests {
             &mut player_gold,
             &mut enemy_gold,
             &mut gold_change,
-            &mut log,
         );
 
         assert_eq!(defender.arm, 0);

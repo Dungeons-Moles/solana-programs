@@ -9,7 +9,7 @@ use constants::{DUEL_CAMPAIGN_LEVEL, GAUNTLET_CAMPAIGN_LEVEL};
 
 use errors::SessionManagerError;
 use gameplay_state::program::GameplayState;
-use gameplay_state::state::GameState;
+use gameplay_state::state::{DuelEntry, GameState};
 use map_generator::program::MapGenerator;
 use map_generator::state::GeneratedMap;
 use player_inventory::program::PlayerInventory;
@@ -953,6 +953,22 @@ pub mod session_manager {
         )?;
 
         let game_state = read_game_state_unchecked(&ctx.accounts.game_state.to_account_info())?;
+        require!(
+            game_state.is_dead || game_state.completed,
+            SessionManagerError::RunNotTerminal
+        );
+
+        if game_state.run_mode == gameplay_state::state::RunMode::Duel {
+            let duel_entry = ctx
+                .accounts
+                .duel_entry
+                .as_ref()
+                .ok_or(SessionManagerError::DuelSettlementRequired)?;
+            require!(
+                duel_entry.settled || duel_entry.entry_lamports == 0,
+                SessionManagerError::DuelSettlementRequired
+            );
+        }
 
         // Do not trust `session.is_delegated` bit here; legacy undelegate flows can leave
         // the flag stale even after ownership returns to session-manager.
@@ -2375,6 +2391,14 @@ pub struct EndSession<'info> {
     #[account(mut)]
     /// CHECK: Validated by player-inventory CPI
     pub inventory: UncheckedAccount<'info>,
+
+    /// Duel entry for duel-session settlement validation.
+    #[account(
+        seeds = [gameplay_state::constants::DUEL_ENTRY_SEED, game_session.key().as_ref()],
+        bump,
+        seeds::program = gameplay_state::ID
+    )]
+    pub duel_entry: Option<Account<'info, DuelEntry>>,
 
     /// Optional MapVrfState (only for PvP sessions using VRF)
     /// CHECK: Validated by map-generator close CPI

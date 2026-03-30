@@ -14,16 +14,27 @@ pub fn process_shrapnel_retaliation(
     shrapnel_reflect_bonus: i16,
     attacker_chill: u8,
     attacker_hp: i16,
-) -> i16 {
+    attacker_arm: i16,
+) -> (i16, i16) {
     if strike_atk <= 0 && shrapnel_reflect_bonus <= 0 {
-        return attacker_hp;
+        return (attacker_hp, attacker_arm);
     }
 
-    let damage = strike_atk
+    let raw = strike_atk
         .max(0)
         .saturating_add(shrapnel_reflect_bonus.max(0))
         .saturating_add(chill_damage_bonus(attacker_chill));
-    attacker_hp.checked_sub(damage).unwrap_or(i16::MIN)
+
+    // Shrapnel retaliates with 50% of the damage (rounded down, minimum 1)
+    let damage = (raw / 2).max(1);
+
+    // Damage goes through armor first, then HP
+    let arm_damage = damage.min(attacker_arm.max(0));
+    let new_arm = attacker_arm.saturating_sub(arm_damage);
+    let hp_damage = damage.saturating_sub(arm_damage);
+    let new_hp = attacker_hp.checked_sub(hp_damage).unwrap_or(i16::MIN);
+
+    (new_hp, new_arm)
 }
 
 pub fn process_rust_decay(rust_stacks: u8, current_arm: i16) -> i16 {
@@ -103,11 +114,25 @@ mod tests {
 
     #[test]
     fn test_shrapnel_retaliation_persists() {
-        let hp = process_shrapnel_retaliation(3, 0, 0, 10);
-        assert_eq!(hp, 7);
+        // No armor: raw=3, 50% = 1, straight to HP
+        let (hp, arm) = process_shrapnel_retaliation(3, 0, 0, 10, 0);
+        assert_eq!(hp, 9);
+        assert_eq!(arm, 0);
 
-        let hp_with_chill = process_shrapnel_retaliation(3, 1, 4, 10);
-        assert_eq!(hp_with_chill, 3);
+        // With armor: raw=3, 50% = 1, armor absorbs all
+        let (hp_armored, arm_after) = process_shrapnel_retaliation(3, 0, 0, 10, 5);
+        assert_eq!(hp_armored, 10);
+        assert_eq!(arm_after, 4);
+
+        // Higher damage with armor: raw=3+1+3(chill)=7, 50%=3, armor absorbs all 3
+        let (hp_partial, arm_partial) = process_shrapnel_retaliation(3, 1, 4, 10, 3);
+        assert_eq!(arm_partial, 0);
+        assert_eq!(hp_partial, 10);
+
+        // Minimum 1 damage even with low raw: raw=1, 50%=max(0,1)=1
+        let (hp_min, arm_min) = process_shrapnel_retaliation(1, 0, 0, 10, 0);
+        assert_eq!(hp_min, 9);
+        assert_eq!(arm_min, 0);
 
         let mut status = StatusEffects {
             shrapnel: 4,

@@ -66,4 +66,8 @@ pub enum SessionManagerError {
     /// VRF randomness not yet fulfilled
     #[msg("VRF not fulfilled")]
     VrfNotFulfilled,
+
+    /// Duel session must be settled before it can be closed
+    #[msg("Duel session must be settled before closing")]
+    DuelSettlementRequired,
 }

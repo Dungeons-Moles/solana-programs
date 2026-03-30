@@ -510,7 +510,6 @@ describe("Duel Matching E2E", function () {
   describe("Player B matches with player A", function () {
     this.timeout(120_000);
 
-    let playerA2: PlayerContext; // We need a fresh Player A to put in the queue
     let playerB: PlayerContext;
     let queueLengthBefore: number;
     let vaultBalanceBefore: number;
@@ -519,28 +518,17 @@ describe("Duel Matching E2E", function () {
     before(async function () {
       this.timeout(60_000);
 
-      // First, create player A and push them to the queue (creator flow)
-      playerA2 = await setupPlayer("playerA2");
-      await createProfileAndStartDuelSession(playerA2);
-      await enterDuel(playerA2);
-      await assignDuelMapSeed(playerA2);
-      await testSetCompleted(playerA2);
-      await settleDuelPayout(playerA2, null);
-
-      // Record player A's wallet for payout verification
-      playerAWallet = playerA2.user.publicKey;
-
-      // End A's session
-      await resetDuelEntryAndEndSession(playerA2);
+      // Player A's entry is already in the queue from the previous test section.
+      playerAWallet = playerA.user.publicKey;
 
       // Record queue state and vault balance
       const queue = await (programs.gameplayState.account as any).duelOpenQueue.fetch(
         duelOpenQueuePda
       );
       queueLengthBefore = queue.entries.length;
-      // Player A's entry should be in the queue
+      // Player A's entry should be in the queue from the previous section
       const hasPlayerA = queue.entries.some(
-        (e: any) => e.player.toBase58() === playerA2.user.publicKey.toBase58()
+        (e: any) => e.player.toBase58() === playerA.user.publicKey.toBase58()
       );
       expect(hasPlayerA).to.be.true;
 

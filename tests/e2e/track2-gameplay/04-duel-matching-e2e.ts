@@ -359,7 +359,7 @@ describe("Duel Matching E2E", function () {
         if (!String(e).includes("already in use")) throw e;
       }
 
-      // Duels
+      // Duels — tolerate already-initialized or delegated DuelErQueue
       try {
         await programs.gameplayState.methods
           .initializeDuels()
@@ -371,7 +371,8 @@ describe("Duel Matching E2E", function () {
           } as any)
           .rpc();
       } catch (e: any) {
-        if (!String(e).includes("already in use")) throw e;
+        const msg = String(e);
+        if (!msg.includes("already in use") && !msg.includes("AccountOwnedByWrongProgram")) throw e;
       }
 
       // Verify

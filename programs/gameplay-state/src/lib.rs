@@ -4219,11 +4219,12 @@ fn item_index_by_type(item_type: ItemType, nth: usize) -> Option<usize> {
     None
 }
 
-fn should_resolve_weekly_boss(run_mode: RunMode, week: u8) -> bool {
+fn should_resolve_weekly_boss(run_mode: RunMode, _week: u8) -> bool {
     match run_mode {
         RunMode::Campaign => true,
-        // Duel mode uses bosses on week 1/2; week 3 is async PvP resolution in finalize_duel_run.
-        RunMode::Duel => week < 3,
+        // Duel and Gauntlet: boss/echo resolved via trigger_boss_fight (separate TX)
+        // to avoid CU/heap exhaustion in move_player's Night3 inline path.
+        RunMode::Duel => false,
         RunMode::Gauntlet => false,
     }
 }

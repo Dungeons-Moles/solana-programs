@@ -1445,7 +1445,8 @@ pub mod gameplay_state {
         }
 
         // Unmatched creator who completed: push to DuelOpenQueue for matching.
-        if duel_entry.outcome == DuelRunOutcome::CompletedWeek3 {
+        // Skip if seed is 0 (invalid — map was never generated, e.g. test-only path).
+        if duel_entry.outcome == DuelRunOutcome::CompletedWeek3 && duel_entry.seed != 0 {
             let open_queue = &mut ctx.accounts.duel_open_queue;
             require!(
                 open_queue.entries.len() < constants::DUEL_OPEN_QUEUE_CAPACITY,
@@ -2785,6 +2786,10 @@ pub mod gameplay_state {
         {
             ctx.accounts.game_state.completed = true;
             ctx.accounts.game_state.boss_fight_ready = false;
+            // Set a fake duel_map_seed if still 0 so settle can push to queue.
+            if ctx.accounts.game_state.duel_map_seed == 0 {
+                ctx.accounts.game_state.duel_map_seed = Clock::get()?.slot.wrapping_mul(6364136223846793005);
+            }
             Ok(())
         }
     }

@@ -1389,6 +1389,20 @@ pub mod gameplay_state {
                     player_key
                 };
 
+                emit!(DuelCombatVisual {
+                    seed,
+                    player_a: creator.player,
+                    player_b: player_key,
+                    player_a_tool: creator.loadout.tool,
+                    player_a_gear: creator.loadout.gear,
+                    player_b_tool: duel_entry.loadout.tool,
+                    player_b_gear: duel_entry.loadout.gear,
+                    player_a_won: combat_outcome.player_won,
+                    final_player_a_hp: combat_outcome.final_player_hp,
+                    final_player_b_hp: combat_outcome.final_enemy_hp,
+                    turns_taken: combat_outcome.turns_taken,
+                });
+
                 if winner_key == player_key {
                     transfer_lamports_from_vault(
                         &ctx.accounts.duel_vault.to_account_info(),
@@ -1416,6 +1430,19 @@ pub mod gameplay_state {
                     &ctx.accounts.gauntlet_pool_vault.to_account_info(),
                     gauntlet_fee,
                 )?;
+
+                emit!(DuelResolved {
+                    seed,
+                    player_a: creator.player,
+                    player_b: Some(player_key),
+                    winner: Some(winner_key),
+                    total_pot,
+                    winner_payout,
+                    company_fee,
+                    gauntlet_fee,
+                    resolution: DuelResolution::CompletedCombat,
+                    turns_taken: Some(combat_outcome.turns_taken),
+                });
             } else {
                 // Opponent eliminated: creator wins pot minus fees.
                 let total_pot = creator
@@ -1440,6 +1467,19 @@ pub mod gameplay_state {
                     &ctx.accounts.gauntlet_pool_vault.to_account_info(),
                     gauntlet_fee,
                 )?;
+
+                emit!(DuelResolved {
+                    seed,
+                    player_a: creator.player,
+                    player_b: Some(player_key),
+                    winner: Some(creator.player),
+                    total_pot,
+                    winner_payout,
+                    company_fee,
+                    gauntlet_fee,
+                    resolution: DuelResolution::OpponentEliminated,
+                    turns_taken: None,
+                });
             }
             return Ok(());
         }
@@ -1475,6 +1515,19 @@ pub mod gameplay_state {
             &ctx.accounts.gauntlet_pool_vault.to_account_info(),
             gauntlet_fee,
         )?;
+
+        emit!(DuelResolved {
+            seed,
+            player_a: player_key,
+            player_b: None,
+            winner: None,
+            total_pot: duel_entry.entry_lamports,
+            winner_payout: 0,
+            company_fee,
+            gauntlet_fee,
+            resolution: DuelResolution::UnmatchedEliminated,
+            turns_taken: None,
+        });
 
         Ok(())
     }
@@ -6432,9 +6485,9 @@ mod hp_logic_tests {
     }
 
     #[test]
-    fn test_should_resolve_weekly_boss_duel_only_weeks_1_2() {
-        assert!(should_resolve_weekly_boss(RunMode::Duel, 1));
-        assert!(should_resolve_weekly_boss(RunMode::Duel, 2));
+    fn test_should_resolve_weekly_boss_duel_never() {
+        assert!(!should_resolve_weekly_boss(RunMode::Duel, 1));
+        assert!(!should_resolve_weekly_boss(RunMode::Duel, 2));
         assert!(!should_resolve_weekly_boss(RunMode::Duel, 3));
     }
 

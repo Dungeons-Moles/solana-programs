@@ -23,18 +23,15 @@ use combat_system::{
     resolve_pvp_combat_annotated_with_both_gold, EffectType, ItemEffect, TriggerType,
 };
 use constants::{
-    base_hp, COMPANY_TREASURY_ADDRESS, DAY_MOVES, PVP_BASE_HP,
-    DUEL_ENTRY_LAMPORTS, DUEL_ENTRY_SEED, DUEL_ER_QUEUE_SEED, DUEL_OPEN_QUEUE_SEED,
-    DUEL_QUEUE_SEED, DUEL_VAULT_SEED,
-    GAME_STATE_SEED, GAUNTLET_BOOTSTRAP_ECHOES_PER_WEEK, GAUNTLET_CAMPAIGN_LEVEL,
-    GAUNTLET_ECHOES_SEED,
-    GAUNTLET_COMPANY_FEE_BPS, GAUNTLET_CONFIG_SEED, GAUNTLET_ENTRY_LAMPORTS,
+    base_hp, COMPANY_TREASURY_ADDRESS, DAY_MOVES, DUEL_ENTRY_LAMPORTS, DUEL_ENTRY_SEED,
+    DUEL_ER_QUEUE_SEED, DUEL_OPEN_QUEUE_SEED, DUEL_QUEUE_SEED, DUEL_VAULT_SEED, GAME_STATE_SEED,
+    GAUNTLET_BOOTSTRAP_ECHOES_PER_WEEK, GAUNTLET_CAMPAIGN_LEVEL, GAUNTLET_COMPANY_FEE_BPS,
+    GAUNTLET_CONFIG_SEED, GAUNTLET_ECHOES_SEED, GAUNTLET_ENTRY_LAMPORTS,
     GAUNTLET_EPOCH_DURATION_SECONDS, GAUNTLET_EPOCH_POOL_SEED, GAUNTLET_MAX_WEEKLY_ECHOES,
     GAUNTLET_PLAYER_SCORE_SEED, GAUNTLET_POOL_FEE_BPS, GAUNTLET_POOL_VAULT_SEED,
     GAUNTLET_WEEK_POOL_SEED, INITIAL_GEAR_SLOTS, MAX_GEAR_SLOTS, PIT_DRAFT_BPS_DENOMINATOR,
     PIT_DRAFT_COMPANY_FEE_BPS, PIT_DRAFT_ENTRY_LAMPORTS, PIT_DRAFT_GAUNTLET_FEE_BPS,
-    PIT_DRAFT_QUEUE_SEED,
-    PIT_DRAFT_VAULT_SEED, PIT_DRAFT_WINNER_BPS,
+    PIT_DRAFT_QUEUE_SEED, PIT_DRAFT_VAULT_SEED, PIT_DRAFT_WINNER_BPS, PVP_BASE_HP,
 };
 use errors::GameplayStateError;
 
@@ -44,8 +41,8 @@ pub const SESSION_MANAGER_RUNMODE_AUTHORITY_SEED: &[u8] = b"session_manager_auth
 use movement::{
     calculate_move_cost, chebyshev_distance, compute_visible_enemies, get_boss_for_combat,
     get_boss_id, get_duel_boss_for_combat_from_seed, get_duel_boss_for_combat_vrf,
-    get_duel_boss_id_from_seed, get_duel_boss_id_vrf, is_adjacent,
-    is_within_bounds, should_process_night_enemy_movement, should_process_target_enemy_combat,
+    get_duel_boss_id_from_seed, get_duel_boss_id_vrf, is_adjacent, is_within_bounds,
+    should_process_night_enemy_movement, should_process_target_enemy_combat,
 };
 use player_inventory::effects::{generate_annotated_combat_effects, generate_combat_effects};
 use player_inventory::items::ITEMS;
@@ -53,8 +50,7 @@ use player_inventory::state::{ItemInstance, ItemType, PlayerInventory, Tier, Too
 use player_profile::state::PlayerProfile;
 use state::{
     DuelCreatorEntry, DuelEntry, DuelErQueue, DuelLoadoutSnapshot, DuelOpenQueue, DuelQueue,
-    DuelRunOutcome,
-    DuelVault, GameState, GameplayVrfState, GauntletConfig, GauntletDefenderCredit,
+    DuelRunOutcome, DuelVault, GameState, GameplayVrfState, GauntletConfig, GauntletDefenderCredit,
     GauntletEchoSnapshot, GauntletEchoSource, GauntletEchoes, GauntletEpochPool,
     GauntletLoadoutSnapshot, GauntletPendingPoints, GauntletPlayerScore, GauntletPoolVault,
     GauntletWeekPool, Phase, PitDraftQueue, PitDraftVault, RunMode,
@@ -322,7 +318,11 @@ pub mod gameplay_state {
             generated_map.spawn_x,
             generated_map.spawn_y,
             6, // SPAWN_VISION_RADIUS
-            ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info()).as_ref(),
+            ctx.accounts
+                .session_discovery
+                .as_ref()
+                .map(|a| a.to_account_info())
+                .as_ref(),
             Some(&ctx.accounts.session.to_account_info()),
             Some(&ctx.accounts.session_signer.to_account_info()),
             Some(&ctx.accounts.map_generator_program.to_account_info()),
@@ -365,21 +365,21 @@ pub mod gameplay_state {
                 }
 
                 if let Some((mole_den_index, mole_den_type, mole_den_x, mole_den_y)) = mole_den {
-                map_generator::cpi::record_discovered_poi(
-                    CpiContext::new(
-                        mgp_info.clone(),
-                        map_generator::cpi::accounts::RecordDiscoveredPoi {
-                            session_discovery: sd_info.clone(),
-                            session: session_info.clone(),
-                            session_signer: ctx.accounts.session_signer.to_account_info(),
-                        },
-                    ),
-                    mole_den_type,
-                    mole_den_x,
-                    mole_den_y,
-                    mole_den_index,
-                )?;
-            }
+                    map_generator::cpi::record_discovered_poi(
+                        CpiContext::new(
+                            mgp_info.clone(),
+                            map_generator::cpi::accounts::RecordDiscoveredPoi {
+                                session_discovery: sd_info.clone(),
+                                session: session_info.clone(),
+                                session_signer: ctx.accounts.session_signer.to_account_info(),
+                            },
+                        ),
+                        mole_den_type,
+                        mole_den_x,
+                        mole_den_y,
+                        mole_den_index,
+                    )?;
+                }
             }
 
             // Boss ID for week 1
@@ -391,11 +391,21 @@ pub mod gameplay_state {
             } else {
                 get_boss_id(game_state.campaign_level, 1)?
             };
-            update_boss_id_cpi(&sd_info, &session_info, &ga_info, &mgp_info, ga_bump, boss_id)?;
+            update_boss_id_cpi(
+                &sd_info,
+                &session_info,
+                &ga_info,
+                &mgp_info,
+                ga_bump,
+                boss_id,
+            )?;
 
             // Echo for gauntlet mode (week 1)
             if game_state.run_mode == RunMode::Gauntlet {
-                let ge_echo = ctx.accounts.gauntlet_echoes.as_ref()
+                let ge_echo = ctx
+                    .accounts
+                    .gauntlet_echoes
+                    .as_ref()
                     .and_then(|ge| ge.echoes[0].as_ref());
                 if let Some(echo) = ge_echo {
                     let echo_bytes = echo.try_to_vec().unwrap_or_default();
@@ -403,16 +413,34 @@ pub mod gameplay_state {
                     let copy_len = echo_bytes.len().min(179);
                     echo_data[..copy_len].copy_from_slice(&echo_bytes[..copy_len]);
                     update_current_echo_cpi(
-                        &sd_info, &session_info, &ga_info, &mgp_info, ga_bump, 1, echo_data,
+                        &sd_info,
+                        &session_info,
+                        &ga_info,
+                        &mgp_info,
+                        ga_bump,
+                        1,
+                        echo_data,
                     )?;
                 } else {
                     update_current_echo_cpi(
-                        &sd_info, &session_info, &ga_info, &mgp_info, ga_bump, 0, [0u8; 179],
+                        &sd_info,
+                        &session_info,
+                        &ga_info,
+                        &mgp_info,
+                        ga_bump,
+                        0,
+                        [0u8; 179],
                     )?;
                 }
             } else {
                 update_current_echo_cpi(
-                    &sd_info, &session_info, &ga_info, &mgp_info, ga_bump, 0, [0u8; 179],
+                    &sd_info,
+                    &session_info,
+                    &ga_info,
+                    &mgp_info,
+                    ga_bump,
+                    0,
+                    [0u8; 179],
                 )?;
             }
 
@@ -423,7 +451,12 @@ pub mod gameplay_state {
                 generated_map.width,
             );
             update_discovered_enemies_cpi(
-                &sd_info, &session_info, &ga_info, &mgp_info, ga_bump, visible,
+                &sd_info,
+                &session_info,
+                &ga_info,
+                &mgp_info,
+                ga_bump,
+                visible,
             )?;
         }
 
@@ -652,10 +685,8 @@ pub mod gameplay_state {
     /// Delegates the per-session DuelEntry PDA to the ER.
     /// Called during duel session setup, after enter_duel creates the account.
     pub fn delegate_duel_entry(ctx: Context<DelegateDuelEntry>, session_pda: Pubkey) -> Result<()> {
-        let (expected_pda, _) = Pubkey::find_program_address(
-            &[DUEL_ENTRY_SEED, session_pda.as_ref()],
-            &crate::ID,
-        );
+        let (expected_pda, _) =
+            Pubkey::find_program_address(&[DUEL_ENTRY_SEED, session_pda.as_ref()], &crate::ID);
         require_keys_eq!(
             ctx.accounts.duel_entry.key(),
             expected_pda,
@@ -1216,10 +1247,7 @@ pub mod gameplay_state {
         let queue = &mut ctx.accounts.duel_open_queue;
         let duel_entry = &mut ctx.accounts.duel_entry;
 
-        let matched_idx = queue
-            .entries
-            .iter()
-            .position(|e| e.player != player_key);
+        let matched_idx = queue.entries.iter().position(|e| e.player != player_key);
 
         if let Some(idx) = matched_idx {
             let creator = queue.entries.remove(idx);
@@ -1352,20 +1380,22 @@ pub mod gameplay_state {
                 // Resolve PvP combat deterministically from both loadouts.
                 let creator_inventory = snapshot_creator_inventory(creator);
                 let opponent_inventory = snapshot_duel_entry_inventory(duel_entry);
-                let creator_stats = calculate_stats(
-                    &creator_inventory,
-                    GAUNTLET_CAMPAIGN_LEVEL,
-                    RunMode::Duel,
-                );
-                let opponent_stats = calculate_stats(
-                    &opponent_inventory,
-                    GAUNTLET_CAMPAIGN_LEVEL,
-                    RunMode::Duel,
-                );
+                let creator_stats =
+                    calculate_stats(&creator_inventory, GAUNTLET_CAMPAIGN_LEVEL, RunMode::Duel);
+                let opponent_stats =
+                    calculate_stats(&opponent_inventory, GAUNTLET_CAMPAIGN_LEVEL, RunMode::Duel);
                 let all_creator_effects = generate_annotated_combat_effects(&creator_inventory);
                 let all_opponent_effects = generate_annotated_combat_effects(&opponent_inventory);
-                let creator_combatant = build_player_combatant(creator.loadout.hp_at_finish, &creator_stats, &all_creator_effects);
-                let opponent_combatant = build_player_combatant(duel_entry.loadout.hp_at_finish, &opponent_stats, &all_opponent_effects);
+                let creator_combatant = build_player_combatant(
+                    creator.loadout.hp_at_finish,
+                    &creator_stats,
+                    &all_creator_effects,
+                );
+                let opponent_combatant = build_player_combatant(
+                    duel_entry.loadout.hp_at_finish,
+                    &opponent_stats,
+                    &all_opponent_effects,
+                );
                 let creator_effects = strip_baked_battle_start_stat_effects(all_creator_effects);
                 let opponent_effects = strip_baked_battle_start_stat_effects(all_opponent_effects);
                 let combat_outcome = resolve_pvp_combat_annotated_with_both_gold(
@@ -1561,10 +1591,8 @@ pub mod gameplay_state {
                 .checked_add(duel_entry.entry_lamports)
                 .ok_or(GameplayStateError::ArithmeticOverflow)?;
             let (company_fee, gauntlet_fee, winner_payout) = compute_pvp_pot_split(total_pot)?;
-            let creator_wallet = resolve_wallet_account(
-                ctx.accounts.creator_wallet.as_ref(),
-                creator.player,
-            )?;
+            let creator_wallet =
+                resolve_wallet_account(ctx.accounts.creator_wallet.as_ref(), creator.player)?;
             transfer_lamports_from_vault(
                 &ctx.accounts.duel_vault.to_account_info(),
                 &creator_wallet,
@@ -1746,12 +1774,8 @@ pub mod gameplay_state {
             (randomness, nonce),
             b"pit_waiting",
         )?;
-        let entrant_inventory = build_pit_draft_inventory_vrf(
-            player_key,
-            pool_b,
-            (randomness, nonce),
-            b"pit_entrant",
-        )?;
+        let entrant_inventory =
+            build_pit_draft_inventory_vrf(player_key, pool_b, (randomness, nonce), b"pit_entrant")?;
 
         let waiting_stats =
             calculate_stats(&waiting_inventory, GAUNTLET_CAMPAIGN_LEVEL, RunMode::Duel);
@@ -1759,11 +1783,8 @@ pub mod gameplay_state {
             calculate_stats(&entrant_inventory, GAUNTLET_CAMPAIGN_LEVEL, RunMode::Duel);
 
         // Gold derivation from VRF
-        let mut gold_rng = vrf_rng::GameRng::from_vrf(
-            randomness,
-            nonce,
-            vrf_rng::domains::PIT_DRAFT_GOLD,
-        );
+        let mut gold_rng =
+            vrf_rng::GameRng::from_vrf(randomness, nonce, vrf_rng::domains::PIT_DRAFT_GOLD);
         let waiting_start_gold =
             gold_rng.next_bounded(u64::from(PIT_DRAFT_MAX_START_GOLD) + 1) as u16;
         let entrant_start_gold =
@@ -1853,6 +1874,36 @@ pub mod gameplay_state {
         Ok(())
     }
 
+    /// Leaves the pit draft queue, refunding the entry fee from the vault.
+    /// Only the waiting player can call this.
+    pub fn leave_pit_draft(ctx: Context<LeavePitDraft>) -> Result<()> {
+        let queue = &mut ctx.accounts.pit_draft_queue;
+        let player_key = ctx.accounts.player.key();
+
+        require!(
+            queue.waiting_player == Some(player_key),
+            GameplayStateError::Unauthorized
+        );
+
+        // Refund entry fee from vault back to the player.
+        transfer_lamports_from_vault(
+            &ctx.accounts.pit_draft_vault.to_account_info(),
+            &ctx.accounts.player.to_account_info(),
+            PIT_DRAFT_ENTRY_LAMPORTS,
+        )?;
+
+        // Clear queue.
+        queue.waiting_player = None;
+        queue.waiting_profile = None;
+
+        emit!(PitDraftQueueCancelled {
+            player: player_key,
+            refund_lamports: PIT_DRAFT_ENTRY_LAMPORTS,
+        });
+
+        Ok(())
+    }
+
     /// Closes the GameState account, returning rent to player.
     pub fn close_game_state(ctx: Context<CloseGameState>) -> Result<()> {
         let game_state = &ctx.accounts.game_state;
@@ -1898,9 +1949,7 @@ pub mod gameplay_state {
     }
 
     /// Closes an orphaned GauntletEchoes account whose session PDA no longer exists.
-    pub fn close_orphaned_gauntlet_echoes(
-        ctx: Context<CloseOrphanedGauntletEchoes>,
-    ) -> Result<()> {
+    pub fn close_orphaned_gauntlet_echoes(ctx: Context<CloseOrphanedGauntletEchoes>) -> Result<()> {
         emit!(GauntletEchoesClosed {
             session: ctx.accounts.gauntlet_echoes.session,
         });
@@ -2008,7 +2057,10 @@ pub mod gameplay_state {
                     return Ok(());
                 }
             } else if game_state.run_mode == RunMode::Gauntlet {
-                let ge = ctx.accounts.gauntlet_echoes.as_ref()
+                let ge = ctx
+                    .accounts
+                    .gauntlet_echoes
+                    .as_ref()
                     .ok_or(GameplayStateError::GauntletNotInitialized)?;
                 let player_won = resolve_gauntlet_echo_inline(
                     game_state,
@@ -2259,8 +2311,11 @@ pub mod gameplay_state {
         }
 
         let original_phase = game_state.phase;
-        let (post_move_phase, post_move_moves_remaining) =
-            resolve_post_move_phase_and_moves(original_phase, game_state.moves_remaining, move_cost)?;
+        let (post_move_phase, post_move_moves_remaining) = resolve_post_move_phase_and_moves(
+            original_phase,
+            game_state.moves_remaining,
+            move_cost,
+        )?;
         // When Night moves are exhausted, the phase transitions to Day (or boss→Day
         // if the player wins). Use Day vision so the reveal matches the post-transition
         // state. If the boss is lost, the player is dead and extra tiles don't matter.
@@ -2342,11 +2397,8 @@ pub mod gameplay_state {
 
                         if new_x == chase_x && new_y == chase_y {
                             combat_triggered = true;
-                            let player_won = resolve_enemy_combat(
-                                game_state,
-                                inventory,
-                                enemy_idx,
-                            )?;
+                            let player_won =
+                                resolve_enemy_combat(game_state, inventory, enemy_idx)?;
                             if !player_won {
                                 return Ok(());
                             }
@@ -2370,7 +2422,11 @@ pub mod gameplay_state {
                 ctx.bumps.gameplay_authority,
                 target_x,
                 target_y,
-                ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info()).as_ref(),
+                ctx.accounts
+                    .session_discovery
+                    .as_ref()
+                    .map(|a| a.to_account_info())
+                    .as_ref(),
             )?;
         }
 
@@ -2386,7 +2442,11 @@ pub mod gameplay_state {
             target_x,
             target_y,
             visibility_radius,
-            ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info()).as_ref(),
+            ctx.accounts
+                .session_discovery
+                .as_ref()
+                .map(|a| a.to_account_info())
+                .as_ref(),
         )?;
         // Reload generated_map after CPI so discovered_tiles reflects newly revealed area.
         // Without this, compute_visible_enemies reads stale pre-reveal data.
@@ -2399,7 +2459,11 @@ pub mod gameplay_state {
             target_x,
             target_y,
             visibility_radius,
-            ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info()).as_ref(),
+            ctx.accounts
+                .session_discovery
+                .as_ref()
+                .map(|a| a.to_account_info())
+                .as_ref(),
             Some(&ctx.accounts.game_session),
             Some(&ctx.accounts.player.to_account_info()),
             Some(&ctx.accounts.map_generator_program.to_account_info()),
@@ -2475,7 +2539,11 @@ pub mod gameplay_state {
                         player_inventory_program,
                         ctx.bumps.gameplay_authority,
                         vrf_ref,
-                        ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info()).as_ref(),
+                        ctx.accounts
+                            .session_discovery
+                            .as_ref()
+                            .map(|a| a.to_account_info())
+                            .as_ref(),
                         Some(&ctx.accounts.game_session),
                         Some(&ctx.accounts.map_generator_program.to_account_info()),
                         ge_ref,
@@ -2499,8 +2567,7 @@ pub mod gameplay_state {
                 if let Some(enemy_idx) =
                     find_enemy_index(game_state, game_state.position_x, game_state.position_y)
                 {
-                    let player_won =
-                        resolve_enemy_combat(game_state, inventory, enemy_idx)?;
+                    let player_won = resolve_enemy_combat(game_state, inventory, enemy_idx)?;
                     if !player_won {
                         return Ok(());
                     }
@@ -2577,7 +2644,10 @@ pub mod gameplay_state {
         {
             // Gauntlet echo combat (weeks 1-2): resolved here instead of inline in
             // move_player to avoid BPF stack overflow.
-            let ge = ctx.accounts.gauntlet_echoes.as_ref()
+            let ge = ctx
+                .accounts
+                .gauntlet_echoes
+                .as_ref()
                 .ok_or(GameplayStateError::GauntletNotInitialized)?;
             let player_won = resolve_gauntlet_echo_inline(
                 game_state,
@@ -2606,9 +2676,17 @@ pub mod gameplay_state {
                 player_inventory_program,
                 ctx.bumps.gameplay_authority,
                 vrf_ref,
-                ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info()).as_ref(),
+                ctx.accounts
+                    .session_discovery
+                    .as_ref()
+                    .map(|a| a.to_account_info())
+                    .as_ref(),
                 Some(&ctx.accounts.game_session.to_account_info()),
-                ctx.accounts.map_generator_program.as_ref().map(|p| p.to_account_info()).as_ref(),
+                ctx.accounts
+                    .map_generator_program
+                    .as_ref()
+                    .map(|p| p.to_account_info())
+                    .as_ref(),
                 ge_ref,
             )?;
             if !player_won {
@@ -2683,6 +2761,29 @@ pub mod gameplay_state {
         Ok(())
     }
 
+    /// Commits and undelegates session-scoped GameplayVrfState from ER back to base layer.
+    pub fn undelegate_gameplay_vrf_state(ctx: Context<UndelegateGameplayVrfState>) -> Result<()> {
+        let session_key = ctx.accounts.game_session.key();
+        let (expected_vrf_state, _) = Pubkey::find_program_address(
+            &[GameplayVrfState::SEED_PREFIX, session_key.as_ref()],
+            &crate::ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.gameplay_vrf_state.key(),
+            expected_vrf_state,
+            GameplayStateError::Unauthorized
+        );
+
+        let vrf_info = ctx.accounts.gameplay_vrf_state.to_account_info();
+        commit_and_undelegate_accounts(
+            &ctx.accounts.session_signer.to_account_info(),
+            vec![&vrf_info],
+            &ctx.accounts.magic_context,
+            &ctx.accounts.magic_program.to_account_info(),
+        )?;
+        Ok(())
+    }
+
     /// Delegates GameplayVrfState PDA to MagicBlock for pit draft VRF (no session required).
     /// The seed_key is typically matched_player_a from the PitDraftQueue.
     pub fn delegate_pit_draft_vrf_state(
@@ -2708,10 +2809,43 @@ pub mod gameplay_state {
         Ok(())
     }
 
+    /// Commits and undelegates GameplayVrfState for pit draft back to base layer.
+    /// The seed_key is the same pubkey used to derive the pit-draft VRF PDA.
+    pub fn undelegate_pit_draft_vrf_state(ctx: Context<UndelegatePitDraftVrfState>) -> Result<()> {
+        let seed_key = ctx.accounts.seed_key.key();
+        let (expected_vrf_state, _) = Pubkey::find_program_address(
+            &[GameplayVrfState::SEED_PREFIX, seed_key.as_ref()],
+            &crate::ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.gameplay_vrf_state.key(),
+            expected_vrf_state,
+            GameplayStateError::Unauthorized
+        );
+        require_keys_eq!(
+            read_gameplay_vrf_state(&ctx.accounts.gameplay_vrf_state)?.session,
+            seed_key,
+            GameplayStateError::Unauthorized
+        );
+
+        let vrf_info = ctx.accounts.gameplay_vrf_state.to_account_info();
+        commit_and_undelegate_accounts(
+            &ctx.accounts.payer.to_account_info(),
+            vec![&vrf_info],
+            &ctx.accounts.magic_context,
+            &ctx.accounts.magic_program.to_account_info(),
+        )?;
+        Ok(())
+    }
+
     /// Request VRF randomness for gameplay (pit draft, gauntlet echo, duel boss).
     /// Increments the nonce to ensure each request produces unique randomness.
     pub fn request_gameplay_vrf(ctx: Context<RequestGameplayVrf>) -> Result<()> {
         let vrf = &mut ctx.accounts.vrf_state;
+        require!(
+            can_request_gameplay_vrf(vrf.session, vrf.status),
+            GameplayStateError::VrfAlreadyFinalized
+        );
         vrf.session = ctx.accounts.session.key();
         vrf.randomness = [0u8; 32];
         vrf.nonce = vrf.nonce.checked_add(1).unwrap_or(1);
@@ -2841,7 +2975,8 @@ pub mod gameplay_state {
             ctx.accounts.game_state.boss_fight_ready = false;
             // Set a fake duel_map_seed if still 0 so settle can push to queue.
             if ctx.accounts.game_state.duel_map_seed == 0 {
-                ctx.accounts.game_state.duel_map_seed = Clock::get()?.slot.wrapping_mul(6364136223846793005);
+                ctx.accounts.game_state.duel_map_seed =
+                    Clock::get()?.slot.wrapping_mul(6364136223846793005);
             }
             Ok(())
         }
@@ -2908,6 +3043,18 @@ pub struct UndelegateGameplayAccounts<'info> {
 
 #[commit]
 #[derive(Accounts)]
+pub struct UndelegateGameplayVrfState<'info> {
+    #[account(mut)]
+    /// CHECK: PDA is validated in handler.
+    pub gameplay_vrf_state: AccountInfo<'info>,
+    /// CHECK: Session PDA used only for deterministic PDA validation.
+    pub game_session: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub session_signer: Signer<'info>,
+}
+
+#[commit]
+#[derive(Accounts)]
 pub struct UndelegateGauntletEchoes<'info> {
     #[account(mut)]
     /// CHECK: PDA is validated in handler.
@@ -2932,7 +3079,6 @@ pub struct UndelegateGameState<'info> {
 
 // UndelegateMapEnemies removed — MapEnemies merged into GameState
 
-
 #[derive(Accounts)]
 pub struct SetPhaseForTesting<'info> {
     #[account(
@@ -2954,6 +3100,18 @@ fn read_game_state(game_state: &AccountInfo<'_>) -> Result<GameState> {
     let data = game_state.try_borrow_data()?;
     let mut slice: &[u8] = &data;
     GameState::try_deserialize(&mut slice).map_err(|_| GameplayStateError::InvalidSession.into())
+}
+
+fn read_gameplay_vrf_state(gameplay_vrf_state: &AccountInfo<'_>) -> Result<GameplayVrfState> {
+    let data = gameplay_vrf_state.try_borrow_data()?;
+    let mut slice: &[u8] = &data;
+    GameplayVrfState::try_deserialize(&mut slice)
+        .map_err(|_| GameplayStateError::InvalidSession.into())
+}
+
+fn can_request_gameplay_vrf(session: Pubkey, status: VrfStatus) -> bool {
+    session == Pubkey::default()
+        || (status != VrfStatus::Fulfilled && status != VrfStatus::Consumed)
 }
 
 // read_map_enemies removed — MapEnemies merged into GameState
@@ -3046,7 +3204,6 @@ fn is_pool_item_enabled(pool: &[u8; 10], item_id: &[u8; 8]) -> bool {
     (pool[byte_index] & (1u8 << bit_index)) != 0
 }
 
-
 /// VRF-aware index drawing. Uses GameRng backed by VRF randomness + domain separation.
 fn draw_unique_indices_vrf(
     candidates: &mut Vec<usize>,
@@ -3070,9 +3227,9 @@ fn build_pit_draft_inventory_vrf(
     seed_tag: &[u8],
 ) -> Result<PlayerInventory> {
     // Mix seed_tag into domain to differentiate player A vs player B inventory draws.
-    let tag_hash = seed_tag.iter().fold(0u64, |acc, &b| {
-        acc.wrapping_mul(31).wrapping_add(b as u64)
-    });
+    let tag_hash = seed_tag
+        .iter()
+        .fold(0u64, |acc, &b| acc.wrapping_mul(31).wrapping_add(b as u64));
     let mut rng = vrf_rng::GameRng::from_vrf(
         vrf.0,
         vrf.1,
@@ -3143,15 +3300,9 @@ fn extract_gameplay_vrf(
     Ok(Some((vrf.randomness, vrf.nonce)))
 }
 
-fn pit_draft_final_tie_player_a_wins(
-    randomness: &[u8; 32],
-    nonce: u64,
-) -> bool {
-    let mut rng = vrf_rng::GameRng::from_vrf(
-        randomness,
-        nonce,
-        vrf_rng::domains::PIT_DRAFT_TIEBREAKER,
-    );
+fn pit_draft_final_tie_player_a_wins(randomness: &[u8; 32], nonce: u64) -> bool {
+    let mut rng =
+        vrf_rng::GameRng::from_vrf(randomness, nonce, vrf_rng::domains::PIT_DRAFT_TIEBREAKER);
     rng.next_bounded(2) == 0
 }
 
@@ -3162,7 +3313,6 @@ fn duel_final_tie_player_a_wins(seed: u64) -> bool {
 fn gauntlet_final_tie_player_wins(map_seed: u64) -> bool {
     map_seed % 2 == 0
 }
-
 
 /// VRF-backed gauntlet echo draw.
 fn draw_gauntlet_echoes_from_remaining_vrf(
@@ -3275,7 +3425,6 @@ fn maybe_insert_player_echo_vrf(
 
     Ok(())
 }
-
 
 fn require_expected_address(
     actual: Pubkey,
@@ -3545,6 +3694,7 @@ fn resolve_enemy_combat(
     if result.player_won {
         remove_enemy(game_state, enemy_index);
         game_state.gold = game_state.gold.saturating_add(gold_reward);
+        game_state.enemies_defeated = game_state.enemies_defeated.saturating_add(1);
 
         // Process Victory trigger effects (e.g., Lucky Coin, Blood Chalice)
         process_victory_effects(game_state, inventory, player_stats.max_hp);
@@ -3695,17 +3845,33 @@ fn resolve_boss_fight<'info>(
                 } else {
                     get_boss_id(stage, game_state.week)?
                 };
-                update_boss_id_cpi(sd, sess, gameplay_authority, mgp, gameplay_authority_bump, next_boss_id)?;
+                update_boss_id_cpi(
+                    sd,
+                    sess,
+                    gameplay_authority,
+                    mgp,
+                    gameplay_authority_bump,
+                    next_boss_id,
+                )?;
 
                 // Update echo for gauntlet mode
                 if game_state.run_mode == RunMode::Gauntlet {
                     let echo_idx = (game_state.week as usize).saturating_sub(1);
-                    if let Some(Some(echo)) = gauntlet_echoes.and_then(|ge| ge.echoes.get(echo_idx)) {
+                    if let Some(Some(echo)) = gauntlet_echoes.and_then(|ge| ge.echoes.get(echo_idx))
+                    {
                         let echo_bytes = echo.try_to_vec().unwrap_or_default();
                         let mut echo_data = [0u8; 179];
                         let copy_len = echo_bytes.len().min(179);
                         echo_data[..copy_len].copy_from_slice(&echo_bytes[..copy_len]);
-                        update_current_echo_cpi(sd, sess, gameplay_authority, mgp, gameplay_authority_bump, 1, echo_data)?;
+                        update_current_echo_cpi(
+                            sd,
+                            sess,
+                            gameplay_authority,
+                            mgp,
+                            gameplay_authority_bump,
+                            1,
+                            echo_data,
+                        )?;
                     } else {
                         update_current_echo_cpi(
                             sd,
@@ -3964,8 +4130,6 @@ fn reveal_radius_cpi<'info>(
     Ok(())
 }
 
-
-
 #[allow(clippy::too_many_arguments)]
 fn discover_visible_waypoints_authorized_cpi<'info>(
     map_pois: &AccountInfo<'info>,
@@ -3997,9 +4161,12 @@ fn discover_visible_waypoints_authorized_cpi<'info>(
     ];
 
     // Append optional accounts for SessionDiscovery waypoint recording
-    if let (Some(sd), Some(sess), Some(signer), Some(mgp)) =
-        (session_discovery, session, session_signer, map_generator_program)
-    {
+    if let (Some(sd), Some(sess), Some(signer), Some(mgp)) = (
+        session_discovery,
+        session,
+        session_signer,
+        map_generator_program,
+    ) {
         accounts.push(AccountMeta::new(sd.key(), false));
         accounts.push(AccountMeta::new_readonly(sess.key(), false));
         accounts.push(AccountMeta::new_readonly(signer.key(), true));
@@ -5144,7 +5311,6 @@ pub struct GenerateDuelMap<'info> {
     pub player: Signer<'info>,
 }
 
-
 /// SettleDuelPayout runs on base layer after undelegation.
 #[derive(Accounts)]
 pub struct SettleDuelPayout<'info> {
@@ -5310,6 +5476,26 @@ pub struct EnterPitDraft<'info> {
     pub gameplay_vrf_state: Option<Account<'info, GameplayVrfState>>,
 
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct LeavePitDraft<'info> {
+    #[account(
+        mut,
+        seeds = [PIT_DRAFT_QUEUE_SEED],
+        bump = pit_draft_queue.bump,
+    )]
+    pub pit_draft_queue: Account<'info, PitDraftQueue>,
+
+    #[account(
+        mut,
+        seeds = [PIT_DRAFT_VAULT_SEED],
+        bump = pit_draft_vault.bump,
+    )]
+    pub pit_draft_vault: Account<'info, PitDraftVault>,
+
+    #[account(mut)]
+    pub player: Signer<'info>,
 }
 
 #[derive(Accounts)]
@@ -5813,6 +5999,18 @@ pub struct DelegatePitDraftVrfState<'info> {
     pub payer: Signer<'info>,
 }
 
+#[commit]
+#[derive(Accounts)]
+pub struct UndelegatePitDraftVrfState<'info> {
+    #[account(mut)]
+    /// CHECK: PDA validated and deserialized in handler.
+    pub gameplay_vrf_state: AccountInfo<'info>,
+    /// CHECK: Seed key used for deterministic PDA validation.
+    pub seed_key: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+}
+
 #[derive(Accounts)]
 pub struct RequestGameplayVrf<'info> {
     #[account(mut)]
@@ -6029,6 +6227,12 @@ pub struct PitDraftQueued {
     pub player: Pubkey,
     pub profile: Pubkey,
     pub entry_lamports: u64,
+}
+
+#[event]
+pub struct PitDraftQueueCancelled {
+    pub player: Pubkey,
+    pub refund_lamports: u64,
 }
 
 #[event]
@@ -6529,6 +6733,7 @@ mod hp_logic_tests {
             duel_map_seed: 0,
             enemies: Vec::new(),
             enemy_count: 0,
+            enemies_defeated: 0,
         }
     }
 
@@ -6555,7 +6760,8 @@ mod hp_logic_tests {
 
     #[test]
     fn test_phase_spanning_day_move_uses_night_phase_and_radius() {
-        let (phase, moves_remaining) = resolve_post_move_phase_and_moves(Phase::Day1, 1, 2).unwrap();
+        let (phase, moves_remaining) =
+            resolve_post_move_phase_and_moves(Phase::Day1, 1, 2).unwrap();
         assert_eq!(phase, Phase::Night1);
         assert_eq!(moves_remaining, NIGHT_MOVES - 1);
         assert_eq!(visibility_radius_for_phase(phase), NIGHT_VISION_RADIUS);
@@ -6577,7 +6783,7 @@ mod combat_scenarios_tests;
 #[cfg(test)]
 mod duel_flow_tests {
     use super::*;
-    use crate::movement::{get_duel_boss_id_from_seed, get_duel_boss_for_combat_from_seed};
+    use crate::movement::{get_duel_boss_for_combat_from_seed, get_duel_boss_id_from_seed};
 
     #[test]
     fn test_duel_boss_from_seed_deterministic() {
@@ -6603,7 +6809,10 @@ mod duel_flow_tests {
         // Different seeds should produce different bosses (with high probability)
         let boss_a = get_duel_boss_id_from_seed(11111, 1).unwrap();
         let boss_b = get_duel_boss_id_from_seed(22222, 1).unwrap();
-        assert_ne!(boss_a, boss_b, "Different seeds should produce different bosses");
+        assert_ne!(
+            boss_a, boss_b,
+            "Different seeds should produce different bosses"
+        );
     }
 
     #[test]
@@ -6616,7 +6825,10 @@ mod duel_flow_tests {
         let _combatant = get_duel_boss_for_combat_from_seed(seed, week).unwrap();
         // The combatant should be for the same boss
         let boss_def = boss_system::get_boss(&boss_id);
-        assert!(boss_def.is_some(), "Boss ID should resolve to a valid boss definition");
+        assert!(
+            boss_def.is_some(),
+            "Boss ID should resolve to a valid boss definition"
+        );
     }
 
     #[test]
@@ -6633,6 +6845,23 @@ mod duel_flow_tests {
                 week
             );
         }
+    }
+
+    #[test]
+    fn test_gameplay_vrf_request_guard_rejects_finalized_states_for_existing_session() {
+        let session = Pubkey::new_unique();
+        assert!(!can_request_gameplay_vrf(session, VrfStatus::Fulfilled));
+        assert!(!can_request_gameplay_vrf(session, VrfStatus::Consumed));
+    }
+
+    #[test]
+    fn test_gameplay_vrf_request_guard_allows_uninitialized_or_pending_state() {
+        let session = Pubkey::new_unique();
+        assert!(can_request_gameplay_vrf(
+            Pubkey::default(),
+            VrfStatus::Requested
+        ));
+        assert!(can_request_gameplay_vrf(session, VrfStatus::Requested));
     }
 
     #[test]
@@ -6658,18 +6887,30 @@ mod duel_flow_tests {
         assert_eq!(company_fee, 6_000_000, "Company fee should be 3%");
         assert_eq!(gauntlet_fee, 4_000_000, "Gauntlet fee should be 2%");
         assert_eq!(winner_payout, 190_000_000, "Winner payout should be 95%");
-        assert_eq!(company_fee + gauntlet_fee + winner_payout, total_pot, "Fees + payout should equal total pot");
+        assert_eq!(
+            company_fee + gauntlet_fee + winner_payout,
+            total_pot,
+            "Fees + payout should equal total pot"
+        );
     }
 
     #[test]
     fn test_compute_eliminated_unmatched_distribution() {
         // 0.1 SOL entry = 100_000_000 lamports
         let entry = 100_000_000u64;
-        let (company_total, gauntlet_total) = compute_eliminated_unmatched_distribution(entry).unwrap();
+        let (company_total, gauntlet_total) =
+            compute_eliminated_unmatched_distribution(entry).unwrap();
 
         // Should sum to the full entry amount
-        assert_eq!(company_total + gauntlet_total, entry, "Distribution should equal entry amount");
+        assert_eq!(
+            company_total + gauntlet_total,
+            entry,
+            "Distribution should equal entry amount"
+        );
         // Company gets slightly more (3% base + half remainder)
-        assert!(company_total > gauntlet_total, "Company should get slightly more than gauntlet");
+        assert!(
+            company_total > gauntlet_total,
+            "Company should get slightly more than gauntlet"
+        );
     }
 }

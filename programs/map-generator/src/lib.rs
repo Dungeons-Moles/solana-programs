@@ -143,6 +143,7 @@ pub mod map_generator {
         );
 
         let generated_map = &mut ctx.accounts.generated_map;
+        require_generated_map_uninitialized(generated_map)?;
         let success = maze::generate_map(generated_map, seed, campaign_level);
         require!(success, MapGeneratorError::MapGenerationFailed);
         generated_map.clear_discovery();
@@ -177,6 +178,7 @@ pub mod map_generator {
         );
 
         let generated_map = &mut ctx.accounts.generated_map;
+        require_generated_map_uninitialized(generated_map)?;
         let success = maze::generate_map(generated_map, seed, campaign_level);
         require!(success, MapGeneratorError::MapGenerationFailed);
         generated_map.clear_discovery();
@@ -211,6 +213,7 @@ pub mod map_generator {
 
         let seed = ctx.accounts.map_config.seeds[(campaign_level - 1) as usize];
         let generated_map = &mut ctx.accounts.generated_map;
+        require_generated_map_uninitialized(generated_map)?;
         let success = maze::generate_map(generated_map, seed, campaign_level);
         require!(success, MapGeneratorError::MapGenerationFailed);
         generated_map.clear_discovery();
@@ -437,9 +440,7 @@ pub mod map_generator {
     }
 
     /// Commits and undelegates SessionDiscovery PDA from ER back to base layer.
-    pub fn undelegate_session_discovery(
-        ctx: Context<UndelegateSessionDiscovery>,
-    ) -> Result<()> {
+    pub fn undelegate_session_discovery(ctx: Context<UndelegateSessionDiscovery>) -> Result<()> {
         let session_key = ctx.accounts.session.key();
         let (expected, _) = Pubkey::find_program_address(
             &[SessionDiscovery::SEED_PREFIX, session_key.as_ref()],
@@ -532,7 +533,10 @@ pub mod map_generator {
                 require!(data.len() >= 74, MapGeneratorError::InvalidOfferData);
                 for i in 0..6 {
                     let offset = i * 12;
-                    require!(offset + 12 <= data.len(), MapGeneratorError::InvalidOfferData);
+                    require!(
+                        offset + 12 <= data.len(),
+                        MapGeneratorError::InvalidOfferData
+                    );
                     let mut item_id = [0u8; 8];
                     item_id.copy_from_slice(&data[offset..offset + 8]);
                     discovery.shop_offers[i] = state::DiscoveryShopOffer {
@@ -550,7 +554,10 @@ pub mod map_generator {
                 require!(data.len() >= 30, MapGeneratorError::InvalidOfferData);
                 for i in 0..3 {
                     let offset = i * 10;
-                    require!(offset + 10 <= data.len(), MapGeneratorError::InvalidOfferData);
+                    require!(
+                        offset + 10 <= data.len(),
+                        MapGeneratorError::InvalidOfferData
+                    );
                     let mut item_id = [0u8; 8];
                     item_id.copy_from_slice(&data[offset..offset + 8]);
                     discovery.cache_offer_items[i] = state::DiscoveryOfferItem {
@@ -599,10 +606,7 @@ pub mod map_generator {
     /// Called via CPI from gameplay-state at sync_map_enemies and week transitions.
     ///
     /// Authorization: Requires gameplay_authority PDA as signer.
-    pub fn update_boss_id(
-        ctx: Context<UpdateBossId>,
-        boss_id: [u8; 12],
-    ) -> Result<()> {
+    pub fn update_boss_id(ctx: Context<UpdateBossId>, boss_id: [u8; 12]) -> Result<()> {
         ctx.accounts.session_discovery.current_boss_id = boss_id;
         Ok(())
     }
@@ -684,8 +688,10 @@ pub mod map_generator {
         );
 
         let stored_session = Pubkey::from(
-            <[u8; 32]>::try_from(&gs_data[GAME_STATE_SESSION_OFFSET..GAME_STATE_SESSION_OFFSET + 32])
-                .unwrap(),
+            <[u8; 32]>::try_from(
+                &gs_data[GAME_STATE_SESSION_OFFSET..GAME_STATE_SESSION_OFFSET + 32],
+            )
+            .unwrap(),
         );
         require!(
             stored_session == ctx.accounts.generated_map.session,
@@ -737,8 +743,10 @@ pub mod map_generator {
         );
 
         let stored_session = Pubkey::from(
-            <[u8; 32]>::try_from(&gs_data[GAME_STATE_SESSION_OFFSET..GAME_STATE_SESSION_OFFSET + 32])
-                .unwrap(),
+            <[u8; 32]>::try_from(
+                &gs_data[GAME_STATE_SESSION_OFFSET..GAME_STATE_SESSION_OFFSET + 32],
+            )
+            .unwrap(),
         );
         require!(
             stored_session == ctx.accounts.session_discovery.session,
@@ -839,10 +847,37 @@ pub mod map_generator {
         Ok(())
     }
 
+    /// Commits and undelegates MapVrfState PDA from ER back to base layer.
+    pub fn undelegate_map_vrf_state(ctx: Context<UndelegateMapVrfState>) -> Result<()> {
+        let session_key = ctx.accounts.session.key();
+        let (expected_vrf_state, _) = Pubkey::find_program_address(
+            &[MapVrfState::SEED_PREFIX, session_key.as_ref()],
+            &crate::ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.map_vrf_state.key(),
+            expected_vrf_state,
+            MapGeneratorError::Unauthorized
+        );
+
+        let map_vrf_state_info = ctx.accounts.map_vrf_state.to_account_info();
+        commit_and_undelegate_accounts(
+            &ctx.accounts.session_signer.to_account_info(),
+            vec![&map_vrf_state_info],
+            &ctx.accounts.magic_context,
+            &ctx.accounts.magic_program.to_account_info(),
+        )?;
+        Ok(())
+    }
+
     /// Requests VRF randomness for map generation.
     /// Initializes a MapVrfState account with status=Requested.
     pub fn request_map_vrf(ctx: Context<RequestMapVrf>) -> Result<()> {
         let vrf_state = &mut ctx.accounts.vrf_state;
+        require!(
+            can_request_map_vrf(vrf_state.session, vrf_state.status),
+            MapGeneratorError::VrfAlreadyFinalized
+        );
         vrf_state.session = ctx.accounts.session.key();
         vrf_state.randomness = [0u8; 32];
         vrf_state.nonce = 1;
@@ -921,6 +956,7 @@ pub mod map_generator {
         let vrf_seed = rng.next_val();
 
         let generated_map = &mut ctx.accounts.generated_map;
+        require_generated_map_uninitialized(generated_map)?;
         let success = maze::generate_map(generated_map, vrf_seed, campaign_level);
         require!(success, MapGeneratorError::MapGenerationFailed);
         generated_map.clear_discovery();
@@ -1103,6 +1139,19 @@ fn read_generated_map(generated_map: &AccountInfo<'_>) -> Result<GeneratedMap> {
     let data = generated_map.try_borrow_data()?;
     let mut slice: &[u8] = &data;
     GeneratedMap::try_deserialize(&mut slice).map_err(|_| MapGeneratorError::InvalidSession.into())
+}
+
+fn require_generated_map_uninitialized(generated_map: &GeneratedMap) -> Result<()> {
+    require!(
+        generated_map.seed == 0 && generated_map.width == 0 && generated_map.height == 0,
+        MapGeneratorError::MapAlreadyExists
+    );
+    Ok(())
+}
+
+fn can_request_map_vrf(session: Pubkey, status: VrfStatus) -> bool {
+    session == Pubkey::default()
+        || (status != VrfStatus::Fulfilled && status != VrfStatus::Consumed)
 }
 
 #[derive(Accounts)]
@@ -1463,6 +1512,18 @@ pub struct DelegateMapVrfState<'info> {
     pub player: Signer<'info>,
 }
 
+#[commit]
+#[derive(Accounts)]
+pub struct UndelegateMapVrfState<'info> {
+    #[account(mut)]
+    /// CHECK: PDA is validated in handler.
+    pub map_vrf_state: AccountInfo<'info>,
+    /// CHECK: Session PDA used only for deterministic PDA validation.
+    pub session: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub session_signer: Signer<'info>,
+}
+
 // ============================================================================
 // Events
 // ============================================================================
@@ -1719,4 +1780,66 @@ pub struct GeneratedMapClosed {
 #[event]
 pub struct SessionDiscoveryClosed {
     pub session: Pubkey,
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::*;
+    use crate::constants::PACKED_TILES_SIZE;
+    use crate::state::{EnemySpawn, PoiSpawn};
+
+    fn blank_generated_map() -> GeneratedMap {
+        GeneratedMap {
+            session: Pubkey::default(),
+            width: 0,
+            height: 0,
+            seed: 0,
+            spawn_x: 0,
+            spawn_y: 0,
+            mole_den_x: 0,
+            mole_den_y: 0,
+            walkable_count: 0,
+            packed_tiles: [0; PACKED_TILES_SIZE],
+            discovered_tiles: [0; PACKED_TILES_SIZE],
+            enemy_count: 0,
+            enemies: [EnemySpawn::default(); 48],
+            poi_count: 0,
+            pois: [PoiSpawn::default(); 64],
+            bump: 0,
+        }
+    }
+
+    #[test]
+    fn generated_map_guard_allows_uninitialized_account() {
+        let map = blank_generated_map();
+        assert!(require_generated_map_uninitialized(&map).is_ok());
+    }
+
+    #[test]
+    fn generated_map_guard_rejects_existing_seed() {
+        let mut map = blank_generated_map();
+        map.seed = 42;
+        assert!(require_generated_map_uninitialized(&map).is_err());
+    }
+
+    #[test]
+    fn generated_map_guard_rejects_existing_dimensions() {
+        let mut map = blank_generated_map();
+        map.width = 50;
+        assert!(require_generated_map_uninitialized(&map).is_err());
+    }
+
+    #[test]
+    fn map_vrf_request_guard_rejects_finalized_states_for_existing_session() {
+        let session = Pubkey::new_unique();
+        assert!(!can_request_map_vrf(session, VrfStatus::Fulfilled));
+        assert!(!can_request_map_vrf(session, VrfStatus::Consumed));
+    }
+
+    #[test]
+    fn map_vrf_request_guard_allows_uninitialized_or_pending_state() {
+        let session = Pubkey::new_unique();
+        assert!(can_request_map_vrf(Pubkey::default(), VrfStatus::Requested));
+        assert!(can_request_map_vrf(session, VrfStatus::Requested));
+    }
 }

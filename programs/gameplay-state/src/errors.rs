@@ -174,4 +174,6 @@ pub enum GameplayStateError {
     #[msg("VRF state has not been requested yet")]
     VrfNotRequested,
 
+    #[msg("VRF already fulfilled or consumed and cannot be requested again")]
+    VrfAlreadyFinalized,
 }

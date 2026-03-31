@@ -370,57 +370,57 @@ pub struct DiscoveredEnemy {
 #[account]
 pub struct SessionDiscovery {
     /// Session this discovery belongs to
-    pub session: Pubkey,                               // 32
+    pub session: Pubkey, // 32
     /// Bit-packed discovered tiles (1 = discovered)
-    pub discovered_tiles: [u8; PACKED_TILES_SIZE],     // 313
+    pub discovered_tiles: [u8; PACKED_TILES_SIZE], // 313
     /// Bit-packed tile types for discovered tiles (0=floor, 1=wall)
-    pub revealed_tile_types: [u8; PACKED_TILES_SIZE],  // 313
+    pub revealed_tile_types: [u8; PACKED_TILES_SIZE], // 313
     /// Player spawn X
-    pub spawn_x: u8,                                   // 1
+    pub spawn_x: u8, // 1
     /// Player spawn Y
-    pub spawn_y: u8,                                   // 1
+    pub spawn_y: u8, // 1
     /// Mole den X (objective)
-    pub mole_den_x: u8,                                // 1
+    pub mole_den_x: u8, // 1
     /// Mole den Y
-    pub mole_den_y: u8,                                // 1
+    pub mole_den_y: u8, // 1
     /// Map width in tiles
-    pub map_width: u8,                                 // 1
+    pub map_width: u8, // 1
     /// Map height in tiles
-    pub map_height: u8,                                // 1
+    pub map_height: u8, // 1
     /// Number of discovered POIs
-    pub discovered_poi_count: u8,                      // 1
+    pub discovered_poi_count: u8, // 1
     /// Discovered POI entries (populated as player discovers them)
     pub discovered_pois: [DiscoveredPoi; MAX_DISCOVERED_POIS], // 320 (64 * 5)
     /// PDA bump seed
-    pub bump: u8,                                      // 1
+    pub bump: u8, // 1
     /// Number of enemies in discovered tiles
-    pub discovered_enemy_count: u8,                    // 1
+    pub discovered_enemy_count: u8, // 1
     /// Enemies visible to the player (max 48, 6 bytes each)
     pub discovered_enemies: [DiscoveredEnemy; MAX_ENEMIES], // 288
     /// Boss ID for current week only (12-byte boss_system ID)
-    pub current_boss_id: [u8; 12],                     // 12
+    pub current_boss_id: [u8; 12], // 12
     /// 0=no echo, 1=echo present
-    pub current_echo_present: u8,                      // 1
+    pub current_echo_present: u8, // 1
     /// Raw serialized GauntletEchoSnapshot bytes
-    pub current_echo_data: [u8; ECHO_DATA_SIZE],       // 179
+    pub current_echo_data: [u8; ECHO_DATA_SIZE], // 179
     /// Active offer type: 0=none, 1=shop, 2=cache, 3=oil, 4=scanner
-    pub active_offer_type: u8,                          // 1
+    pub active_offer_type: u8, // 1
     /// MapPois index of the POI with the active offer
-    pub active_offer_poi_index: u8,                     // 1
+    pub active_offer_poi_index: u8, // 1
     /// Shop offers (valid when active_offer_type == 1)
-    pub shop_offers: [DiscoveryShopOffer; 6],           // 72
+    pub shop_offers: [DiscoveryShopOffer; 6], // 72
     /// Shop reroll count
-    pub shop_reroll_count: u8,                          // 1
+    pub shop_reroll_count: u8, // 1
     /// Shop active flag
-    pub shop_active: u8,                                // 1
+    pub shop_active: u8, // 1
     /// Cache offer items (valid when active_offer_type == 2)
-    pub cache_offer_items: [DiscoveryOfferItem; 3],     // 30
+    pub cache_offer_items: [DiscoveryOfferItem; 3], // 30
     /// Oil offer flags (valid when active_offer_type == 3)
-    pub oil_offer_oils: [u8; 3],                        // 3
+    pub oil_offer_oils: [u8; 3], // 3
     /// Scanner offer count (valid when active_offer_type == 4)
-    pub scanner_offer_count: u8,                        // 1
+    pub scanner_offer_count: u8, // 1
     /// Scanner offer POI types
-    pub scanner_offer_types: [u8; 3],                   // 3
+    pub scanner_offer_types: [u8; 3], // 3
 }
 
 impl SessionDiscovery {
@@ -453,7 +453,7 @@ impl SessionDiscovery {
         + (3 * 10)                // cache_offer_items (3 * DiscoveryOfferItem)
         + 3                       // oil_offer_oils
         + 1                       // scanner_offer_count
-        + 3;                      // scanner_offer_types
+        + 3; // scanner_offer_types
 
     /// Sync a single tile's discovery state from GeneratedMap to SessionDiscovery.
     /// Returns true if the tile was newly discovered.
@@ -643,9 +643,33 @@ mod tests {
 
     #[test]
     fn test_session_discovery_space() {
-        let expected = 8 + 32 + 313 + 313 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + (64 * 5) + 1
-            + 1 + (48 * 6) + 12 + 1 + 179
-            + 1 + 1 + (6 * 12) + 1 + 1 + (3 * 10) + 3 + 1 + 3;
+        let expected = 8
+            + 32
+            + 313
+            + 313
+            + 1
+            + 1
+            + 1
+            + 1
+            + 1
+            + 1
+            + 1
+            + (64 * 5)
+            + 1
+            + 1
+            + (48 * 6)
+            + 12
+            + 1
+            + 179
+            + 1
+            + 1
+            + (6 * 12)
+            + 1
+            + 1
+            + (3 * 10)
+            + 3
+            + 1
+            + 3;
         assert_eq!(SessionDiscovery::SPACE, expected);
         assert_eq!(SessionDiscovery::SPACE, 1588);
     }
@@ -871,7 +895,8 @@ mod tests {
 
         // Convert to floor
         discovery.update_tile_type(50, 5, 5, false);
-        assert!((discovery.revealed_tile_types[idx / 8] >> (idx % 8)) & 1 == 0); // now floor
+        assert!((discovery.revealed_tile_types[idx / 8] >> (idx % 8)) & 1 == 0);
+        // now floor
     }
 
     #[test]
@@ -995,8 +1020,7 @@ mod tests {
         // All discovered tiles should match
         for byte_idx in 0..PACKED_TILES_SIZE {
             assert_eq!(
-                discovery.discovered_tiles[byte_idx],
-                map.discovered_tiles[byte_idx],
+                discovery.discovered_tiles[byte_idx], map.discovered_tiles[byte_idx],
                 "Discovery mismatch at byte {byte_idx}"
             );
         }
@@ -1007,8 +1031,7 @@ mod tests {
             for bit in 0..8u8 {
                 if (discovered >> bit) & 1 == 1 {
                     let is_wall_in_map = (map.packed_tiles[byte_idx] >> bit) & 1 == 1;
-                    let is_wall_in_disc =
-                        (discovery.revealed_tile_types[byte_idx] >> bit) & 1 == 1;
+                    let is_wall_in_disc = (discovery.revealed_tile_types[byte_idx] >> bit) & 1 == 1;
                     assert_eq!(
                         is_wall_in_map, is_wall_in_disc,
                         "Tile type mismatch at byte {byte_idx} bit {bit}"

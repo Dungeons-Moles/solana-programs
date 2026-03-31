@@ -55,6 +55,10 @@ pub enum MapGeneratorError {
     #[msg("VRF not requested")]
     VrfNotRequested,
 
+    /// VRF already reached a terminal state and cannot be requested again
+    #[msg("VRF already fulfilled or consumed")]
+    VrfAlreadyFinalized,
+
     /// SessionDiscovery discovered_pois array is full
     #[msg("Discovered POIs full")]
     DiscoveredPoisFull,

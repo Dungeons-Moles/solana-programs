@@ -22,7 +22,9 @@ import {
   getPlayerProfilePda,
   getMapConfigPda,
   getGeneratedMapPda,
+  getMapVrfStatePda,
   getGameStatePda,
+  getGameplayVrfStatePda,
   getMapEnemiesPda,
   getGameplayAuthorityPda,
   getDuelVaultPda,
@@ -33,6 +35,7 @@ import {
   getMapPoisPda,
   getSessionDiscoveryPda,
   getGauntletPoolVaultPda,
+  deriveDelegateAccounts,
 } from "../shared/pda-helpers";
 import {
   Transaction,
@@ -42,12 +45,19 @@ import {
 
 // ── Connections ─────────────────────────────────────────────────────────────
 const RPC_URL = process.env.ANCHOR_PROVIDER_URL || "http://127.0.0.1:8899";
+const ER_RPC_URL =
+  process.env.EXPO_PUBLIC_EPHEMERAL_PROVIDER_ENDPOINT ||
+  "http://127.0.0.1:7799";
+const ER_VALIDATOR = new PublicKey(
+  "mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev",
+);
 
 const DUEL_ENTRY_LAMPORTS = 100_000_000; // 0.1 SOL
 const DUEL_CAMPAIGN_LEVEL = 20;
 
 // ── Shared mutable state ────────────────────────────────────────────────────
 let connection: Connection;
+let erConnection: Connection;
 let provider: anchor.AnchorProvider;
 let programs: AllPrograms;
 let admin: Keypair;
@@ -65,7 +75,7 @@ let gauntletPoolVaultPda: PublicKey;
 const sendBaseTx = async (
   label: string,
   ixs: TransactionInstruction[],
-  signers: Keypair[]
+  signers: Keypair[],
 ): Promise<string> => {
   const tx = new Transaction().add(...ixs);
   tx.feePayer = signers[0].publicKey;
@@ -96,6 +106,8 @@ interface PlayerContext {
   generatedMapPda: PublicKey;
   inventoryPda: PublicKey;
   mapPoisPda: PublicKey;
+  mapVrfStatePda: PublicKey;
+  gameplayVrfStatePda: PublicKey;
   duelEntryPda: PublicKey;
   sessionNoncesPda: PublicKey;
   sessionDiscoveryPda: PublicKey;
@@ -105,7 +117,11 @@ async function setupPlayer(label: string): Promise<PlayerContext> {
   const user = Keypair.generate();
   const sessionSigner = Keypair.generate();
   await airdropAndConfirm(connection, user.publicKey, 10 * LAMPORTS_PER_SOL);
-  await airdropAndConfirm(connection, sessionSigner.publicKey, 5 * LAMPORTS_PER_SOL);
+  await airdropAndConfirm(
+    connection,
+    sessionSigner.publicKey,
+    5 * LAMPORTS_PER_SOL,
+  );
 
   const [playerProfilePda] = getPlayerProfilePda(user.publicKey);
   const [sessionPda] = getDuelSessionPda(user.publicKey);
@@ -114,6 +130,8 @@ async function setupPlayer(label: string): Promise<PlayerContext> {
   const [generatedMapPda] = getGeneratedMapPda(sessionPda);
   const [inventoryPda] = getInventoryPda(sessionPda);
   const [mapPoisPda] = getMapPoisPda(sessionPda);
+  const [mapVrfStatePda] = getMapVrfStatePda(sessionPda);
+  const [gameplayVrfStatePda] = getGameplayVrfStatePda(sessionPda);
   const [duelEntryPda] = getDuelEntryPda(sessionPda);
   const [sessionNoncesPda] = getSessionNoncesPda(user.publicKey);
   const [sessionDiscoveryPda] = getSessionDiscoveryPda(sessionPda);
@@ -128,13 +146,182 @@ async function setupPlayer(label: string): Promise<PlayerContext> {
     generatedMapPda,
     inventoryPda,
     mapPoisPda,
+    mapVrfStatePda,
+    gameplayVrfStatePda,
     duelEntryPda,
     sessionNoncesPda,
     sessionDiscoveryPda,
   };
 }
 
-async function createProfileAndStartDuelSession(p: PlayerContext): Promise<void> {
+const sendErTx = async (
+  label: string,
+  ixs: TransactionInstruction[],
+  signers: Keypair[],
+): Promise<string> => {
+  const tx = new Transaction().add(...ixs);
+  tx.feePayer = signers[0].publicKey;
+  const bh = await erConnection.getLatestBlockhash("confirmed");
+  tx.recentBlockhash = bh.blockhash;
+  tx.sign(...signers);
+  const sig = await erConnection.sendRawTransaction(tx.serialize(), {
+    skipPreflight: true,
+    maxRetries: 3,
+  });
+  await erConnection.confirmTransaction({ signature: sig, ...bh }, "confirmed");
+  const status = await erConnection.getSignatureStatuses([sig], {
+    searchTransactionHistory: true,
+  });
+  if (status.value[0]?.err) {
+    throw new Error(`${label} failed: ${JSON.stringify(status.value[0].err)}`);
+  }
+  return sig;
+};
+
+const waitForBaseOwner = async (
+  account: PublicKey,
+  owner: PublicKey,
+  label: string,
+): Promise<void> => {
+  for (let i = 0; i < 40; i += 1) {
+    const info = await connection.getAccountInfo(account, "confirmed");
+    if (info?.owner.equals(owner)) return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  const info = await connection.getAccountInfo(account, "confirmed");
+  throw new Error(
+    `${label} owner did not restore (current=${info?.owner.toBase58() ?? "missing"})`,
+  );
+};
+
+const waitForErVisibility = async (
+  account: PublicKey,
+  label: string,
+): Promise<void> => {
+  for (let i = 0; i < 60; i += 1) {
+    const info = await erConnection.getAccountInfo(account, "confirmed");
+    if (info) return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`${label} account did not become visible on ER`);
+};
+
+async function initDelegateAndUndelegateDuelVrfStates(
+  p: PlayerContext,
+): Promise<void> {
+  const initMapIx = await programs.mapGenerator.methods
+    .initMapVrfState()
+    .accounts({
+      payer: p.sessionSigner.publicKey,
+      session: p.sessionPda,
+      vrfState: p.mapVrfStatePda,
+      systemProgram: SystemProgram.programId,
+    } as any)
+    .instruction();
+
+  const initGameplayIx = await programs.gameplayState.methods
+    .initGameplayVrfState()
+    .accounts({
+      payer: p.sessionSigner.publicKey,
+      session: p.sessionPda,
+      vrfState: p.gameplayVrfStatePda,
+      systemProgram: SystemProgram.programId,
+    } as any)
+    .instruction();
+
+  await sendBaseTx(
+    "init-duel-vrf-states",
+    [initMapIx, initGameplayIx],
+    [p.sessionSigner],
+  );
+
+  const mapDelegate = deriveDelegateAccounts(
+    p.mapVrfStatePda,
+    programs.mapGenerator.programId,
+  );
+  const gameplayDelegate = deriveDelegateAccounts(
+    p.gameplayVrfStatePda,
+    programs.gameplayState.programId,
+  );
+
+  const delegateMapIx = await programs.mapGenerator.methods
+    .delegateMapVrfState(ER_VALIDATOR)
+    .accountsStrict({
+      bufferMapVrfState: mapDelegate.buffer,
+      delegationRecordMapVrfState: mapDelegate.delegationRecord,
+      delegationMetadataMapVrfState: mapDelegate.delegationMetadata,
+      mapVrfState: p.mapVrfStatePda,
+      session: p.sessionPda,
+      player: p.sessionSigner.publicKey,
+      ownerProgram: programs.mapGenerator.programId,
+      delegationProgram: PROGRAM_IDS.delegation,
+      systemProgram: SystemProgram.programId,
+    } as any)
+    .instruction();
+
+  const delegateGameplayIx = await programs.gameplayState.methods
+    .delegateGameplayVrfState(ER_VALIDATOR)
+    .accountsStrict({
+      bufferGameplayVrfState: gameplayDelegate.buffer,
+      delegationRecordGameplayVrfState: gameplayDelegate.delegationRecord,
+      delegationMetadataGameplayVrfState: gameplayDelegate.delegationMetadata,
+      gameplayVrfState: p.gameplayVrfStatePda,
+      gameSession: p.sessionPda,
+      player: p.sessionSigner.publicKey,
+      ownerProgram: programs.gameplayState.programId,
+      delegationProgram: PROGRAM_IDS.delegation,
+      systemProgram: SystemProgram.programId,
+    } as any)
+    .instruction();
+
+  await sendBaseTx(
+    "delegate-duel-vrf-states",
+    [delegateMapIx, delegateGameplayIx],
+    [p.sessionSigner],
+  );
+
+  await waitForErVisibility(p.mapVrfStatePda, "duel_map_vrf_state");
+  await waitForErVisibility(p.gameplayVrfStatePda, "duel_gameplay_vrf_state");
+
+  const undelegateMapIx = await programs.mapGenerator.methods
+    .undelegateMapVrfState()
+    .accounts({
+      mapVrfState: p.mapVrfStatePda,
+      session: p.sessionPda,
+      sessionSigner: p.sessionSigner.publicKey,
+    } as any)
+    .instruction();
+
+  const undelegateGameplayIx = await programs.gameplayState.methods
+    .undelegateGameplayVrfState()
+    .accounts({
+      gameplayVrfState: p.gameplayVrfStatePda,
+      gameSession: p.sessionPda,
+      sessionSigner: p.sessionSigner.publicKey,
+    } as any)
+    .instruction();
+
+  await sendErTx(
+    "undelegate-duel-vrf-states",
+    [undelegateMapIx, undelegateGameplayIx],
+    [p.sessionSigner],
+  );
+
+  await waitForBaseOwner(
+    p.mapVrfStatePda,
+    PROGRAM_IDS.mapGenerator,
+    "duel_map_vrf_state",
+  );
+  await waitForBaseOwner(
+    p.gameplayVrfStatePda,
+    PROGRAM_IDS.gameplayState,
+    "duel_gameplay_vrf_state",
+  );
+}
+
+async function createProfileAndStartDuelSession(
+  p: PlayerContext,
+): Promise<void> {
   const name = `duel-${p.user.publicKey.toBase58().slice(0, 6)}`;
   await programs.playerProfile.methods
     .initializeProfile(name)
@@ -222,7 +409,7 @@ async function testSetCompleted(p: PlayerContext): Promise<void> {
 
 async function settleDuelPayout(
   p: PlayerContext,
-  creatorWallet: PublicKey | null
+  creatorWallet: PublicKey | null,
 ): Promise<void> {
   await programs.gameplayState.methods
     .settleDuelPayout()
@@ -245,7 +432,10 @@ async function settleDuelPayout(
     .rpc();
 }
 
-async function resetDuelEntryAndEndSession(p: PlayerContext): Promise<void> {
+async function resetDuelEntryAndEndSession(
+  p: PlayerContext,
+  options?: { includeSessionVrfAccounts?: boolean },
+): Promise<void> {
   const resetIx = await programs.gameplayState.methods
     .resetDuelEntry()
     .accountsPartial({
@@ -274,9 +464,11 @@ async function resetDuelEntryAndEndSession(p: PlayerContext): Promise<void> {
       sessionSigner: p.sessionSigner.publicKey,
       sessionManagerAuthority: sessionManagerAuthorityPda,
       inventory: p.inventoryPda,
-      mapVrfState: null,
+      mapVrfState: options?.includeSessionVrfAccounts ? p.mapVrfStatePda : null,
       poiVrfState: null,
-      gameplayVrfState: null,
+      gameplayVrfState: options?.includeSessionVrfAccounts
+        ? p.gameplayVrfStatePda
+        : null,
       gauntletEchoes: null,
       playerInventoryProgram: PROGRAM_IDS.playerInventory,
       gameplayStateProgram: PROGRAM_IDS.gameplayState,
@@ -286,21 +478,40 @@ async function resetDuelEntryAndEndSession(p: PlayerContext): Promise<void> {
     } as any)
     .instruction();
 
-  await sendBaseTx("reset-duel-entry+end-session", [resetIx, endIx], [p.sessionSigner, p.user]);
+  await sendBaseTx(
+    "reset-duel-entry+end-session",
+    [resetIx, endIx],
+    [p.sessionSigner, p.user],
+  );
 
   // Verify session closed
-  const sessionInfo = await connection.getAccountInfo(p.sessionPda, "confirmed");
+  const sessionInfo = await connection.getAccountInfo(
+    p.sessionPda,
+    "confirmed",
+  );
   expect(sessionInfo).to.be.null;
+
+  if (options?.includeSessionVrfAccounts) {
+    const [mapVrfInfo, gameplayVrfInfo] = await Promise.all([
+      connection.getAccountInfo(p.mapVrfStatePda, "confirmed"),
+      connection.getAccountInfo(p.gameplayVrfStatePda, "confirmed"),
+    ]);
+    expect(mapVrfInfo).to.be.null;
+    expect(gameplayVrfInfo).to.be.null;
+  }
 }
 
 async function fetchGameState(gameStatePda: PublicKey): Promise<any> {
-  const accountInfo = await connection.getAccountInfo(gameStatePda, "confirmed");
+  const accountInfo = await connection.getAccountInfo(
+    gameStatePda,
+    "confirmed",
+  );
   if (!accountInfo) {
     throw new Error("GameState account missing");
   }
   return (programs.gameplayState as any).coder.accounts.decode(
     "gameState",
-    accountInfo.data
+    accountInfo.data,
   );
 }
 
@@ -311,6 +522,7 @@ before(async function () {
   admin = loadWalletKeypair();
   const wallet = walletFromKeypair(admin);
   connection = new Connection(RPC_URL, "confirmed");
+  erConnection = new Connection(ER_RPC_URL, "confirmed");
   provider = createProvider(RPC_URL, wallet);
   anchor.setProvider(provider);
   programs = loadAllPrograms(provider);
@@ -375,37 +587,74 @@ describe("Duel Matching E2E", function () {
           .rpc();
       } catch (e: any) {
         const msg = String(e);
-        if (!msg.includes("already in use") && !msg.includes("AccountOwnedByWrongProgram")) throw e;
+        if (
+          !msg.includes("already in use") &&
+          !msg.includes("AccountOwnedByWrongProgram")
+        )
+          throw e;
       }
 
       // Pit Draft
       try {
-        const [pitDraftQueuePda] = PublicKey.findProgramAddressSync([Buffer.from("pit_draft_queue")], PROGRAM_IDS.gameplayState);
-        const [pitDraftVaultPda] = PublicKey.findProgramAddressSync([Buffer.from("pit_draft_vault")], PROGRAM_IDS.gameplayState);
-        await programs.gameplayState.methods.initializePitDraft()
-          .accounts({ pitDraftQueue: pitDraftQueuePda, pitDraftVault: pitDraftVaultPda, admin: admin.publicKey, systemProgram: SystemProgram.programId } as any)
+        const [pitDraftQueuePda] = PublicKey.findProgramAddressSync(
+          [Buffer.from("pit_draft_queue")],
+          PROGRAM_IDS.gameplayState,
+        );
+        const [pitDraftVaultPda] = PublicKey.findProgramAddressSync(
+          [Buffer.from("pit_draft_vault")],
+          PROGRAM_IDS.gameplayState,
+        );
+        await programs.gameplayState.methods
+          .initializePitDraft()
+          .accounts({
+            pitDraftQueue: pitDraftQueuePda,
+            pitDraftVault: pitDraftVaultPda,
+            admin: admin.publicKey,
+            systemProgram: SystemProgram.programId,
+          } as any)
           .rpc();
-      } catch (e: any) { if (!String(e).includes("already in use")) throw e; }
+      } catch (e: any) {
+        if (!String(e).includes("already in use")) throw e;
+      }
 
       // Gauntlet (creates gauntletPoolVault needed by enter_duel)
       try {
-        const [gauntletConfigPda] = PublicKey.findProgramAddressSync([Buffer.from("gauntlet_config")], PROGRAM_IDS.gameplayState);
-        const weekPdas = [1,2,3,4,5].map(w => PublicKey.findProgramAddressSync([Buffer.from("gauntlet_week_pool"), Buffer.from([w])], PROGRAM_IDS.gameplayState)[0]);
-        await programs.gameplayState.methods.initializeGauntlet()
+        const [gauntletConfigPda] = PublicKey.findProgramAddressSync(
+          [Buffer.from("gauntlet_config")],
+          PROGRAM_IDS.gameplayState,
+        );
+        const weekPdas = [1, 2, 3, 4, 5].map(
+          (w) =>
+            PublicKey.findProgramAddressSync(
+              [Buffer.from("gauntlet_week_pool"), Buffer.from([w])],
+              PROGRAM_IDS.gameplayState,
+            )[0],
+        );
+        await programs.gameplayState.methods
+          .initializeGauntlet()
           .accounts({
-            gauntletConfig: gauntletConfigPda, gauntletPoolVault: gauntletPoolVaultPda,
-            gauntletWeek1: weekPdas[0], gauntletWeek2: weekPdas[1], gauntletWeek3: weekPdas[2],
-            gauntletWeek4: weekPdas[3], gauntletWeek5: weekPdas[4],
-            admin: admin.publicKey, systemProgram: SystemProgram.programId,
+            gauntletConfig: gauntletConfigPda,
+            gauntletPoolVault: gauntletPoolVaultPda,
+            gauntletWeek1: weekPdas[0],
+            gauntletWeek2: weekPdas[1],
+            gauntletWeek3: weekPdas[2],
+            gauntletWeek4: weekPdas[3],
+            gauntletWeek5: weekPdas[4],
+            admin: admin.publicKey,
+            systemProgram: SystemProgram.programId,
           } as any)
-          .preInstructions([ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 })])
+          .preInstructions([
+            ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+          ])
           .rpc();
-      } catch (e: any) { if (!String(e).includes("already in use")) throw e; }
+      } catch (e: any) {
+        if (!String(e).includes("already in use")) throw e;
+      }
 
       // Verify
-      const queue = await (programs.gameplayState.account as any).duelOpenQueue.fetch(
-        duelOpenQueuePda
-      );
+      const queue = await (
+        programs.gameplayState.account as any
+      ).duelOpenQueue.fetch(duelOpenQueuePda);
       expect(queue.initialized).to.be.true;
     });
   });
@@ -424,9 +673,9 @@ describe("Duel Matching E2E", function () {
       playerA = await setupPlayer("playerA");
 
       // Record queue length before test
-      const queue = await (programs.gameplayState.account as any).duelOpenQueue.fetch(
-        duelOpenQueuePda
-      );
+      const queue = await (
+        programs.gameplayState.account as any
+      ).duelOpenQueue.fetch(duelOpenQueuePda);
       queueLengthBefore = queue.entries.length;
     });
 
@@ -447,10 +696,12 @@ describe("Duel Matching E2E", function () {
       expect(vaultAfter - vaultBefore).to.equal(DUEL_ENTRY_LAMPORTS);
 
       // Verify duel entry created
-      const duelEntry = await (programs.gameplayState.account as any).duelEntry.fetch(
-        playerA.duelEntryPda
+      const duelEntry = await (
+        programs.gameplayState.account as any
+      ).duelEntry.fetch(playerA.duelEntryPda);
+      expect(duelEntry.player.toBase58()).to.equal(
+        playerA.user.publicKey.toBase58(),
       );
-      expect(duelEntry.player.toBase58()).to.equal(playerA.user.publicKey.toBase58());
       expect(Number(duelEntry.entryLamports)).to.equal(DUEL_ENTRY_LAMPORTS);
       expect(duelEntry.finalized).to.be.false;
       expect(duelEntry.settled).to.be.false;
@@ -464,11 +715,14 @@ describe("Duel Matching E2E", function () {
       // On a validator with pre-existing queue entries from other players,
       // player A might get matched — both outcomes are valid.
       const gs = await fetchGameState(playerA.gameStatePda);
-      const duelEntry = await (programs.gameplayState.account as any).duelEntry.fetch(
-        playerA.duelEntryPda
-      );
+      const duelEntry = await (
+        programs.gameplayState.account as any
+      ).duelEntry.fetch(playerA.duelEntryPda);
       // On a clean validator, no match available => duel_map_seed = 0 (creator path).
-      expect(Number(gs.duelMapSeed)).to.equal(0, "creator path: seed should be 0");
+      expect(Number(gs.duelMapSeed)).to.equal(
+        0,
+        "creator path: seed should be 0",
+      );
       expect(duelEntry.matchedCreator).to.be.null;
     });
 
@@ -482,29 +736,32 @@ describe("Duel Matching E2E", function () {
     it("settle_duel_payout pushes to queue", async () => {
       await settleDuelPayout(playerA, null);
 
-      const duelEntry = await (programs.gameplayState.account as any).duelEntry.fetch(
-        playerA.duelEntryPda
-      );
+      const duelEntry = await (
+        programs.gameplayState.account as any
+      ).duelEntry.fetch(playerA.duelEntryPda);
       expect(duelEntry.settled).to.be.true;
       expect(duelEntry.finalized).to.be.true;
     });
 
     it("verifies DuelOpenQueue has 1 new entry with player A", async () => {
-      const queue = await (programs.gameplayState.account as any).duelOpenQueue.fetch(
-        duelOpenQueuePda
-      );
+      const queue = await (
+        programs.gameplayState.account as any
+      ).duelOpenQueue.fetch(duelOpenQueuePda);
       // If player A was matched (consumed an entry) and then settled (pushed new entry),
       // the net change might be 0. If unmatched, it's +1.
       // Just verify player A's entry is in the queue.
       const playerAEntry = queue.entries.find(
-        (e: any) => e.player.toBase58() === playerA.user.publicKey.toBase58()
+        (e: any) => e.player.toBase58() === playerA.user.publicKey.toBase58(),
       );
       expect(playerAEntry).to.not.be.undefined;
       expect(Number(playerAEntry.entryLamports)).to.equal(DUEL_ENTRY_LAMPORTS);
     });
 
     it("ends session for player A", async () => {
-      await resetDuelEntryAndEndSession(playerA);
+      await initDelegateAndUndelegateDuelVrfStates(playerA);
+      await resetDuelEntryAndEndSession(playerA, {
+        includeSessionVrfAccounts: true,
+      });
     });
   });
 
@@ -524,13 +781,13 @@ describe("Duel Matching E2E", function () {
       playerAWallet = playerA.user.publicKey;
 
       // Record queue state and vault balance
-      const queue = await (programs.gameplayState.account as any).duelOpenQueue.fetch(
-        duelOpenQueuePda
-      );
+      const queue = await (
+        programs.gameplayState.account as any
+      ).duelOpenQueue.fetch(duelOpenQueuePda);
       queueLengthBefore = queue.entries.length;
       // Player A's entry should be in the queue from the previous section
       const hasPlayerA = queue.entries.some(
-        (e: any) => e.player.toBase58() === playerA.user.publicKey.toBase58()
+        (e: any) => e.player.toBase58() === playerA.user.publicKey.toBase58(),
       );
       expect(hasPlayerA).to.be.true;
 
@@ -549,9 +806,9 @@ describe("Duel Matching E2E", function () {
     it("enters duel (pays entry fee)", async () => {
       await enterDuel(playerB);
 
-      const duelEntry = await (programs.gameplayState.account as any).duelEntry.fetch(
-        playerB.duelEntryPda
-      );
+      const duelEntry = await (
+        programs.gameplayState.account as any
+      ).duelEntry.fetch(playerB.duelEntryPda);
       expect(Number(duelEntry.entryLamports)).to.equal(DUEL_ENTRY_LAMPORTS);
     });
 
@@ -564,19 +821,19 @@ describe("Duel Matching E2E", function () {
     });
 
     it("verifies DuelOpenQueue lost one entry", async () => {
-      const queue = await (programs.gameplayState.account as any).duelOpenQueue.fetch(
-        duelOpenQueuePda
-      );
+      const queue = await (
+        programs.gameplayState.account as any
+      ).duelOpenQueue.fetch(duelOpenQueuePda);
       expect(queue.entries.length).to.equal(queueLengthBefore - 1);
     });
 
     it("verifies duel_entry.matched_creator is set", async () => {
-      const duelEntry = await (programs.gameplayState.account as any).duelEntry.fetch(
-        playerB.duelEntryPda
-      );
+      const duelEntry = await (
+        programs.gameplayState.account as any
+      ).duelEntry.fetch(playerB.duelEntryPda);
       expect(duelEntry.matchedCreator).to.not.be.null;
       expect(duelEntry.matchedCreator.player.toBase58()).to.equal(
-        playerAWallet.toBase58()
+        playerAWallet.toBase58(),
       );
     });
 
@@ -593,9 +850,9 @@ describe("Duel Matching E2E", function () {
       // Pass creator wallet for potential payout
       await settleDuelPayout(playerB, playerAWallet);
 
-      const duelEntry = await (programs.gameplayState.account as any).duelEntry.fetch(
-        playerB.duelEntryPda
-      );
+      const duelEntry = await (
+        programs.gameplayState.account as any
+      ).duelEntry.fetch(playerB.duelEntryPda);
       expect(duelEntry.settled).to.be.true;
       expect(duelEntry.finalized).to.be.true;
 

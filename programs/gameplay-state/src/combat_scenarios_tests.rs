@@ -249,9 +249,6 @@ fn is_valid_status_id(extra: u8) -> bool {
     )
 }
 
-
-
-
 // -----------------------------------------------------------------------------
 // Spore Slime T1 outcome scenarios
 // -----------------------------------------------------------------------------
@@ -579,7 +576,6 @@ fn test_spore_slime_applies_chill_log() {
         0,
         0,
     );
-
 }
 
 #[test]
@@ -592,7 +588,6 @@ fn test_tunnel_rat_steals_gold_log() {
         0,
         10,
     );
-
 }
 
 #[test]
@@ -605,7 +600,6 @@ fn test_cave_bat_heals_log() {
         0,
         0,
     );
-
 }
 
 #[test]
@@ -618,7 +612,6 @@ fn test_rust_mite_applies_rust_log() {
         0,
         0,
     );
-
 }
 
 #[test]
@@ -631,7 +624,6 @@ fn test_shard_beetle_applies_shrapnel_log() {
         0,
         0,
     );
-
 }
 
 #[test]
@@ -644,7 +636,6 @@ fn test_tunnel_warden_removes_armor_log() {
         0,
         0,
     );
-
 }
 
 #[test]
@@ -657,7 +648,6 @@ fn test_burrow_ambusher_battle_start_damage_log() {
         0,
         0,
     );
-
 }
 
 #[test]
@@ -670,7 +660,6 @@ fn test_coin_slug_armor_from_gold_log() {
         0,
         30,
     );
-
 }
 
 #[test]
@@ -683,7 +672,6 @@ fn test_blood_mosquito_applies_bleed_log() {
         0,
         0,
     );
-
 }
 
 #[test]
@@ -715,7 +703,6 @@ fn test_baked_tool_stats_do_not_emit_battle_start_logs() {
         0,
         0,
     );
-
 }
 
 #[test]
@@ -728,7 +715,6 @@ fn test_bleed_status_damage_carries_bleed_status_id() {
         1,
         0,
     );
-
 }
 
 #[test]
@@ -890,7 +876,6 @@ fn test_powder_keg_baron_countdown_hits_both_sides() {
         Week::Two,
         0,
     );
-
 }
 
 #[test]
@@ -904,7 +889,6 @@ fn test_crystal_mimic_reflects_first_chill_application() {
         Week::Two,
         0,
     );
-
 }
 
 #[test]

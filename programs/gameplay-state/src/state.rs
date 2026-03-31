@@ -188,6 +188,9 @@ pub struct GameState {
 
     /// Actual count of enemies on the map.
     pub enemy_count: u8,
+
+    /// Total field enemies defeated this run (persists across reloads).
+    pub enemies_defeated: u16,
 }
 
 impl GameState {
@@ -212,7 +215,8 @@ impl GameState {
     //   enemies: 4 (vec prefix) + 48 × 5 (EnemyInstance) = 244
     //   enemy_count: 1
     // Total enemies: 245
-    pub const INIT_SPACE: usize = 119 + 59 + 8 + 245;
+    // enemies_defeated: 2
+    pub const INIT_SPACE: usize = 119 + 59 + 8 + 245 + 2;
 }
 
 /// A spawned enemy instance on the map
@@ -286,7 +290,6 @@ pub struct PitDraftVault {
     /// PDA bump seed.
     pub bump: u8,
 }
-
 
 /// Terminal outcome for a duel run participant.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]

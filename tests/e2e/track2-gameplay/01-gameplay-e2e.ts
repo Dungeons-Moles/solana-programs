@@ -92,6 +92,7 @@ let mapPoisPda: PublicKey;
 let mapVrfStatePda: PublicKey;
 let poiVrfStatePda: PublicKey;
 let gameplayVrfStatePda: PublicKey;
+let pitDraftGameplayVrfStatePda: PublicKey;
 let sessionDiscoveryPda: PublicKey;
 let gameplayAuthorityPda: PublicKey;
 let sessionManagerAuthorityPda: PublicKey;
@@ -526,6 +527,9 @@ describe("Track 2 E2E: Create profile + start session", function () {
     expect((programs.poiSystem.methods as any).fulfillPoiRng).to.equal(undefined);
 
     expect(typeof (programs.gameplayState.methods as any).initGameplayVrfState).to.equal("function");
+    expect(typeof (programs.gameplayState.methods as any).initPitDraftVrfState).to.equal("function");
+    expect(typeof (programs.gameplayState.methods as any).delegatePitDraftVrfState).to.equal("function");
+    expect(typeof (programs.gameplayState.methods as any).undelegatePitDraftVrfState).to.equal("function");
     expect(typeof (programs.gameplayState.methods as any).requestGameplayVrf).to.equal("function");
     expect((programs.gameplayState.methods as any).requestGameplayRng).to.equal(undefined);
     expect((programs.gameplayState.methods as any).fulfillGameplayRng).to.equal(undefined);
@@ -572,6 +576,25 @@ describe("Track 2 E2E: Create profile + start session", function () {
 
     expect(mapInfo?.owner.equals(PROGRAM_IDS.mapGenerator)).to.be.true;
     expect(poiInfo?.owner.equals(PROGRAM_IDS.poiSystem)).to.be.true;
+    expect(gameplayInfo?.owner.equals(PROGRAM_IDS.gameplayState)).to.be.true;
+  });
+
+  it("initializes pit draft VRF state PDA on base layer", async () => {
+    [pitDraftGameplayVrfStatePda] = getGameplayVrfStatePda(user.publicKey);
+
+    const gameplayIx = await programs.gameplayState.methods
+      .initPitDraftVrfState()
+      .accounts({
+        payer: sessionSigner.publicKey,
+        seedKey: user.publicKey,
+        vrfState: pitDraftGameplayVrfStatePda,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .instruction();
+
+    await sendDelegateTx("init-pit-draft-vrf-state", [gameplayIx]);
+
+    const gameplayInfo = await connection.getAccountInfo(pitDraftGameplayVrfStatePda, "confirmed");
     expect(gameplayInfo?.owner.equals(PROGRAM_IDS.gameplayState)).to.be.true;
   });
 
@@ -711,6 +734,33 @@ describe("Track 2 E2E: Delegate to ER", function () {
     await sendDelegateTx("delegate-generated-map", [ix]);
 
     const info = await connection.getAccountInfo(generatedMapPda, "confirmed");
+    expect(info!.owner.equals(DELEGATION_PROGRAM_ID)).to.be.true;
+  });
+
+  it("delegates pit draft VRF state", async () => {
+    const pitDraftVrfDelegate = deriveDelegateAccounts(
+      pitDraftGameplayVrfStatePda,
+      programs.gameplayState.programId
+    );
+
+    const ix = await programs.gameplayState.methods
+      .delegatePitDraftVrfState(ER_VALIDATOR)
+      .accountsStrict({
+        bufferGameplayVrfState: pitDraftVrfDelegate.buffer,
+        delegationRecordGameplayVrfState: pitDraftVrfDelegate.delegationRecord,
+        delegationMetadataGameplayVrfState: pitDraftVrfDelegate.delegationMetadata,
+        gameplayVrfState: pitDraftGameplayVrfStatePda,
+        seedKey: user.publicKey,
+        payer: sessionSigner.publicKey,
+        ownerProgram: programs.gameplayState.programId,
+        delegationProgram: DELEGATION_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .instruction();
+
+    await sendDelegateTx("delegate-pit-draft-vrf", [ix]);
+
+    const info = await connection.getAccountInfo(pitDraftGameplayVrfStatePda, "confirmed");
     expect(info!.owner.equals(DELEGATION_PROGRAM_ID)).to.be.true;
   });
 
@@ -946,6 +996,33 @@ describe("Track 2 E2E: Undelegate", function () {
 
     const info = await connection.getAccountInfo(generatedMapPda, "confirmed");
     expect(info!.owner.equals(PROGRAM_IDS.mapGenerator)).to.be.true;
+  });
+
+  it("undelegates pit draft VRF state", async () => {
+    await waitForErOwner(
+      pitDraftGameplayVrfStatePda,
+      DELEGATION_PROGRAM_ID,
+      "pit_draft_gameplay_vrf_state"
+    );
+
+    const ix = await programs.gameplayState.methods
+      .undelegatePitDraftVrfState()
+      .accounts({
+        gameplayVrfState: pitDraftGameplayVrfStatePda,
+        seedKey: user.publicKey,
+        payer: sessionSigner.publicKey,
+      } as any)
+      .instruction();
+
+    await sendErSessionSignerTx("undelegate-pit-draft-vrf", [ix]);
+    await waitForBaseOwner(
+      pitDraftGameplayVrfStatePda,
+      PROGRAM_IDS.gameplayState,
+      "pit_draft_gameplay_vrf_state"
+    );
+
+    const info = await connection.getAccountInfo(pitDraftGameplayVrfStatePda, "confirmed");
+    expect(info!.owner.equals(PROGRAM_IDS.gameplayState)).to.be.true;
   });
 
   it("undelegates inventory", async () => {

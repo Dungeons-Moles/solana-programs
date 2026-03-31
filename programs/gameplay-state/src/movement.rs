@@ -91,8 +91,7 @@ pub fn get_duel_boss_for_combat_vrf(
 ) -> Result<combat_system::state::CombatantInput> {
     let boss_week = to_boss_week(week)?;
     let (randomness, nonce) = vrf;
-    let mut rng =
-        vrf_rng::GameRng::from_vrf(randomness, nonce, vrf_rng::domains::DUEL_BOSS);
+    let mut rng = vrf_rng::GameRng::from_vrf(randomness, nonce, vrf_rng::domains::DUEL_BOSS);
     let boss = boss_system::select_duel_week_boss_vrf(&mut rng, boss_week)
         .ok_or(GameplayStateError::InvalidWeek)?;
     let scaled = boss_system::scale_boss(boss, 20, boss_week);
@@ -100,14 +99,10 @@ pub fn get_duel_boss_for_combat_vrf(
 }
 
 /// VRF-based duel boss ID lookup.
-pub fn get_duel_boss_id_vrf(
-    vrf: (&[u8; 32], u64),
-    week: u8,
-) -> Result<[u8; 12]> {
+pub fn get_duel_boss_id_vrf(vrf: (&[u8; 32], u64), week: u8) -> Result<[u8; 12]> {
     let boss_week = to_boss_week(week)?;
     let (randomness, nonce) = vrf;
-    let mut rng =
-        vrf_rng::GameRng::from_vrf(randomness, nonce, vrf_rng::domains::DUEL_BOSS);
+    let mut rng = vrf_rng::GameRng::from_vrf(randomness, nonce, vrf_rng::domains::DUEL_BOSS);
     let boss = boss_system::select_duel_week_boss_vrf(&mut rng, boss_week)
         .ok_or(GameplayStateError::InvalidWeek)?;
     Ok(boss.id)
@@ -315,6 +310,7 @@ mod tests {
                 },
             ],
             enemy_count: 2,
+            enemies_defeated: 0,
         };
 
         let visible = compute_visible_enemies(&game_state, &discovered_tiles, 50);

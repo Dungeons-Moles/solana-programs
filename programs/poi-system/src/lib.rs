@@ -280,21 +280,19 @@ fn refresh_discovered_enemies_authorized_cpi<'info>(
     poi_authority_bump: u8,
 ) -> Result<()> {
     let seeds = &[POI_AUTHORITY_SEED, &[poi_authority_bump]];
-    gameplay_state::cpi::refresh_discovered_enemies_authorized(
-        CpiContext::new_with_signer(
-            gameplay_state_program.clone(),
-            gameplay_state::cpi::accounts::RefreshDiscoveredEnemiesAuthorized {
-                poi_authority: poi_authority.clone(),
-                session: session.clone(),
-                generated_map: generated_map.clone(),
-                game_state: game_state.clone(),
-                gameplay_authority: gameplay_authority.clone(),
-                map_generator_program: map_generator_program.clone(),
-                session_discovery: session_discovery.cloned(),
-            },
-            &[&seeds[..]],
-        ),
-    )?;
+    gameplay_state::cpi::refresh_discovered_enemies_authorized(CpiContext::new_with_signer(
+        gameplay_state_program.clone(),
+        gameplay_state::cpi::accounts::RefreshDiscoveredEnemiesAuthorized {
+            poi_authority: poi_authority.clone(),
+            session: session.clone(),
+            generated_map: generated_map.clone(),
+            game_state: game_state.clone(),
+            gameplay_authority: gameplay_authority.clone(),
+            map_generator_program: map_generator_program.clone(),
+            session_discovery: session_discovery.cloned(),
+        },
+        &[&seeds[..]],
+    ))?;
     Ok(())
 }
 
@@ -813,7 +811,10 @@ pub mod poi_system {
             PoiSystemError::InvalidSessionOwner
         );
         require!((1..=4).contains(&act), PoiSystemError::InvalidAct);
-        require!((1..=40).contains(&campaign_level), PoiSystemError::InvalidCampaignLevel);
+        require!(
+            (1..=40).contains(&campaign_level),
+            PoiSystemError::InvalidCampaignLevel
+        );
 
         let seed = ctx.accounts.map_config.seeds[(campaign_level - 1) as usize];
         let generated_map = read_generated_map(&ctx.accounts.generated_map)?;
@@ -1131,8 +1132,10 @@ pub mod poi_system {
                 &ctx.accounts.map_generator_program,
             ) {
                 mark_discovered_poi_used_cpi(
-                    &sd.to_account_info(), &sess.to_account_info(),
-                    &ctx.accounts.player.to_account_info(), &mgp.to_account_info(),
+                    &sd.to_account_info(),
+                    &sess.to_account_info(),
+                    &ctx.accounts.player.to_account_info(),
+                    &mgp.to_account_info(),
                     poi_index,
                 )?;
             }
@@ -1180,8 +1183,14 @@ pub mod poi_system {
             &[&seeds[..]],
         ))?;
 
-        if let (Some(ref sess), Some(ref mgp)) = (&ctx.accounts.session, &ctx.accounts.map_generator_program) {
-            let sd_info = ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info());
+        if let (Some(ref sess), Some(ref mgp)) =
+            (&ctx.accounts.session, &ctx.accounts.map_generator_program)
+        {
+            let sd_info = ctx
+                .accounts
+                .session_discovery
+                .as_ref()
+                .map(|a| a.to_account_info());
             reveal_radius_cpi(
                 &ctx.accounts.generated_map.to_account_info(),
                 &sess.to_account_info(),
@@ -1260,9 +1269,7 @@ pub mod poi_system {
 
         let pool = &ctx.accounts.game_session.active_item_pool;
 
-        let items = offers::generate_pool_filtered_cache_offers(
-            poi_type, act, w1, w2, seed, pool,
-        );
+        let items = offers::generate_pool_filtered_cache_offers(poi_type, act, w1, w2, seed, pool);
 
         map_pois.cache_offers.push(state::CacheOffer {
             poi_index,
@@ -1369,8 +1376,10 @@ pub mod poi_system {
                 &ctx.accounts.map_generator_program,
             ) {
                 mark_discovered_poi_used_cpi(
-                    &sd.to_account_info(), &sess.to_account_info(),
-                    &ctx.accounts.player.to_account_info(), &mgp.to_account_info(),
+                    &sd.to_account_info(),
+                    &sess.to_account_info(),
+                    &ctx.accounts.player.to_account_info(),
+                    &mgp.to_account_info(),
                     poi_index,
                 )?;
             }
@@ -1548,8 +1557,10 @@ pub mod poi_system {
             &ctx.accounts.map_generator_program,
         ) {
             mark_discovered_poi_used_cpi(
-                &sd.to_account_info(), &sess.to_account_info(),
-                &ctx.accounts.player.to_account_info(), &mgp.to_account_info(),
+                &sd.to_account_info(),
+                &sess.to_account_info(),
+                &ctx.accounts.player.to_account_info(),
+                &mgp.to_account_info(),
                 poi_index,
             )?;
         }
@@ -2137,7 +2148,11 @@ pub mod poi_system {
             result.to_x,
             result.to_y,
             visibility_radius,
-            ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info()).as_ref(),
+            ctx.accounts
+                .session_discovery
+                .as_ref()
+                .map(|a| a.to_account_info())
+                .as_ref(),
         )?;
         let newly_discovered = discover_visible_waypoints_in_map(
             &mut ctx.accounts.map_pois,
@@ -2171,7 +2186,11 @@ pub mod poi_system {
             &ctx.accounts.poi_authority.to_account_info(),
             &ctx.accounts.gameplay_authority.to_account_info(),
             &ctx.accounts.map_generator_program.to_account_info(),
-            ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info()).as_ref(),
+            ctx.accounts
+                .session_discovery
+                .as_ref()
+                .map(|a| a.to_account_info())
+                .as_ref(),
             ctx.bumps.poi_authority,
         )?;
 
@@ -2202,7 +2221,11 @@ pub mod poi_system {
 
         // Mark POI as used (one-time) in MapPois and SessionDiscovery
         map_pois.pois[poi_index as usize].used = true;
-        let sd_info = ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info());
+        let sd_info = ctx
+            .accounts
+            .session_discovery
+            .as_ref()
+            .map(|a| a.to_account_info());
         if let Some(ref sd) = sd_info {
             mark_discovered_poi_used_cpi(
                 sd,
@@ -2222,7 +2245,8 @@ pub mod poi_system {
             13,
             sd_info.as_ref(),
         )?;
-        let newly_discovered_wps = discover_visible_waypoints_in_map(map_pois, result.center_x, result.center_y, 13);
+        let newly_discovered_wps =
+            discover_visible_waypoints_in_map(map_pois, result.center_x, result.center_y, 13);
 
         // Record any waypoints discovered in the revealed area into SessionDiscovery
         if let Some(ref sd) = sd_info {
@@ -2257,10 +2281,7 @@ pub mod poi_system {
     }
 
     /// Generate and persist Seismic Scanner (L7) options from VRF-backed randomness.
-    pub fn generate_scanner_offer(
-        ctx: Context<GenerateScannerOffer>,
-        poi_index: u8,
-    ) -> Result<()> {
+    pub fn generate_scanner_offer(ctx: Context<GenerateScannerOffer>, poi_index: u8) -> Result<()> {
         let map_pois = &mut ctx.accounts.map_pois;
         let game_state = &ctx.accounts.game_state;
 
@@ -2271,7 +2292,10 @@ pub mod poi_system {
         require!(vrf_data.is_some(), PoiSystemError::VrfRequired);
 
         let (poi, _) = get_and_validate_poi(map_pois, game_state, poi_index, false)?;
-        require!(poi.poi_type == pois::L7_SEISMIC_SCANNER.id, PoiSystemError::InvalidInteraction);
+        require!(
+            poi.poi_type == pois::L7_SEISMIC_SCANNER.id,
+            PoiSystemError::InvalidInteraction
+        );
         require!(
             !map_pois
                 .scanner_offers
@@ -2290,7 +2314,8 @@ pub mod poi_system {
             rng.next_val()
         };
 
-        let offer = build_scanner_offer(poi_index, &map_pois.pois, &ctx.accounts.generated_map, seed);
+        let offer =
+            build_scanner_offer(poi_index, &map_pois.pois, &ctx.accounts.generated_map, seed);
         map_pois.scanner_offers.push(offer);
 
         // Dual-write scanner offer data to SessionDiscovery
@@ -2333,7 +2358,10 @@ pub mod poi_system {
         let (poi, _) = get_and_validate_poi(map_pois, game_state, poi_index, false)?;
         let scanner_x = poi.x;
         let scanner_y = poi.y;
-        require!(poi.poi_type == pois::L7_SEISMIC_SCANNER.id, PoiSystemError::InvalidInteraction);
+        require!(
+            poi.poi_type == pois::L7_SEISMIC_SCANNER.id,
+            PoiSystemError::InvalidInteraction
+        );
 
         let offer_pos = map_pois
             .scanner_offers
@@ -2379,7 +2407,11 @@ pub mod poi_system {
             let y = map_pois.pois[revealed_idx].y;
             let revealed_poi_type = map_pois.pois[revealed_idx].poi_type;
             map_pois.pois[revealed_idx].discovered = true;
-            let sd_info = ctx.accounts.session_discovery.as_ref().map(|a| a.to_account_info());
+            let sd_info = ctx
+                .accounts
+                .session_discovery
+                .as_ref()
+                .map(|a| a.to_account_info());
             reveal_radius_cpi(
                 &ctx.accounts.generated_map.to_account_info(),
                 &ctx.accounts.session.to_account_info(),
@@ -2419,7 +2451,8 @@ pub mod poi_system {
                     revealed_poi_type,
                     x,
                     y,
-                    u8::try_from(revealed_idx).map_err(|_| error!(PoiSystemError::InvalidPoiIndex))?,
+                    u8::try_from(revealed_idx)
+                        .map_err(|_| error!(PoiSystemError::InvalidPoiIndex))?,
                 )?;
             }
 
@@ -2434,7 +2467,6 @@ pub mod poi_system {
                 sd_info.as_ref(),
                 ctx.bumps.poi_authority,
             )?;
-
         }
 
         Ok(())
@@ -2550,7 +2582,7 @@ pub mod poi_system {
     pub fn request_poi_vrf(ctx: Context<RequestPoiVrf>) -> Result<()> {
         let vrf_state = &mut ctx.accounts.vrf_state;
         require!(
-            vrf_state.status != VrfStatus::Fulfilled,
+            vrf_state.status != VrfStatus::Fulfilled && vrf_state.status != VrfStatus::Consumed,
             PoiSystemError::VrfAlreadyFulfilled
         );
         vrf_state.session = ctx.accounts.session.key();
@@ -4016,9 +4048,15 @@ mod discriminator_tests {
 
     #[test]
     fn test_authorized_waypoint_visibility_radius_allows_spawn_day_and_night() {
-        assert!(is_valid_authorized_waypoint_visibility_radius(DAY_VISION_RADIUS));
-        assert!(is_valid_authorized_waypoint_visibility_radius(NIGHT_VISION_RADIUS));
-        assert!(is_valid_authorized_waypoint_visibility_radius(SPAWN_VISION_RADIUS));
+        assert!(is_valid_authorized_waypoint_visibility_radius(
+            DAY_VISION_RADIUS
+        ));
+        assert!(is_valid_authorized_waypoint_visibility_radius(
+            NIGHT_VISION_RADIUS
+        ));
+        assert!(is_valid_authorized_waypoint_visibility_radius(
+            SPAWN_VISION_RADIUS
+        ));
         assert!(!is_valid_authorized_waypoint_visibility_radius(1));
         assert!(!is_valid_authorized_waypoint_visibility_radius(13));
     }

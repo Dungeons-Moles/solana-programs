@@ -1681,8 +1681,10 @@ mod tests {
         assert_eq!(rarity_from_item_id(b"G-ST-03\0"), 0);
         // G-ST-08 (Stone Sigil) = Heroic (NN=08 was Mythic in old mapping)
         assert_eq!(rarity_from_item_id(b"G-ST-08\0"), 2);
-        // G-GR-08 (Citrine Shard) = Common (NN=08 was Mythic in old mapping)
-        assert_eq!(rarity_from_item_id(b"G-GR-08\0"), 0);
+        // G-GR-08 (Royal Bracer) = Mythic (after ID rearrangement)
+        assert_eq!(rarity_from_item_id(b"G-GR-08\0"), 3);
+        // G-GR-04 (Pyrite Shard) = Common (after ID rearrangement)
+        assert_eq!(rarity_from_item_id(b"G-GR-04\0"), 0);
         // G-RU-08 (Salvage Clamp) = Common (NN=08 was Mythic in old mapping)
         assert_eq!(rarity_from_item_id(b"G-RU-08\0"), 0);
         // T-GR-02 (Gemfinder Staff) = Heroic (NN=02 was Rare in old mapping)

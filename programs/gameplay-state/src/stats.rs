@@ -181,14 +181,14 @@ mod tests {
         let mut inventory = make_inventory();
         inventory.tool = Some(ItemInstance::new(*b"T-RU-01\0", Tier::I)); // Corrosive Pick (+1 ATK)
         inventory.gear[0] = Some(ItemInstance::new(*b"G-SC-02\0", Tier::I)); // Leather Gloves (+1 ATK, +1 DIG)
-        inventory.gear[1] = Some(ItemInstance::new(*b"G-FR-02\0", Tier::I)); // Frostguard Buckler (+8 ARM)
+        inventory.gear[1] = Some(ItemInstance::new(*b"G-FR-02\0", Tier::I)); // Rime Cloak (+3 ARM)
 
         let stats = calculate_stats(&inventory, 20, RunMode::Campaign);
 
         assert_eq!(stats.max_hp, 18);
         assert_eq!(stats.dig, BASE_DIG + 1);
         assert_eq!(stats.atk, 2);
-        assert_eq!(stats.arm, 8);
+        assert_eq!(stats.arm, 3);
         assert_eq!(stats.spd, 0);
     }
 

@@ -718,11 +718,11 @@ fn test_bleed_status_damage_carries_bleed_status_id() {
 }
 
 #[test]
-fn test_corrosive_pick_gloves_buckler_vs_blood_mosquito_regression() {
+fn test_corrosive_pick_gloves_cloak_vs_blood_mosquito_regression() {
     let mut inventory = make_inventory();
     inventory.tool = Some(ItemInstance::new(*b"T-RU-01\0", Tier::I)); // Corrosive Pick
     inventory.gear[0] = Some(ItemInstance::new(*b"G-SC-02\0", Tier::I)); // Leather Gloves
-    inventory.gear[1] = Some(ItemInstance::new(*b"G-FR-02\0", Tier::I)); // Frostguard Buckler
+    inventory.gear[1] = Some(ItemInstance::new(*b"G-FR-02\0", Tier::I)); // Rime Cloak
 
     let player_stats = calculate_stats(&inventory, 20, RunMode::Campaign);
     let all_player_effects = generate_annotated_combat_effects(&inventory);
@@ -730,7 +730,7 @@ fn test_corrosive_pick_gloves_buckler_vs_blood_mosquito_regression() {
     let player_input = build_player_combatant(15, &player_stats, &all_player_effects);
 
     assert_eq!(player_input.atk, 2);
-    assert_eq!(player_input.arm, 8);
+    assert_eq!(player_input.arm, 3);
 
     let enemy_input = get_enemy_combatant_input(ids::BLOOD_MOSQUITO, 1).expect("enemy input");
     let enemy_effects = preprocess_enemy_effects(ids::BLOOD_MOSQUITO, 0);
@@ -750,7 +750,7 @@ fn test_rime_pike_frost_lantern_buckler_vs_blood_mosquito_t2_finishes_at_21_hp()
     let mut inventory = make_inventory();
     inventory.tool = Some(ItemInstance::new(*b"T-FR-01\0", Tier::I)); // Rime Pike
     inventory.gear[0] = Some(ItemInstance::new(*b"G-FR-01\0", Tier::I)); // Frost Lantern
-    inventory.gear[1] = Some(ItemInstance::new(*b"G-FR-02\0", Tier::I)); // Frostguard Buckler
+    inventory.gear[1] = Some(ItemInstance::new(*b"G-FR-05\0", Tier::I)); // Frostguard Buckler (new ID)
 
     let player_stats = calculate_stats(&inventory, 1, RunMode::Campaign);
     let all_player_effects = generate_annotated_combat_effects(&inventory);

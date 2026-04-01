@@ -2105,6 +2105,55 @@ pub mod gameplay_state {
         Ok(())
     }
 
+    /// Skips all remaining phases in the current week, jumping directly to
+    /// boss_fight_ready state. The player forfeits all remaining moves and
+    /// receives no HP, gold, or other benefits for skipped phases.
+    ///
+    /// Does NOT resolve the boss fight — the frontend calls trigger_boss_fight
+    /// (or the duel/gauntlet equivalent) as a separate transaction so the
+    /// combat visualization can play before the outcome is applied.
+    ///
+    /// For Duel week 3 (no boss), marks the run as completed immediately.
+    ///
+    /// Signed by session signer (no wallet popup).
+    pub fn skip_to_eow(ctx: Context<SkipToEow>) -> Result<()> {
+        let game_state = &mut ctx.accounts.game_state;
+
+        require!(!game_state.is_dead, GameplayStateError::PlayerDead);
+        require!(!game_state.completed, GameplayStateError::RunCompleted);
+        require!(
+            !game_state.boss_fight_ready,
+            GameplayStateError::BossFightAlreadyTriggered
+        );
+
+        // Jump directly to Night3 with 0 moves remaining
+        game_state.phase = Phase::Night3;
+        game_state.moves_remaining = 0;
+
+        emit!(PhaseAdvanced {
+            player: game_state.player,
+            new_phase: Phase::Night3,
+            new_week: game_state.week,
+            moves_remaining: 0,
+        });
+
+        // Duel final week has no boss — mark completed immediately.
+        if game_state.run_mode == RunMode::Duel
+            && game_state.week >= game_state.max_weeks
+        {
+            game_state.completed = true;
+        } else {
+            game_state.boss_fight_ready = true;
+
+            emit!(BossFightReady {
+                player: game_state.player,
+                week: game_state.week,
+            });
+        }
+
+        Ok(())
+    }
+
     /// Adds an HP bonus when equipping +HP gear, authorized by player-inventory.
     ///
     /// This instruction can only be called via CPI from player-inventory using
@@ -5878,6 +5927,20 @@ pub struct TriggerBossFight<'info> {
 
     /// Optional GauntletEchoes for gauntlet echo resolution.
     pub gauntlet_echoes: Option<Account<'info, GauntletEchoes>>,
+
+    pub player: Signer<'info>,
+}
+
+/// Lightweight context for skipping to end of week.
+/// Only needs game_state (mut) + session signer — boss resolution is deferred
+/// to a separate trigger_boss_fight transaction.
+#[derive(Accounts)]
+pub struct SkipToEow<'info> {
+    #[account(
+        mut,
+        constraint = game_state.session_signer == player.key() @ GameplayStateError::Unauthorized,
+    )]
+    pub game_state: Box<Account<'info, GameState>>,
 
     pub player: Signer<'info>,
 }

@@ -953,7 +953,7 @@ mod tests {
     #[test]
     fn test_full_map_generation_discovery_sync() {
         let mut map = create_test_map();
-        let success = crate::maze::generate_map(&mut map, 12345, 1);
+        let success = crate::maze::generate_map(&mut map, 12345, 1, false);
         assert!(success);
 
         map.clear_discovery();
@@ -997,7 +997,7 @@ mod tests {
     #[test]
     fn test_incremental_reveal_consistency() {
         let mut map = create_test_map();
-        let success = crate::maze::generate_map(&mut map, 99999, 5);
+        let success = crate::maze::generate_map(&mut map, 99999, 5, false);
         assert!(success);
         map.clear_discovery();
 

@@ -142,11 +142,11 @@ pub static SHARD_COLOSSUS_TRAITS: &[BossTrait] = &[
 // Week 2 Biome A Boss Traits
 // ============================================================================
 
-/// Drill Sergeant: +1 ATK +1 SPD/turn, +2 ARM/2 turns
+/// Drill Sergeant: +1 ATK +1 SPD/turn (max +4 each), +2 ARM/2 turns
 pub static DRILL_SERGEANT_TRAITS: &[BossTrait] = &[
-    // Rev Up: +1 ATK at Turn Start
+    // Rev Up: +1 ATK at Turn Start (capped at +4 in combat-system)
     BossTrait::new(TriggerType::TurnStart, EffectType::GainAtk, 1),
-    // Rev Up: +1 SPD at Turn Start
+    // Rev Up: +1 SPD at Turn Start (capped at +4 in combat-system)
     BossTrait::new(TriggerType::TurnStart, EffectType::GainSpd, 1),
     // Formation: +1 ARM every 2 turns
     BossTrait::new(TriggerType::EveryOtherTurn, EffectType::GainArmor, 1),

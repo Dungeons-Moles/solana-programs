@@ -74,7 +74,7 @@ pub mod map_generator {
         generated_map.bump = ctx.bumps.generated_map;
 
         // Generate the maze with biome-weighted enemy spawning
-        let success = maze::generate_map(generated_map, seed, campaign_level);
+        let success = maze::generate_map(generated_map, seed, campaign_level, false);
         require!(success, MapGeneratorError::MapGenerationFailed);
         generated_map.clear_discovery();
         let spawn_x = generated_map.spawn_x;
@@ -100,7 +100,7 @@ pub mod map_generator {
         generated_map.session = ctx.accounts.session.key();
         generated_map.bump = ctx.bumps.generated_map;
 
-        let success = maze::generate_map(generated_map, seed, campaign_level);
+        let success = maze::generate_map(generated_map, seed, campaign_level, false);
         require!(success, MapGeneratorError::MapGenerationFailed);
         generated_map.clear_discovery();
         let spawn_x = generated_map.spawn_x;
@@ -144,7 +144,7 @@ pub mod map_generator {
 
         let generated_map = &mut ctx.accounts.generated_map;
         require_generated_map_uninitialized(generated_map)?;
-        let success = maze::generate_map(generated_map, seed, campaign_level);
+        let success = maze::generate_map(generated_map, seed, campaign_level, false);
         require!(success, MapGeneratorError::MapGenerationFailed);
         generated_map.clear_discovery();
         let spawn_x = generated_map.spawn_x;
@@ -179,7 +179,7 @@ pub mod map_generator {
 
         let generated_map = &mut ctx.accounts.generated_map;
         require_generated_map_uninitialized(generated_map)?;
-        let success = maze::generate_map(generated_map, seed, campaign_level);
+        let success = maze::generate_map(generated_map, seed, campaign_level, false);
         require!(success, MapGeneratorError::MapGenerationFailed);
         generated_map.clear_discovery();
         let spawn_x = generated_map.spawn_x;
@@ -214,7 +214,7 @@ pub mod map_generator {
         let seed = ctx.accounts.map_config.seeds[(campaign_level - 1) as usize];
         let generated_map = &mut ctx.accounts.generated_map;
         require_generated_map_uninitialized(generated_map)?;
-        let success = maze::generate_map(generated_map, seed, campaign_level);
+        let success = maze::generate_map(generated_map, seed, campaign_level, false);
         require!(success, MapGeneratorError::MapGenerationFailed);
         generated_map.clear_discovery();
         let spawn_x = generated_map.spawn_x;
@@ -957,7 +957,7 @@ pub mod map_generator {
 
         let generated_map = &mut ctx.accounts.generated_map;
         require_generated_map_uninitialized(generated_map)?;
-        let success = maze::generate_map(generated_map, vrf_seed, campaign_level);
+        let success = maze::generate_map(generated_map, vrf_seed, campaign_level, true);
         require!(success, MapGeneratorError::MapGenerationFailed);
         generated_map.clear_discovery();
         let spawn_x = generated_map.spawn_x;

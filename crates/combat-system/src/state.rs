@@ -156,6 +156,10 @@ pub enum TriggerType {
     FirstTimeExposed,
     /// Triggers once when owner first gains Shrapnel this battle
     FirstTimeGainShrapnel,
+    /// Triggers when owner loses at least `threshold` Armor in a single turn
+    ArmorLostAtLeast {
+        threshold: u8,
+    },
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace)]
@@ -408,6 +412,7 @@ impl Combatant {
             attack_source: self.attack_source,
             attack_base_value: self.attack_base_value,
             atk_contributions: self.atk_contributions.clone(),
+            arm_at_turn_start: 0,
         }
     }
 
@@ -464,6 +469,9 @@ pub(crate) struct CombatState {
     pub player_temporary_exposed: bool,
     pub enemy_temporary_exposed: bool,
     pub enemy_boss_id: Option<[u8; 12]>,
+    /// ARM at start of turn for tracking armor loss (Flaking Plating trigger)
+    pub player_arm_at_turn_start: i16,
+    pub enemy_arm_at_turn_start: i16,
 }
 
 #[cfg(test)]

@@ -96,17 +96,17 @@ const POI_MIN_SPACING: u8 = 10;
 
 // Baseline POI counts per act [Act1, Act2, Act3, Act4].
 // Higher acts = fewer POIs (harder scarcity).
-const BASELINE_L2_SUPPLY_CACHE: [u8; 4] = [16, 14, 14, 10];
-const BASELINE_L3_TOOL_CRATE: [u8; 4] = [5, 4, 4, 2];
-const BASELINE_L4_TOOL_OIL: [u8; 4] = [5, 4, 4, 3];
+const BASELINE_L2_SUPPLY_CACHE: [u8; 4] = [20, 15, 16, 10];
+const BASELINE_L3_TOOL_CRATE: [u8; 4] = [3, 3, 2, 2];
+const BASELINE_L4_TOOL_OIL: [u8; 4] = [3, 3, 2, 2];
 const BASELINE_L5_REST_ALCOVE: [u8; 4] = [6, 5, 5, 4];
 const BASELINE_L6_SURVEY_BEACON: [u8; 4] = [4, 4, 4, 3];
 const BASELINE_L7_SEISMIC_SCANNER: [u8; 4] = [3, 3, 3, 2];
 const BASELINE_L8_RAIL_WAYPOINT: [u8; 4] = [5, 4, 4, 2];
 const BASELINE_L9_SMUGGLER_HATCH: [u8; 4] = [2, 2, 2, 1];
 const BASELINE_L10_RUSTY_ANVIL: [u8; 4] = [2, 2, 2, 1];
-const BASELINE_L11_RUNE_KILN: [u8; 4] = [2, 1, 1, 1];
-const BASELINE_L12_GEODE_VAULT: [u8; 4] = [2, 1, 1, 1];
+const BASELINE_L11_RUNE_KILN: [u8; 4] = [2, 2, 2, 1];
+const BASELINE_L12_GEODE_VAULT: [u8; 4] = [1, 1, 2, 2];
 const COUNTER_CACHE_PER_RUN: u8 = 2;
 const COUNTER_CACHE_FIRST_MAX_DISTANCE: u8 = 30;
 const BASELINE_L13_COUNTER_CACHE: [u8; 4] = [COUNTER_CACHE_PER_RUN; 4];
@@ -676,7 +676,7 @@ fn place_poi_type_count(
     }
 }
 
-fn place_pois(map: &mut GeneratedMap, rng: &mut SeededRNG, campaign_level: u8) {
+fn place_pois(map: &mut GeneratedMap, rng: &mut SeededRNG, campaign_level: u8, is_pvp: bool) {
     map.poi_count = 0;
 
     let mut walkable_tiles: Vec<Position> = Vec::with_capacity(map.walkable_count as usize);
@@ -706,6 +706,14 @@ fn place_pois(map: &mut GeneratedMap, rng: &mut SeededRNG, campaign_level: u8) {
 
     let act_index = act_index_from_campaign_level(campaign_level);
     let mut targets = poi_target_counts_for_act(act_index);
+
+    // In PvP modes (Gauntlet/Duel), Scrap Chute (L14) doesn't exist.
+    // Replace those slots with additional Supply Caches (L2).
+    if is_pvp {
+        targets[2] = targets[2].saturating_add(targets[14]);
+        targets[14] = 0;
+    }
+
     if targets[1] > 0 {
         targets[1] = targets[1].saturating_sub(1);
     }
@@ -891,9 +899,10 @@ fn place_enemies(map: &mut GeneratedMap, rng: &mut SeededRNG, campaign_level: u8
     enforce_safe_start_easy_pool(map, rng, campaign_level);
 }
 
-/// Generate a complete map with the given seed and campaign level
-/// Campaign level determines biome weighting for enemy spawning
-pub fn generate_map(map: &mut GeneratedMap, seed: u64, campaign_level: u8) -> bool {
+/// Generate a complete map with the given seed and campaign level.
+/// Campaign level determines biome weighting for enemy spawning.
+/// `is_pvp` replaces Scrap Chute slots with Supply Caches for Gauntlet/Duel modes.
+pub fn generate_map(map: &mut GeneratedMap, seed: u64, campaign_level: u8, is_pvp: bool) -> bool {
     // Initialize map dimensions
     map.width = MAP_WIDTH;
     map.height = MAP_HEIGHT;
@@ -938,7 +947,7 @@ pub fn generate_map(map: &mut GeneratedMap, seed: u64, campaign_level: u8) -> bo
         }
     }
 
-    place_pois(map, &mut generator.rng, campaign_level);
+    place_pois(map, &mut generator.rng, campaign_level, is_pvp);
 
     place_enemies(map, &mut generator.rng, campaign_level);
 
@@ -983,8 +992,8 @@ mod tests {
         let mut map1 = create_test_map();
         let mut map2 = create_test_map();
 
-        assert!(generate_map(&mut map1, 12345, 1));
-        assert!(generate_map(&mut map2, 12345, 1));
+        assert!(generate_map(&mut map1, 12345, 1, false));
+        assert!(generate_map(&mut map2, 12345, 1, false));
 
         // Same seed should produce same map
         assert_eq!(map1.packed_tiles, map2.packed_tiles);
@@ -998,8 +1007,8 @@ mod tests {
         let mut map1 = create_test_map();
         let mut map2 = create_test_map();
 
-        assert!(generate_map(&mut map1, 12345, 1));
-        assert!(generate_map(&mut map2, 54321, 1));
+        assert!(generate_map(&mut map1, 12345, 1, false));
+        assert!(generate_map(&mut map2, 54321, 1, false));
 
         // Different seeds should produce different maps
         assert_ne!(map1.packed_tiles, map2.packed_tiles);
@@ -1008,7 +1017,7 @@ mod tests {
     #[test]
     fn test_spawn_point_valid() {
         let mut map = create_test_map();
-        assert!(generate_map(&mut map, 42, 1));
+        assert!(generate_map(&mut map, 42, 1, false));
 
         // Spawn should be on a floor tile
         assert!(map.is_walkable(map.spawn_x, map.spawn_y));
@@ -1022,7 +1031,7 @@ mod tests {
     #[test]
     fn test_walkable_count_positive() {
         let mut map = create_test_map();
-        assert!(generate_map(&mut map, 42, 1));
+        assert!(generate_map(&mut map, 42, 1, false));
 
         // Should have some walkable tiles
         assert!(map.walkable_count > 0);
@@ -1093,7 +1102,7 @@ mod tests {
     #[test]
     fn test_poi_placement_invariants() {
         let mut map = create_test_map();
-        assert!(generate_map(&mut map, 4242, 1));
+        assert!(generate_map(&mut map, 4242, 1, false));
 
         assert!(map.poi_count > 0);
         assert!((map.poi_count as usize) <= MAX_POIS);
@@ -1153,8 +1162,8 @@ mod tests {
         let mut map1 = create_test_map();
         let mut map2 = create_test_map();
 
-        assert!(generate_map(&mut map1, 9876, 1));
-        assert!(generate_map(&mut map2, 9876, 1));
+        assert!(generate_map(&mut map1, 9876, 1, false));
+        assert!(generate_map(&mut map2, 9876, 1, false));
 
         assert_eq!(map1.poi_count, map2.poi_count);
 
@@ -1170,7 +1179,7 @@ mod tests {
     #[test]
     fn test_enemy_placement_invariants() {
         let mut map = create_test_map();
-        assert!(generate_map(&mut map, 8888, 1));
+        assert!(generate_map(&mut map, 8888, 1, false));
 
         assert!(map.enemy_count > 0);
         assert!((map.enemy_count as usize) <= MAX_ENEMIES);
@@ -1204,8 +1213,8 @@ mod tests {
         let mut map1 = create_test_map();
         let mut map2 = create_test_map();
 
-        assert!(generate_map(&mut map1, 1234, 1));
-        assert!(generate_map(&mut map2, 1234, 1));
+        assert!(generate_map(&mut map1, 1234, 1, false));
+        assert!(generate_map(&mut map2, 1234, 1, false));
 
         assert_eq!(map1.enemy_count, map2.enemy_count);
         for idx in 0..map1.enemy_count as usize {
@@ -1227,7 +1236,8 @@ mod tests {
             assert!(generate_map(
                 &mut map,
                 9000 + campaign_level as u64,
-                campaign_level
+                campaign_level,
+                false,
             ));
             assert_eq!(
                 map.enemy_count, expected_count,
@@ -1241,17 +1251,17 @@ mod tests {
     fn test_poi_targets_match_gdd_per_act() {
         let levels = [1u8, 11u8, 21u8, 31u8];
         // Higher acts = fewer POIs (harder scarcity)
-        let expected_l2 = [16usize, 14, 14, 10];
-        let expected_l3 = [5usize, 4, 4, 2];
-        let expected_l4 = [5usize, 4, 4, 3];
+        let expected_l2 = [20usize, 15, 16, 10];
+        let expected_l3 = [3usize, 3, 2, 2];
+        let expected_l4 = [3usize, 3, 2, 2];
         let expected_l5 = [6usize, 5, 5, 4];
         let expected_l6 = [4usize, 4, 4, 3];
         let expected_l7 = [3usize, 3, 3, 2];
         let expected_l8 = [5usize, 4, 4, 2];
         let expected_l9 = [2usize, 2, 2, 1];
         let expected_l10 = [2usize, 2, 2, 1];
-        let expected_l11 = [2usize, 1, 1, 1];
-        let expected_l12 = [2usize, 1, 1, 1];
+        let expected_l11 = [2usize, 2, 2, 1];
+        let expected_l12 = [1usize, 1, 2, 2];
         let expected_l14 = [3usize, 2, 2, 1];
 
         for (act_idx, campaign_level) in levels.iter().copied().enumerate() {
@@ -1259,7 +1269,8 @@ mod tests {
             assert!(generate_map(
                 &mut map,
                 12000 + campaign_level as u64,
-                campaign_level
+                campaign_level,
+                false,
             ));
 
             assert_eq!(
@@ -1353,7 +1364,7 @@ mod tests {
     #[test]
     fn test_safe_start_first_three_enemies_are_easy_pool() {
         let mut map = create_test_map();
-        assert!(generate_map(&mut map, 2222, 1));
+        assert!(generate_map(&mut map, 2222, 1, false));
 
         let spawn = Position {
             x: map.spawn_x,
@@ -1389,7 +1400,7 @@ mod tests {
     fn test_counter_cache_reachable_within_30_moves_across_acts() {
         for &level in &[1u8, 11, 21, 31] {
             let mut map = create_test_map();
-            assert!(generate_map(&mut map, 1111 + level as u64, level));
+            assert!(generate_map(&mut map, 1111 + level as u64, level, false));
 
             let spawn = Position {
                 x: map.spawn_x,
@@ -1453,8 +1464,8 @@ mod tests {
             let mut map_a = create_test_map();
             let mut map_b = create_test_map();
 
-            assert!(generate_map(&mut map_a, seed, 1)); // Biome A (Act 1)
-            assert!(generate_map(&mut map_b, seed, 11)); // Biome B (Act 2)
+            assert!(generate_map(&mut map_a, seed, 1, false)); // Biome A (Act 1)
+            assert!(generate_map(&mut map_b, seed, 11, false)); // Biome B (Act 2)
 
             for idx in 0..map_a.enemy_count as usize {
                 biome_a_enemy_count[map_a.enemies[idx].archetype_id as usize] += 1;
@@ -1501,7 +1512,7 @@ mod tests {
 
         for seed in 1000u64..1200u64 {
             let mut map = create_test_map();
-            assert!(generate_map(&mut map, seed, 1)); // Campaign level 1 = Act 1
+            assert!(generate_map(&mut map, seed, 1, false)); // Campaign level 1 = Act 1
 
             let spawn = Position {
                 x: map.spawn_x,

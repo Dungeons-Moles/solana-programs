@@ -186,12 +186,12 @@ pub const G_ST_04: ItemDefinition = ItemDefinition {
             false,
             [2, 4, 8],
         ),
-        // Every other turn: gain 2/4/8 Armor
+        // Every other turn: gain 1/3/6 Armor (nerfed from 2/4/8)
         EffectDefinition::new(
             TriggerType::EveryOtherTurn,
             EffectType::GainArmor,
             false,
-            [2, 4, 8],
+            [1, 3, 6],
         ),
         EffectDefinition::new(
             TriggerType::EveryOtherTurn,
@@ -676,21 +676,21 @@ pub const G_GR_02: ItemDefinition = ItemDefinition {
     tag: ItemTag::Greed,
     rarity: Rarity::Common,
     effects: &[
-        // Victory: gain 3/6/12 Gold
+        // Victory: gain 2/4/8 Gold (nerfed from 3/6/12)
         EffectDefinition::new(
             TriggerType::Victory,
             EffectType::GainGold,
             false,
-            [3, 6, 12],
+            [2, 4, 8],
         ),
-        // Victory: heal 3/6/12 HP
-        EffectDefinition::new(TriggerType::Victory, EffectType::Heal, false, [3, 6, 12]),
+        // Victory: heal 2/4/8 HP (nerfed from 3/6/12)
+        EffectDefinition::new(TriggerType::Victory, EffectType::Heal, false, [2, 4, 8]),
     ],
 };
 
 pub const G_GR_03: ItemDefinition = ItemDefinition {
-    id: b"G-GR-03\0",
-    name: "Gilded Band",
+    id: b"G-GR-07\0",
+    name: "Gilded Ring",
     item_type: ItemType::Gear,
     tag: ItemTag::Greed,
     rarity: Rarity::Heroic,
@@ -721,7 +721,7 @@ pub const G_GR_03: ItemDefinition = ItemDefinition {
 };
 
 pub const G_GR_04: ItemDefinition = ItemDefinition {
-    id: b"G-GR-04\0",
+    id: b"G-GR-08\0",
     name: "Royal Bracer",
     item_type: ItemType::Gear,
     tag: ItemTag::Greed,
@@ -758,8 +758,8 @@ pub const G_GR_04: ItemDefinition = ItemDefinition {
 };
 
 pub const G_GR_05: ItemDefinition = ItemDefinition {
-    id: b"G-GR-05\0",
-    name: "Quartz Shard",
+    id: b"G-GR-03\0",
+    name: "Ruby Shard",
     item_type: ItemType::Gear,
     tag: ItemTag::Greed,
     rarity: Rarity::Common, // GDD says Common
@@ -775,8 +775,8 @@ pub const G_GR_05: ItemDefinition = ItemDefinition {
 };
 
 pub const G_GR_06: ItemDefinition = ItemDefinition {
-    id: b"G-GR-06\0",
-    name: "Amber Shard",
+    id: b"G-GR-05\0",
+    name: "Amethyst Shard",
     item_type: ItemType::Gear,
     tag: ItemTag::Greed,
     rarity: Rarity::Common, // GDD says Common
@@ -792,8 +792,8 @@ pub const G_GR_06: ItemDefinition = ItemDefinition {
 };
 
 pub const G_GR_07: ItemDefinition = ItemDefinition {
-    id: b"G-GR-07\0",
-    name: "Zircon Shard",
+    id: b"G-GR-06\0",
+    name: "Emerald Shard",
     item_type: ItemType::Gear,
     tag: ItemTag::Greed,
     rarity: Rarity::Common, // GDD says Common
@@ -809,8 +809,8 @@ pub const G_GR_07: ItemDefinition = ItemDefinition {
 };
 
 pub const G_GR_08: ItemDefinition = ItemDefinition {
-    id: b"G-GR-08\0",
-    name: "Tourmaline Shard",
+    id: b"G-GR-04\0",
+    name: "Pyrite Shard",
     item_type: ItemType::Gear,
     tag: ItemTag::Greed,
     rarity: Rarity::Common, // GDD says Common
@@ -822,13 +822,7 @@ pub const G_GR_08: ItemDefinition = ItemDefinition {
             true, // once per turn (first hit only)
             [2, 4, 8],
         ),
-        // Every other turn (on first hit): gain +1/2/4 Armor
-        EffectDefinition::new(
-            TriggerType::EveryOtherTurnFirstHit,
-            EffectType::GainArmor,
-            true,
-            [1, 2, 4],
-        ),
+        // ARM component removed for shard family consistency
     ],
 };
 
@@ -1196,18 +1190,18 @@ pub const G_FR_01: ItemDefinition = ItemDefinition {
 };
 
 pub const G_FR_02: ItemDefinition = ItemDefinition {
-    id: b"G-FR-02\0",
+    id: b"G-FR-05\0",
     name: "Frostguard Buckler",
     item_type: ItemType::Gear,
     tag: ItemTag::Frost,
     rarity: Rarity::Heroic,
     effects: &[
-        // +8/16/32 ARM
+        // +6/12/24 ARM (nerfed from 8/16/32)
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::GainArmor,
             false,
-            [8, 16, 32],
+            [6, 12, 24],
         ),
         // Battle Start: if enemy has Chill, gain +3/6/12 Armor
         EffectDefinition::with_condition(
@@ -1280,18 +1274,12 @@ pub const G_FR_04: ItemDefinition = ItemDefinition {
             false,
             [1, 2, 4],
         ),
-        // +2/4/8 Armor
-        EffectDefinition::new(
-            TriggerType::BattleStart,
-            EffectType::GainArmor,
-            false,
-            [2, 4, 8],
-        ),
+        // ARM component removed (nerfed: was +2/4/8 Armor)
     ],
 };
 
 pub const G_FR_05: ItemDefinition = ItemDefinition {
-    id: b"G-FR-05\0",
+    id: b"G-FR-02\0",
     name: "Rime Cloak",
     item_type: ItemType::Gear,
     tag: ItemTag::Frost,
@@ -1558,7 +1546,14 @@ pub const G_RU_03: ItemDefinition = ItemDefinition {
             false,
             [1, 2, 4],
         ),
-        // Wounded: 2/4/8 Rust per GDD
+        // Battle Start: apply 1/2/4 Rust (buffed: new proactive component)
+        EffectDefinition::new(
+            TriggerType::BattleStart,
+            EffectType::ApplyRust,
+            false,
+            [1, 2, 4],
+        ),
+        // Wounded: apply additional 2/4/8 Rust per GDD
         EffectDefinition::new(TriggerType::Wounded, EffectType::ApplyRust, true, [2, 4, 8]),
     ],
 };
@@ -1601,8 +1596,8 @@ pub const G_RU_05: ItemDefinition = ItemDefinition {
             false,
             [6, 12, 24],
         ),
-        // Exposed: 2/4/8 Rust per GDD
-        EffectDefinition::new(TriggerType::Exposed, EffectType::ApplyRust, true, [2, 4, 8]),
+        // When you lose 3+ Armor in a single turn: apply 2/4/8 Rust to enemy (reworked from Exposed trigger)
+        EffectDefinition::new(TriggerType::ArmorLostAtLeast { threshold: 3 }, EffectType::ApplyRust, true, [2, 4, 8]),
     ],
 };
 
@@ -1746,12 +1741,12 @@ pub const G_BO_01: ItemDefinition = ItemDefinition {
     tag: ItemTag::Blood,
     rarity: Rarity::Common,
     effects: &[
-        // One use: first time you would die in battle, prevent it and heal 2/4/8 HP
+        // One use: first time you would die in battle, prevent it and heal 3/6/12 HP (buffed from 2/4/8)
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::PreventDeath,
             false,
-            [2, 4, 8], // Heal amount when death is prevented
+            [3, 6, 12], // Heal amount when death is prevented
         ),
     ],
 };
@@ -1820,8 +1815,8 @@ pub const G_BO_04: ItemDefinition = ItemDefinition {
             false,
             [2, 4, 8],
         ),
-        // Victory: heal 5/10/20 HP
-        EffectDefinition::new(TriggerType::Victory, EffectType::Heal, false, [5, 10, 20]),
+        // Victory: heal 4/8/16 HP (nerfed from 5/10/20)
+        EffectDefinition::new(TriggerType::Victory, EffectType::Heal, false, [4, 8, 16]),
     ],
 };
 
@@ -2005,12 +2000,12 @@ pub const G_TE_01: ItemDefinition = ItemDefinition {
             false,
             [1, 2, 4],
         ),
-        // +2/4/8 ATK
+        // +1/2/4 ATK (nerfed from 2/4/8)
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::GainAtk,
             false,
-            [2, 4, 8],
+            [1, 2, 4],
         ),
     ],
 };
@@ -2029,12 +2024,19 @@ pub const G_TE_02: ItemDefinition = ItemDefinition {
             false,
             [1, 2, 4],
         ),
-        // If you act first on Turn 1, your first strike deals +3/6/12 damage
+        // If you act first on Turn 1, your first strike deals +4/8/16 damage (buffed from 3/6/12)
         EffectDefinition::new(
             TriggerType::FirstTurnIfFaster,
             EffectType::DealDamage,
             true, // once per turn (first strike only)
-            [3, 6, 12],
+            [4, 8, 16],
+        ),
+        // If you act first on Turn 1, gain +1/2/4 ATK (this battle)
+        EffectDefinition::new(
+            TriggerType::FirstTurnIfFaster,
+            EffectType::GainAtk,
+            false,
+            [1, 2, 4],
         ),
     ],
 };
@@ -2083,19 +2085,19 @@ pub const G_TE_04: ItemDefinition = ItemDefinition {
             false,
             [2, 4, 8],
         ),
-        // Turn 5: gain +3/6/12 ATK (this battle)
+        // Turn 3: gain +2/4/8 ATK (this battle) (moved from Turn 5, values reduced from 3/6/12)
         EffectDefinition::new(
-            TriggerType::TurnN { turn: 5 },
+            TriggerType::TurnN { turn: 3 },
             EffectType::GainAtk,
             false,
-            [3, 6, 12],
+            [2, 4, 8],
         ),
-        // Turn 5: gain +2/4/8 SPD (this battle)
+        // Turn 3: gain +1/2/4 SPD (this battle) (moved from Turn 5, values reduced from 2/4/8)
         EffectDefinition::new(
-            TriggerType::TurnN { turn: 5 },
+            TriggerType::TurnN { turn: 3 },
             EffectType::GainSpd,
             false,
-            [2, 4, 8],
+            [1, 2, 4],
         ),
     ],
 };
@@ -2450,9 +2452,9 @@ mod tests {
         // - G-FR-02: Common -> Rare (Frostguard Buckler)
         // - G-FR-08: Mythic -> Heroic (Deep Freeze Charm)
         // - G-TE-08: Mythic -> Heroic (Second Wind Clock)
-        // - G-GR-05: Rare -> Common (Emerald Shard)
-        // - G-GR-06: Heroic -> Common (Ruby Shard)
-        // - G-GR-07: Heroic -> Common (Sapphire Shard)
+        // - G-GR-05: Rare -> Common (Amethyst Shard)
+        // - G-GR-06: Heroic -> Common (Emerald Shard)
+        // - G-GR-07: Heroic (Gilded Ring)
         // - G-GR-08: Mythic -> Common (Citrine Shard)
         // - G-ST-08: Mythic -> Heroic (Stone Sigil)
         // - G-BO-02: Common -> Rare (Bloodletting Fang)

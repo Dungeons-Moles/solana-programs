@@ -506,7 +506,7 @@ pub static FROSTBOUND_LEVIATHAN_B: BossDefinition = BossDefinition {
         spd: 2,
         dig: 3,
     },
-    weakness_tags: [ItemTag::Tempo, ItemTag::Stone],
+    weakness_tags: [ItemTag::Rust, ItemTag::Stone],
     traits: FROSTBOUND_LEVIATHAN_TRAITS,
     base_strikes: 1,
 };

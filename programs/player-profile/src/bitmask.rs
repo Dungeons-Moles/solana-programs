@@ -18,7 +18,7 @@ const UNLOCKABLE_ITEMS: u8 = 80;
 /// Starter items (40 total = 32 gear + 8 tools):
 /// - Stone: G-ST-01..04 (0-3), T-ST-01 (64)
 /// - Scout: G-SC-01..04 (8-11), T-SC-01 (66)
-/// - Greed: G-GR-01..03,05 (16-18,20), T-GR-01 (68) — note: skips G-GR-04
+/// - Greed: G-GR-01..04 (16-19), T-GR-01 (68)
 /// - Blast: G-BL-01..04 (24-27), T-BL-01 (70)
 /// - Frost: G-FR-01..04 (32-35), T-FR-01 (72)
 /// - Rust: G-RU-01..04 (40-43), T-RU-01 (74)
@@ -27,7 +27,7 @@ const UNLOCKABLE_ITEMS: u8 = 80;
 pub const STARTER_ITEMS_BITMASK: [u8; ITEM_BITMASK_SIZE] = [
     0x0F, // byte 0: bits 0-3 (Stone gear 01-04)
     0x0F, // byte 1: bits 8-11 (Scout gear 01-04)
-    0x17, // byte 2: bits 16-18,20 (Greed gear 01-03,05)
+    0x0F, // byte 2: bits 16-19 (Greed gear 01-04)
     0x0F, // byte 3: bits 24-27 (Blast gear 01-04)
     0x0F, // byte 4: bits 32-35 (Frost gear 01-04)
     0x0F, // byte 5: bits 40-43 (Rust gear 01-04)
@@ -247,8 +247,8 @@ mod tests {
         let subset: [u8; ITEM_BITMASK_SIZE] = [0x0F, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         assert!(is_subset(subset, unlocked));
 
-        // Pool with item not in unlocked is invalid (bit 19 = G-GR-04 is NOT in starter)
-        let invalid: [u8; ITEM_BITMASK_SIZE] = [0x0F, 0x0F, 0x1F, 0, 0, 0, 0, 0, 0, 0]; // 0x1F sets bit 19
+        // Pool with item not in unlocked is invalid (bit 20 = G-GR-05 Amethyst Shard is NOT in starter)
+        let invalid: [u8; ITEM_BITMASK_SIZE] = [0x0F, 0x0F, 0x1F, 0, 0, 0, 0, 0, 0, 0]; // 0x1F sets bit 20
         assert!(!is_subset(invalid, unlocked));
     }
 
@@ -257,13 +257,13 @@ mod tests {
         assert_eq!(count_bits(STARTER_ITEMS_BITMASK), 40);
 
         // Expected starter item indices:
-        // Gear (32 items): 0-3 (Stone), 8-11 (Scout), 16-18,20 (Greed), 24-27 (Blast),
+        // Gear (32 items): 0-3 (Stone), 8-11 (Scout), 16-19 (Greed), 24-27 (Blast),
         //                  32-35 (Frost), 40-43 (Rust), 48-51 (Blood), 56-59 (Tempo)
         // Tools (8 items): 64,66,68,70,72,74,76,78 (all -01 tools)
         let expected_set: [u8; 40] = [
             0, 1, 2, 3, // Stone gear 01-04
             8, 9, 10, 11, // Scout gear 01-04
-            16, 17, 18, 20, // Greed gear 01-03, 05 (skips 04)
+            16, 17, 18, 19, // Greed gear 01-04
             24, 25, 26, 27, // Blast gear 01-04
             32, 33, 34, 35, // Frost gear 01-04
             40, 41, 42, 43, // Rust gear 01-04

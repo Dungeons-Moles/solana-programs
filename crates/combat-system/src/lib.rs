@@ -64,6 +64,8 @@ const BOSS_CRYSTAL_MIMIC: [u8; 12] = boss_id_from_str("B-A-W2-02");
 const BOSS_POWDER_KEG_BARON: [u8; 12] = boss_id_from_str("B-A-W2-04");
 const BOSS_ELDRITCH_MOLE: [u8; 12] = boss_id_from_str("B-A-W3-01");
 const BOSS_GILDED_DEVOURER: [u8; 12] = boss_id_from_str("B-A-W3-02");
+const BOSS_DRILL_SERGEANT_A: [u8; 12] = boss_id_from_str("B-A-W2-01");
+const BOSS_DRILL_SERGEANT_B: [u8; 12] = boss_id_from_str("B-B-W2-01");
 const BOSS_FROSTBOUND_LEVIATHAN: [u8; 12] = boss_id_from_str("B-B-W3-01");
 const BOSS_RUSTED_CHRONOMANCER: [u8; 12] = boss_id_from_str("B-B-W3-02");
 
@@ -106,6 +108,16 @@ fn apply_boss_turn_start_overrides(combat_state: &mut CombatState) {
         && combat_state.player.hp > 0
     {
         combat_state.player.status.bleed = combat_state.player.status.bleed.saturating_add(2);
+    }
+
+    // Rev Up cap: after 4 stacks (Turn 5+), pre-subtract the +1 ATK/SPD that
+    // the TurnStart trait will add so the net gain is zero.
+    if (is_enemy_boss(combat_state, BOSS_DRILL_SERGEANT_A)
+        || is_enemy_boss(combat_state, BOSS_DRILL_SERGEANT_B))
+        && combat_state.turn > 4
+    {
+        combat_state.enemy.atk = combat_state.enemy.atk.saturating_sub(1);
+        combat_state.enemy.spd = combat_state.enemy.spd.saturating_sub(1);
     }
 }
 
@@ -472,6 +484,8 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
         player_temporary_exposed: false,
         enemy_temporary_exposed: false,
         enemy_boss_id,
+        player_arm_at_turn_start: 0,
+        enemy_arm_at_turn_start: 0,
     };
 
     let mut player_triggered = vec![false; player_effects.len()];
@@ -502,6 +516,8 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
         combat_state.enemy_acted_this_turn = false;
         combat_state.player_temporary_exposed = false;
         combat_state.enemy_temporary_exposed = false;
+        combat_state.player_arm_at_turn_start = combat_state.player.arm;
+        combat_state.enemy_arm_at_turn_start = combat_state.enemy.arm;
 
         apply_boss_turn_start_overrides(&mut combat_state);
         if let Some((player_won, resolution_type)) = apply_ordered_start_of_turn_effects(
@@ -551,7 +567,18 @@ fn resolve_combat_annotated_with_both_gold_and_boss(
             TriggerType::Exposed,
             &mut player_triggered,
             &mut enemy_triggered,
-            
+
+        );
+        // ArmorLostAtLeast: fires for effects that trigger when armor loss >= threshold this turn.
+        // Uses a dummy threshold=0 as phase key; actual threshold checked per-effect in triggers.rs.
+        apply_status_effects(
+            &mut player_effects,
+            &mut enemy_effects,
+            &mut combat_state,
+            TriggerType::ArmorLostAtLeast { threshold: 0 },
+            &mut player_triggered,
+            &mut enemy_triggered,
+
         );
 
         if let Some((player_won, resolution_type)) = resolve_if_ended(
@@ -1573,6 +1600,13 @@ fn process_phase_effects(
             )
         };
 
+    // Set arm_at_turn_start for ArmorLostAtLeast trigger threshold checks
+    working_stats.arm_at_turn_start = if is_player {
+        combat_state.player_arm_at_turn_start
+    } else {
+        combat_state.enemy_arm_at_turn_start
+    };
+
     let owner_status_before = working_status;
     let opponent_status_before = opponent_status;
 
@@ -2091,7 +2125,7 @@ mod tests {
     }
 
     // ========================================================================
-    // EveryOtherTurnFirstHit Trigger Tests (G-GR-05 through G-GR-08 Shards)
+    // EveryOtherTurnFirstHit Trigger Tests (G-GR-03 through G-GR-06 Shards)
     // ========================================================================
 
     // ========================================================================
@@ -2229,7 +2263,7 @@ mod tests {
     }
 
     /// Test that EveryOtherTurnFirstHit triggers on turn 2 (first even turn) on first hit.
-    /// This verifies Emerald Shard (G-GR-05) functionality.
+    /// This verifies Amethyst Shard (G-GR-05) functionality.
     #[test]
     fn test_every_other_turn_first_hit_fires_on_even_turns() {
         // Combat that lasts at least 2 turns

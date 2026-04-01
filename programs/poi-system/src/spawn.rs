@@ -46,16 +46,16 @@ pub struct ActSpawnConfig {
 const ACT1_BASELINE: &[PoiSpawnEntry] = &[
     PoiSpawnEntry {
         poi_type: 2,
-        count: 16,
-    }, // L2: Supply Cache x16
+        count: 20,
+    }, // L2: Supply Cache x20
     PoiSpawnEntry {
         poi_type: 3,
-        count: 5,
-    }, // L3: Tool Crate x5
+        count: 3,
+    }, // L3: Tool Crate x3
     PoiSpawnEntry {
         poi_type: 4,
-        count: 5,
-    }, // L4: Tool Oil Rack x5
+        count: 3,
+    }, // L4: Tool Oil Rack x3
     PoiSpawnEntry {
         poi_type: 5,
         count: 6,
@@ -86,8 +86,8 @@ const ACT1_BASELINE: &[PoiSpawnEntry] = &[
     }, // L11: Rune Kiln x2
     PoiSpawnEntry {
         poi_type: 12,
-        count: 2,
-    }, // L12: Geode Vault x2
+        count: 1,
+    }, // L12: Geode Vault x1
     PoiSpawnEntry {
         poi_type: 14,
         count: 3,
@@ -118,16 +118,16 @@ const ACT1_GUARANTEES: &[SpawnGuarantee] = &[
 const ACT2_BASELINE: &[PoiSpawnEntry] = &[
     PoiSpawnEntry {
         poi_type: 2,
-        count: 14,
-    }, // L2: Supply Cache x14
+        count: 15,
+    }, // L2: Supply Cache x15
     PoiSpawnEntry {
         poi_type: 3,
-        count: 4,
-    }, // L3: Tool Crate x4
+        count: 3,
+    }, // L3: Tool Crate x3
     PoiSpawnEntry {
         poi_type: 4,
-        count: 4,
-    }, // L4: Tool Oil Rack x4
+        count: 3,
+    }, // L4: Tool Oil Rack x3
     PoiSpawnEntry {
         poi_type: 5,
         count: 5,
@@ -154,8 +154,8 @@ const ACT2_BASELINE: &[PoiSpawnEntry] = &[
     }, // L10: Rusty Anvil x2
     PoiSpawnEntry {
         poi_type: 11,
-        count: 1,
-    }, // L11: Rune Kiln x1
+        count: 2,
+    }, // L11: Rune Kiln x2
     PoiSpawnEntry {
         poi_type: 12,
         count: 1,
@@ -197,16 +197,16 @@ const ACT2_GUARANTEES: &[SpawnGuarantee] = &[
 const ACT3_BASELINE: &[PoiSpawnEntry] = &[
     PoiSpawnEntry {
         poi_type: 2,
-        count: 14,
-    }, // L2: Supply Cache x14
+        count: 16,
+    }, // L2: Supply Cache x16
     PoiSpawnEntry {
         poi_type: 3,
-        count: 4,
-    }, // L3: Tool Crate x4
+        count: 2,
+    }, // L3: Tool Crate x2
     PoiSpawnEntry {
         poi_type: 4,
-        count: 4,
-    }, // L4: Tool Oil Rack x4
+        count: 2,
+    }, // L4: Tool Oil Rack x2
     PoiSpawnEntry {
         poi_type: 5,
         count: 5,
@@ -233,17 +233,17 @@ const ACT3_BASELINE: &[PoiSpawnEntry] = &[
     }, // L10: Rusty Anvil x2
     PoiSpawnEntry {
         poi_type: 11,
-        count: 1,
-    }, // L11: Rune Kiln x1
+        count: 2,
+    }, // L11: Rune Kiln x2
     PoiSpawnEntry {
         poi_type: 12,
-        count: 1,
-    }, // L12: Geode Vault x1
+        count: 2,
+    }, // L12: Geode Vault x2
     PoiSpawnEntry {
         poi_type: 14,
         count: 2,
     }, // L14: Scrap Chute x2
-]; // Same as Act 2
+];
 
 const ACT3_GUARANTEES: &[SpawnGuarantee] = &[
     SpawnGuarantee {
@@ -298,8 +298,8 @@ const ACT4_BASELINE: &[PoiSpawnEntry] = &[
     }, // L3: Tool Crate x2
     PoiSpawnEntry {
         poi_type: 4,
-        count: 3,
-    }, // L4: Tool Oil Rack x3
+        count: 2,
+    }, // L4: Tool Oil Rack x2
     PoiSpawnEntry {
         poi_type: 5,
         count: 4,
@@ -330,8 +330,8 @@ const ACT4_BASELINE: &[PoiSpawnEntry] = &[
     }, // L11: Rune Kiln x1
     PoiSpawnEntry {
         poi_type: 12,
-        count: 1,
-    }, // L12: Geode Vault x1
+        count: 2,
+    }, // L12: Geode Vault x2
     PoiSpawnEntry {
         poi_type: 14,
         count: 1,
@@ -460,12 +460,12 @@ mod tests {
         // Check Supply Cache count
         let supply_cache = config.baseline.iter().find(|e| e.poi_type == 2);
         assert!(supply_cache.is_some());
-        assert_eq!(supply_cache.unwrap().count, 16);
+        assert_eq!(supply_cache.unwrap().count, 20);
 
         // Check Tool Crate count
         let tool_crate = config.baseline.iter().find(|e| e.poi_type == 3);
         assert!(tool_crate.is_some());
-        assert_eq!(tool_crate.unwrap().count, 5);
+        assert_eq!(tool_crate.unwrap().count, 3);
     }
 
     #[test]

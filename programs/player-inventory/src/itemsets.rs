@@ -46,13 +46,13 @@ pub const UNION_STANDARD: ItemsetDefinition = ItemsetDefinition {
     ],
 };
 
-/// Shard Circuit: G-GR-05, G-GR-06, G-GR-07, G-GR-08
+/// Shard Circuit: G-GR-03, G-GR-04, G-GR-05, G-GR-06
 /// Bonus: Shards trigger every turn
 pub const SHARD_CIRCUIT: ItemsetDefinition = ItemsetDefinition {
     id: "shard-circuit",
     name: "Shard Circuit",
     emoji: "💎",
-    required_items: &[*b"G-GR-05\0", *b"G-GR-06\0", *b"G-GR-07\0", *b"G-GR-08\0"],
+    required_items: &[*b"G-GR-03\0", *b"G-GR-04\0", *b"G-GR-05\0", *b"G-GR-06\0"],
     bonus_effect: &[EffectDefinition::new(
         TriggerType::BattleStart,
         EffectType::ShardsEveryTurn,
@@ -180,13 +180,13 @@ pub const SWIFT_DIGGER_KIT: ItemsetDefinition = ItemsetDefinition {
     ],
 };
 
-/// Royal Extraction: G-GR-01, G-GR-04, T-GR-02
+/// Royal Extraction: G-GR-01, G-GR-08, T-GR-02
 /// Bonus: Gold->Armor becomes 1->4 and gain +1 Gold at battle start.
 pub const ROYAL_EXTRACTION: ItemsetDefinition = ItemsetDefinition {
     id: "royal-extraction",
     name: "Royal Extraction",
     emoji: "👑",
-    required_items: &[*b"G-GR-01\0", *b"G-GR-04\0", *b"T-GR-02\0"],
+    required_items: &[*b"G-GR-01\0", *b"G-GR-08\0", *b"T-GR-02\0"],
     bonus_effect: &[
         EffectDefinition::new(
             TriggerType::TurnStart,
@@ -270,13 +270,13 @@ pub const CORROSION_PAYLOAD: ItemsetDefinition = ItemsetDefinition {
     )],
 };
 
-/// Golden Shrapnel Exchange: G-GR-04, G-ST-06, G-GR-03
+/// Golden Shrapnel Exchange: G-GR-08, G-ST-06, G-GR-07
 /// Bonus: Gold→Armor also gives +3 Shrapnel
 pub const GOLDEN_SHRAPNEL_EXCHANGE: ItemsetDefinition = ItemsetDefinition {
     id: "golden-shrapnel-exchange",
     name: "Golden Shrapnel Exchange",
     emoji: "✨",
-    required_items: &[*b"G-GR-04\0", *b"G-ST-06\0", *b"G-GR-03\0"],
+    required_items: &[*b"G-GR-08\0", *b"G-ST-06\0", *b"G-GR-07\0"],
     bonus_effect: &[EffectDefinition::new(
         TriggerType::OnGoldArmorConverted,
         EffectType::ApplyShrapnel,

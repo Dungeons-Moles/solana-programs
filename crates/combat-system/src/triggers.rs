@@ -39,6 +39,8 @@ pub struct CombatantStats {
     pub attack_source: Option<CombatSourceRef>,
     pub attack_base_value: i16,
     pub atk_contributions: Vec<CombatContribution>,
+    /// ARM at the start of this turn, for ArmorLostAtLeast trigger threshold checks
+    pub arm_at_turn_start: i16,
 }
 
 impl Default for CombatantStats {
@@ -77,6 +79,7 @@ impl Default for CombatantStats {
             attack_source: None,
             attack_base_value: 0,
             atk_contributions: Vec::new(),
+            arm_at_turn_start: 0,
         }
     }
 }
@@ -136,6 +139,9 @@ pub fn should_trigger(
         // FirstTimeGainShrapnel is invoked by the combat loop only once when
         // shrapnel is first gained. The "first time" check is handled by CombatState flags.
         TriggerType::FirstTimeGainShrapnel => true,
+        // ArmorLostAtLeast is checked after combat exchange using arm delta tracking.
+        // The actual threshold check is done in process_triggers_for_phase.
+        TriggerType::ArmorLostAtLeast { .. } => true,
     }
 }
 
@@ -638,7 +644,15 @@ fn process_effects_pass(
 
     for (index, annotated) in effects.iter_mut().enumerate() {
         let effect = &mut annotated.effect;
-        if effect.trigger != phase {
+        // ArmorLostAtLeast phase matches any ArmorLostAtLeast effect (regardless of threshold)
+        let trigger_matches = match (&effect.trigger, &phase) {
+            (
+                TriggerType::ArmorLostAtLeast { .. },
+                TriggerType::ArmorLostAtLeast { .. },
+            ) => true,
+            _ => effect.trigger == phase,
+        };
+        if !trigger_matches {
             continue;
         }
 
@@ -655,6 +669,10 @@ fn process_effects_pass(
         let should_fire = match effect.trigger {
             TriggerType::Exposed => check_exposed(owner_stats.arm),
             TriggerType::Wounded => check_wounded(owner_stats.hp, owner_stats.max_hp),
+            TriggerType::ArmorLostAtLeast { threshold } => {
+                let lost = owner_stats.arm_at_turn_start.saturating_sub(owner_stats.arm);
+                lost >= i16::from(threshold)
+            }
             TriggerType::EveryOtherTurnFirstHit if owner_stats.shards_every_turn => true,
             _ => should_trigger(effect.trigger, turn, is_first_turn, owner_acts_first),
         };

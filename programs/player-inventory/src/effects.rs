@@ -11,10 +11,10 @@ use crate::state::{
 use combat_system::state::{AnnotatedItemEffect, CombatSourceKind, CombatSourceRef};
 
 const GEMFINDER_STAFF_ID: [u8; 8] = *b"T-GR-02\0";
-const EMERALD_SHARD_ID: [u8; 8] = *b"G-GR-05\0";
-const RUBY_SHARD_ID: [u8; 8] = *b"G-GR-06\0";
-const SAPPHIRE_SHARD_ID: [u8; 8] = *b"G-GR-07\0";
-const CITRINE_SHARD_ID: [u8; 8] = *b"G-GR-08\0";
+const RUBY_SHARD_ID: [u8; 8] = *b"G-GR-03\0";
+const PYRITE_SHARD_ID: [u8; 8] = *b"G-GR-04\0";
+const AMETHYST_SHARD_ID: [u8; 8] = *b"G-GR-05\0";
+const EMERALD_SHARD_ID: [u8; 8] = *b"G-GR-06\0";
 
 fn item_source(kind: CombatSourceKind, item_id: &[u8; 8]) -> CombatSourceRef {
     let mut id = [0u8; 16];
@@ -91,25 +91,25 @@ pub fn generate_tool_effects(tool: &ItemInstance) -> Vec<ItemEffect> {
 fn apply_gemfinder_shard_bonus(item: &ItemInstance, effects: &mut [ItemEffect]) {
     for effect in effects.iter_mut() {
         match item.item_id {
-            EMERALD_SHARD_ID
+            RUBY_SHARD_ID
                 if effect.trigger == crate::state::TriggerType::EveryOtherTurnFirstHit
                     && effect.effect_type == EffectType::Heal =>
             {
                 effect.value = effect.value.saturating_add(1);
             }
-            RUBY_SHARD_ID
+            AMETHYST_SHARD_ID
                 if effect.trigger == crate::state::TriggerType::EveryOtherTurnFirstHit
                     && effect.effect_type == EffectType::DealNonWeaponDamage =>
             {
                 effect.value = effect.value.saturating_add(1);
             }
-            SAPPHIRE_SHARD_ID
+            EMERALD_SHARD_ID
                 if effect.trigger == crate::state::TriggerType::EveryOtherTurnFirstHit
                     && effect.effect_type == EffectType::GainArmor =>
             {
                 effect.value = effect.value.saturating_add(1);
             }
-            CITRINE_SHARD_ID
+            PYRITE_SHARD_ID
                 if effect.trigger == crate::state::TriggerType::EveryOtherTurnFirstHit
                     && effect.effect_type == EffectType::GainGold =>
             {
@@ -405,14 +405,14 @@ mod tests {
     fn test_gemfinder_staff_amplifies_shard_outputs() {
         let mut inventory = make_inventory();
         inventory.tool = Some(ItemInstance::new(*b"T-GR-02\0", Tier::I));
-        inventory.gear[0] = Some(ItemInstance::new(*b"G-GR-05\0", Tier::I)); // Emerald
-        inventory.gear[1] = Some(ItemInstance::new(*b"G-GR-06\0", Tier::I)); // Ruby
-        inventory.gear[2] = Some(ItemInstance::new(*b"G-GR-07\0", Tier::I)); // Sapphire
-        inventory.gear[3] = Some(ItemInstance::new(*b"G-GR-08\0", Tier::I)); // Citrine
+        inventory.gear[0] = Some(ItemInstance::new(*b"G-GR-03\0", Tier::I)); // Ruby Shard
+        inventory.gear[1] = Some(ItemInstance::new(*b"G-GR-05\0", Tier::I)); // Amethyst Shard
+        inventory.gear[2] = Some(ItemInstance::new(*b"G-GR-06\0", Tier::I)); // Emerald Shard
+        inventory.gear[3] = Some(ItemInstance::new(*b"G-GR-04\0", Tier::I)); // Pyrite Shard
 
         let effects = generate_combat_effects(&inventory);
 
-        let emerald = effects
+        let ruby = effects
             .iter()
             .find(|e| {
                 e.trigger == TriggerType::EveryOtherTurnFirstHit
@@ -420,11 +420,11 @@ mod tests {
             })
             .unwrap();
         assert_eq!(
-            emerald.value, 3,
-            "Emerald shard should heal 3 at T1 with Gemfinder"
+            ruby.value, 3,
+            "Ruby shard should heal 3 at T1 with Gemfinder"
         );
 
-        let ruby = effects
+        let amethyst = effects
             .iter()
             .find(|e| {
                 e.trigger == TriggerType::EveryOtherTurnFirstHit
@@ -432,11 +432,11 @@ mod tests {
             })
             .unwrap();
         assert_eq!(
-            ruby.value, 2,
-            "Ruby shard should deal 2 at T1 with Gemfinder"
+            amethyst.value, 2,
+            "Amethyst shard should deal 2 at T1 with Gemfinder"
         );
 
-        let sapphire = effects
+        let emerald = effects
             .iter()
             .find(|e| {
                 e.trigger == TriggerType::EveryOtherTurnFirstHit
@@ -445,11 +445,11 @@ mod tests {
             })
             .unwrap();
         assert_eq!(
-            sapphire.value, 3,
-            "Sapphire shard should gain 3 armor at T1 with Gemfinder"
+            emerald.value, 3,
+            "Emerald shard should gain 3 armor at T1 with Gemfinder"
         );
 
-        let citrine_gold = effects
+        let pyrite_gold = effects
             .iter()
             .find(|e| {
                 e.trigger == TriggerType::EveryOtherTurnFirstHit
@@ -457,8 +457,8 @@ mod tests {
             })
             .unwrap();
         assert_eq!(
-            citrine_gold.value, 3,
-            "Citrine shard should gain 3 gold at T1 with Gemfinder"
+            pyrite_gold.value, 3,
+            "Pyrite shard should gain 3 gold at T1 with Gemfinder"
         );
     }
 }

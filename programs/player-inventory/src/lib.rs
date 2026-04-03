@@ -21,15 +21,17 @@ pub mod items;
 pub mod itemsets;
 pub mod nft_items;
 pub mod offers;
+pub mod relics;
 pub mod state;
 
 use combat_system::{EffectType, TriggerType};
-use constants::{MAX_GEAR_SLOTS, MPL_CORE_PROGRAM_ID};
+use constants::MAX_GEAR_SLOTS;
 use effects::generate_combat_effects;
 use errors::InventoryError;
 use fusion::{execute_fusion, validate_fusion};
 use items::{get_item, BASIC_PICKAXE};
 use offers::generate_item_offer;
+use relics::get_relic_item;
 use state::{
     ItemEffect, ItemInstance, ItemOffer, ItemTag, ItemType, PlayerInventory, PoiType, Tier,
     ToolOilModification,
@@ -39,13 +41,6 @@ declare_id!("GrXaTaf7wZ74mTaWQ9QSUPAKG6M3Sf4xaZjNytTLa8yC");
 
 /// Seed for inventory_authority PDA used for CPI calls to other programs
 pub const INVENTORY_AUTHORITY_SEED: &[u8] = b"inventory_authority";
-
-/// Metaplex Core AssetV1 key discriminator (first byte of serialized asset data)
-const MPL_CORE_ASSET_V1_KEY: u8 = 1;
-
-/// Minimum byte length for a valid Metaplex Core AssetV1 account.
-/// Layout: key(1) + owner(32) + update_authority(33) = 66 bytes minimum.
-const MPL_CORE_ASSET_V1_MIN_LEN: usize = 66;
 
 /// POI system program ID for authorized equip operations via CPI
 pub const POI_SYSTEM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
@@ -209,20 +204,9 @@ pub mod player_inventory {
         let item = inventory.gear[slot_index as usize]
             .take()
             .ok_or(InventoryError::SlotEmpty)?;
+        inventory.gear_relic_assets[slot_index as usize] = None;
 
-        // Calculate HP bonus of the removed item (MaxHp effect like Work Vest)
-        let hp_bonus: i16 = if let Some(item_def) = get_item(&item.item_id) {
-            item_def
-                .effects
-                .iter()
-                .filter(|e| {
-                    e.trigger == TriggerType::BattleStart && e.effect_type == EffectType::MaxHp
-                })
-                .map(|e| e.value_for_tier(item.tier))
-                .sum()
-        } else {
-            0
-        };
+        let hp_bonus = item_hp_bonus(&item);
 
         // If there was an HP bonus, call gameplay-state to remove it
         if hp_bonus > 0 {
@@ -320,6 +304,13 @@ pub mod player_inventory {
         slot_b: u8,
     ) -> Result<()> {
         let inventory = &mut ctx.accounts.inventory;
+        let item_a = inventory.gear[slot_a as usize].ok_or(InventoryError::SlotEmpty)?;
+        let item_b = inventory.gear[slot_b as usize].ok_or(InventoryError::SlotEmpty)?;
+        require!(
+            !inventory.gear_slot_is_relic(slot_a as usize)
+                && !inventory.gear_slot_is_relic(slot_b as usize),
+            InventoryError::RelicModificationNotSupported
+        );
         let (item_id, old_tier, new_tier) = fuse_items_internal(inventory, slot_a, slot_b)?;
 
         emit!(ItemFused {
@@ -357,6 +348,9 @@ pub mod player_inventory {
         modification: ToolOilModification,
     ) -> Result<()> {
         let inventory = &mut ctx.accounts.inventory;
+        if inventory.tool_is_relic() {
+            return err!(InventoryError::RelicModificationNotSupported);
+        }
         apply_tool_oil_internal(inventory, modification)?;
 
         emit!(ToolOilApplied {
@@ -442,6 +436,7 @@ pub mod player_inventory {
             .ok_or(InventoryError::InventoryFull)?;
 
         inventory.gear[slot_index] = Some(ItemInstance::new(item_id, tier));
+        inventory.gear_relic_assets[slot_index] = None;
 
         // Calculate HP bonus if the item has BattleStart MaxHp effect (e.g., Work Vest)
         let hp_bonus: i16 = item_def
@@ -496,25 +491,11 @@ pub mod player_inventory {
         let inventory = &mut ctx.accounts.inventory;
 
         // Calculate HP bonus of old tool (if any) to remove
-        let old_hp_bonus: i16 = if let Some(ref old_tool) = inventory.tool {
-            if let Some(old_def) = get_item(&old_tool.item_id) {
-                old_def
-                    .effects
-                    .iter()
-                    .filter(|e| {
-                        e.trigger == TriggerType::BattleStart && e.effect_type == EffectType::MaxHp
-                    })
-                    .map(|e| e.value_for_tier(old_tool.tier))
-                    .sum()
-            } else {
-                0
-            }
-        } else {
-            0
-        };
+        let old_hp_bonus = inventory.tool.as_ref().map(item_hp_bonus).unwrap_or(0);
 
         // Equip new tool
         inventory.tool = Some(ItemInstance::new(item_id, tier));
+        inventory.tool_relic_asset = None;
 
         // Calculate HP bonus of new tool
         let new_hp_bonus: i16 = item_def
@@ -563,54 +544,78 @@ pub mod player_inventory {
         Ok(())
     }
 
-    /// Equips an NFT-backed gear item into the player's inventory.
-    /// Validates the NFT is owned by the player and the nft_item_id exists in the catalog.
-    pub fn equip_special_gear_authorized(
-        ctx: Context<EquipSpecialGearAuthorized>,
-        nft_item_id: [u8; 8],
+    /// Equips an asset-backed relic item into the player's inventory.
+    pub fn equip_relic_authorized(
+        ctx: Context<EquipRelicAuthorized>,
+        relic_item_id: [u8; 8],
+        relic_asset: Pubkey,
     ) -> Result<()> {
-        use crate::nft_items::get_nft_item;
-
-        // Validate the NFT item exists in catalog
-        let _item_def = get_nft_item(&nft_item_id).ok_or(InventoryError::InvalidItemId)?;
-
-        // Validate the account is owned by Metaplex Core program
-        require!(
-            *ctx.accounts.special_asset.owner == MPL_CORE_PROGRAM_ID,
-            InventoryError::Unauthorized
-        );
-
-        // Validate the NFT is owned by the player (read raw bytes from Metaplex Core asset)
-        let skin_data = ctx.accounts.special_asset.try_borrow_data()?;
-        require!(skin_data.len() >= MPL_CORE_ASSET_V1_MIN_LEN, InventoryError::Unauthorized);
-        // Verify the first byte is the AssetV1 key discriminator
-        require!(skin_data[0] == MPL_CORE_ASSET_V1_KEY, InventoryError::Unauthorized);
-
-        let mut owner_bytes = [0u8; 32];
-        owner_bytes.copy_from_slice(&skin_data[1..33]);
-        let asset_owner = Pubkey::new_from_array(owner_bytes);
-        require!(
-            asset_owner == ctx.accounts.inventory.player,
-            InventoryError::Unauthorized
-        );
-        drop(skin_data);
+        let item_def = get_relic_item(&relic_item_id).ok_or(InventoryError::InvalidItemId)?;
 
         let inventory = &mut ctx.accounts.inventory;
+        match item_def.item_type {
+            ItemType::Gear => {
+                let slot_index = inventory
+                    .find_empty_gear_slot()
+                    .ok_or(InventoryError::InventoryFull)?;
+                let item = ItemInstance::new(relic_item_id, Tier::I);
+                let hp_bonus = item_hp_bonus(&item);
+                inventory.gear[slot_index] = Some(item);
+                inventory.gear_relic_assets[slot_index] = Some(relic_asset);
 
-        // Find empty gear slot
-        let slot_index = inventory
-            .find_empty_gear_slot()
-            .ok_or(InventoryError::InventoryFull)?;
+                if hp_bonus > 0 {
+                    add_hp_bonus_cpi(
+                        &ctx.accounts.game_state,
+                        &ctx.accounts.inventory_authority,
+                        &ctx.accounts.gameplay_state_program,
+                        ctx.bumps.inventory_authority,
+                        hp_bonus,
+                    )?;
+                }
 
-        // Create ItemInstance for the NFT item
-        inventory.gear[slot_index] = Some(ItemInstance::new(nft_item_id, Tier::I));
+                emit!(ItemEquipped {
+                    player: inventory.player,
+                    item_id: relic_item_id,
+                    tier: Tier::I,
+                    slot: format!("gear[{}]", slot_index),
+                });
+            }
+            ItemType::Tool => {
+                let old_hp_bonus = inventory.tool.as_ref().map(item_hp_bonus).unwrap_or(0);
+                inventory.tool = Some(ItemInstance::new(relic_item_id, Tier::I));
+                inventory.tool_relic_asset = Some(relic_asset);
+                let new_hp_bonus = inventory.tool.as_ref().map(item_hp_bonus).unwrap_or(0);
+                let hp_delta = new_hp_bonus - old_hp_bonus;
 
-        emit!(ItemEquipped {
-            player: inventory.player,
-            item_id: nft_item_id,
-            tier: Tier::I,
-            slot: format!("gear[{}]", slot_index),
-        });
+                if hp_delta > 0 {
+                    add_hp_bonus_cpi(
+                        &ctx.accounts.game_state,
+                        &ctx.accounts.inventory_authority,
+                        &ctx.accounts.gameplay_state_program,
+                        ctx.bumps.inventory_authority,
+                        hp_delta,
+                    )?;
+                } else if hp_delta < 0 {
+                    let campaign_level = read_campaign_level(&ctx.accounts.game_state)?;
+                    let new_max_hp = calculate_max_hp_from_inventory(inventory, base_hp(campaign_level));
+                    remove_hp_bonus_cpi(
+                        &ctx.accounts.game_state,
+                        &ctx.accounts.inventory_authority,
+                        &ctx.accounts.gameplay_state_program,
+                        ctx.bumps.inventory_authority,
+                        -hp_delta,
+                        new_max_hp,
+                    )?;
+                }
+
+                emit!(ItemEquipped {
+                    player: inventory.player,
+                    item_id: relic_item_id,
+                    tier: Tier::I,
+                    slot: "tool".to_string(),
+                });
+            }
+        }
 
         Ok(())
     }
@@ -659,6 +664,19 @@ fn calculate_max_hp_from_inventory(inventory: &PlayerInventory, base: i16) -> i1
     base.saturating_add(hp_bonus)
 }
 
+fn item_hp_bonus(item: &ItemInstance) -> i16 {
+    let Some(definition) = get_item(&item.item_id).or_else(|| get_relic_item(&item.item_id)) else {
+        return 0;
+    };
+
+    definition
+        .effects
+        .iter()
+        .filter(|e| e.trigger == TriggerType::BattleStart && e.effect_type == EffectType::MaxHp)
+        .map(|e| e.value_for_tier(item.tier))
+        .sum()
+}
+
 fn fuse_items_internal(
     inventory: &mut PlayerInventory,
     slot_a: u8,
@@ -685,6 +703,8 @@ fn fuse_items_internal(
 
     inventory.gear[slot_a as usize] = Some(ItemInstance::new(item_id, new_tier));
     inventory.gear[slot_b as usize] = None;
+    inventory.gear_relic_assets[slot_a as usize] = None;
+    inventory.gear_relic_assets[slot_b as usize] = None;
 
     Ok((item_id, old_tier, new_tier))
 }
@@ -1065,9 +1085,9 @@ pub struct EquipToolAuthorized<'info> {
     pub gameplay_state_program: AccountInfo<'info>,
 }
 
-/// Context for equipping special NFT gear via authorized CPI from poi-system.
+/// Context for equipping relic items via authorized CPI from poi-system.
 #[derive(Accounts)]
-pub struct EquipSpecialGearAuthorized<'info> {
+pub struct EquipRelicAuthorized<'info> {
     #[account(
         mut,
         seeds = [b"inventory", inventory.session.as_ref()],
@@ -1083,10 +1103,22 @@ pub struct EquipSpecialGearAuthorized<'info> {
     )]
     pub poi_authority: Signer<'info>,
 
-    /// CHECK: Metaplex Core asset account. Validated in handler:
-    /// 1. AssetV1 discriminator check
-    /// 2. Owner field matches inventory player
-    pub special_asset: AccountInfo<'info>,
+    /// CHECK: PDA derived from player-inventory program, validated by seeds.
+    #[account(
+        seeds = [INVENTORY_AUTHORITY_SEED],
+        bump,
+    )]
+    pub inventory_authority: AccountInfo<'info>,
+
+    /// Gameplay state program for HP modification CPI
+    /// CHECK: Validated by program ID constant
+    #[account(address = GAMEPLAY_STATE_PROGRAM_ID)]
+    pub gameplay_state_program: AccountInfo<'info>,
+
+    /// Game state for HP bonus updates
+    /// CHECK: Validated by gameplay-state program
+    #[account(mut)]
+    pub game_state: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]

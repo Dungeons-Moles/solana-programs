@@ -164,7 +164,7 @@ async function main() {
       itemsCollection.publicKey.toString()
     );
   } catch (e: any) {
-    console.error("  Failed to create NFT items collection:", e.message || e);
+    console.error("  Failed to create relic items collection:", e.message || e);
     process.exit(1);
   }
 
@@ -216,7 +216,7 @@ async function main() {
   console.log("Skins Collection:", skinsCollection.publicKey.toString());
   console.log("NFT Items Collection:", itemsCollection.publicKey.toString());
   console.log("Marketplace Config:", marketplaceConfigPda.toBase58());
-  console.log("\nYou can now mint skins and NFT items using: anchor run mint-nft");
+  console.log("\nYou can now mint skins and relic items using: anchor run mint-nft");
 }
 
 main()

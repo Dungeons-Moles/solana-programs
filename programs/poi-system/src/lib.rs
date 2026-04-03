@@ -323,7 +323,7 @@ fn try_update_active_offer<'info>(
     Ok(())
 }
 
-/// Serialize shop state into 74-byte data blob for update_active_offer CPI.
+/// Serialize shop state for update_active_offer CPI.
 fn serialize_shop_offer_data(shop_state: &ShopState) -> Vec<u8> {
     let mut data = Vec::with_capacity(74);
     for offer in &shop_state.offers {
@@ -337,7 +337,7 @@ fn serialize_shop_offer_data(shop_state: &ShopState) -> Vec<u8> {
     data
 }
 
-/// Serialize cache offer items into 30-byte data blob for update_active_offer CPI.
+/// Serialize cache offer items for update_active_offer CPI.
 fn serialize_cache_offer_data(items: &[state::OfferItem; 3]) -> Vec<u8> {
     let mut data = Vec::with_capacity(30);
     for item in items {
@@ -607,8 +607,30 @@ fn equip_item_authorized_cpi<'info>(
     gameplay_state_program: &AccountInfo<'info>,
     poi_authority_bump: u8,
     item_id: [u8; 8],
+    relic_asset: Pubkey,
+    is_relic: bool,
     item_tier: u8,
 ) -> Result<()> {
+    if is_relic {
+        let signer_seeds: &[&[&[u8]]] = &[&[POI_AUTHORITY_SEED, &[poi_authority_bump]]];
+        player_inventory::cpi::equip_relic_authorized(
+            CpiContext::new_with_signer(
+                player_inventory_program.clone(),
+                player_inventory::cpi::accounts::EquipRelicAuthorized {
+                    inventory: inventory.clone(),
+                    poi_authority: poi_authority.clone(),
+                    inventory_authority: inventory_authority.clone(),
+                    gameplay_state_program: gameplay_state_program.clone(),
+                    game_state: game_state.clone(),
+                },
+                signer_seeds,
+            ),
+            item_id,
+            relic_asset,
+        )?;
+        return Ok(());
+    }
+
     let tier = offer_tier_to_inventory_tier(item_tier);
     if item_id[0] == b'T' {
         equip_tool_authorized_cpi(
@@ -1269,7 +1291,16 @@ pub mod poi_system {
 
         let pool = &ctx.accounts.game_session.active_item_pool;
 
-        let items = offers::generate_pool_filtered_cache_offers(poi_type, act, w1, w2, seed, pool);
+        let items = offers::generate_pool_filtered_cache_offers(
+            poi_type,
+            act,
+            w1,
+            w2,
+            seed,
+            pool,
+            &ctx.accounts.game_session.active_relics,
+            ctx.accounts.game_session.active_relic_count,
+        );
 
         map_pois.cache_offers.push(state::CacheOffer {
             poi_index,
@@ -1344,6 +1375,8 @@ pub mod poi_system {
             .iter()
             .map(|item| state::ItemOffer {
                 item_id: item.item_id,
+                relic_asset: item.relic_asset,
+                is_relic: item.is_relic,
                 tier: item.tier,
                 price: 0,
                 purchased: false,
@@ -1364,6 +1397,8 @@ pub mod poi_system {
             &ctx.accounts.gameplay_state_program.to_account_info(),
             ctx.bumps.poi_authority,
             result.item.item_id,
+            result.item.relic_asset,
+            result.item.is_relic,
             result.item.tier,
         )?;
 
@@ -1637,7 +1672,15 @@ pub mod poi_system {
             .unwrap_or(offers::WeaknessTag::Frost);
 
         let pool = &ctx.accounts.game_session.active_item_pool;
-        let generated = offers::generate_smuggler_hatch_offers(act, w1, w2, seed, pool);
+        let generated = offers::generate_smuggler_hatch_offers(
+            act,
+            w1,
+            w2,
+            seed,
+            pool,
+            &ctx.accounts.game_session.active_relics,
+            ctx.accounts.game_session.active_relic_count,
+        );
 
         // Initialize shop state
         map_pois.shop_state.active = true;
@@ -1708,6 +1751,8 @@ pub mod poi_system {
             &ctx.accounts.gameplay_state_program.to_account_info(),
             ctx.bumps.poi_authority,
             offer.item_id,
+            offer.relic_asset,
+            offer.is_relic,
             offer.tier,
         )?;
 
@@ -1793,7 +1838,15 @@ pub mod poi_system {
         let act = map_pois.act;
         let pool = &ctx.accounts.game_session.active_item_pool;
 
-        let generated = offers::generate_smuggler_hatch_offers(act, w1, w2, seed, pool);
+        let generated = offers::generate_smuggler_hatch_offers(
+            act,
+            w1,
+            w2,
+            seed,
+            pool,
+            &ctx.accounts.game_session.active_relics,
+            ctx.accounts.game_session.active_relic_count,
+        );
 
         copy_shop_offers(&mut map_pois.shop_state, &generated.offers, true);
 

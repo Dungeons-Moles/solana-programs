@@ -4,7 +4,7 @@
 
 use crate::items::get_item;
 use crate::itemsets::get_active_itemsets;
-use crate::nft_items::get_nft_item;
+use crate::relics::get_relic_item;
 use crate::state::{
     stat_bonus, EffectType, ItemEffect, ItemInstance, PlayerInventory, Tier, ToolOilModification,
 };
@@ -54,8 +54,8 @@ pub fn generate_item_effects(item: &ItemInstance) -> Vec<ItemEffect> {
             .collect();
     }
 
-    // Try NFT item registry
-    if let Some(definition) = get_nft_item(&item.item_id) {
+    // Try relic item registry
+    if let Some(definition) = get_relic_item(&item.item_id) {
         return definition
             .effects
             .iter()
@@ -261,7 +261,9 @@ mod tests {
             session: Pubkey::default(),
             player: Pubkey::default(),
             tool: None,
+            tool_relic_asset: None,
             gear: [None; 12],
+            gear_relic_assets: [None; 12],
             gear_slot_capacity: 4,
             bump: 0,
         }

@@ -181,6 +181,8 @@ pub enum EffectType {
     ApplyShrapnel,
     ApplyRust,
     ApplyBleed,
+    /// Apply a status that rotates by turn: 1=Chill, 2=Rust, 3=Bleed, repeat.
+    ApplyRotatingDebuff,
     RemoveArmor,
     RemoveOwnArmor,
     GainStrikes,

@@ -154,13 +154,13 @@ Mint with a custom metadata URI:
 MINT_TYPE=skin MINT_NAME="Your Skin Name" MINT_URI="https://your-metadata-uri.json" OWNER=<wallet_pubkey> anchor run mint-nft
 ```
 
-### Mint an NFT item
+### Mint a relic item
 
 ```bash
 MINT_TYPE=item MINT_NAME="Your Item Name" NFT_ITEM_ID="S-XX-01" anchor run mint-nft
 ```
 
-Mint an NFT item to a specific wallet:
+Mint a relic item to a specific wallet:
 
 ```bash
 MINT_TYPE=item MINT_NAME="Your Item Name" NFT_ITEM_ID="S-XX-01" OWNER=<wallet_pubkey> anchor run mint-nft

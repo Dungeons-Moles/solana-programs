@@ -70,6 +70,15 @@ export function getPlayerProfilePda(owner: PublicKey): [PublicKey, number] {
   );
 }
 
+export function getPlayerRelicPoolPda(
+  owner: PublicKey
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("player_relics"), owner.toBuffer()],
+    PROGRAM_IDS.playerProfile
+  );
+}
+
 // ── Map Generator PDAs ──────────────────────────────────────────────────────
 export function getMapConfigPda(): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
@@ -227,6 +236,14 @@ export function getInventoryPda(sessionPda: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("inventory"), sessionPda.toBuffer()],
     PROGRAM_IDS.playerInventory
+  );
+}
+
+// ── NFT Marketplace PDAs ───────────────────────────────────────────────────
+export function getRelicAssetPda(asset: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("relic_asset"), asset.toBuffer()],
+    PROGRAM_IDS.nftMarketplace
   );
 }
 

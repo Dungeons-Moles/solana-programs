@@ -2,9 +2,16 @@ use anchor_lang::prelude::*;
 
 /// Size of item bitmask in bytes (80 bits = 10 bytes)
 pub const SESSION_ITEM_BITMASK_SIZE: usize = 10;
+pub const MAX_SESSION_RELICS: usize = 16;
 
 /// Empty state hash constant (all zeros)
 pub const EMPTY_STATE_HASH: [u8; 32] = [0u8; 32];
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, Default, PartialEq, Eq, InitSpace)]
+pub struct SessionRelicEntry {
+    pub asset: Pubkey,
+    pub item_id: [u8; 8],
+}
 
 /// Represents an active game session for a player.
 /// Campaign PDA seeds: [b"session", player.key(), &[campaign_level]]
@@ -28,6 +35,9 @@ pub struct GameSession {
     /// Snapshot of player's active_item_pool at session start
     /// Determines which items can appear in POI offers during this session
     pub active_item_pool: [u8; SESSION_ITEM_BITMASK_SIZE],
+    /// Snapshot of active relics at session start.
+    pub active_relic_count: u8,
+    pub active_relics: [SessionRelicEntry; MAX_SESSION_RELICS],
     /// Session key signer pubkey for gameplay transactions
     /// SOL is transferred to this wallet at session start
     pub session_signer: Pubkey,
@@ -52,14 +62,21 @@ impl GameSession {
     /// Account space calculation
     /// 8 (discriminator) + 32 (player) + 8 (session_id) + 1 (campaign_level) +
     /// 8 (started_at) + 8 (last_activity) + 1 (is_delegated) + 1 (bump) +
-    /// 10 (active_item_pool) + 32 (session_signer) + 32 (state_hash) +
+    /// 10 (active_item_pool) + 1 (active_relic_count) + 16 * 40 (active_relics) +
+    /// 32 (session_signer) + 32 (state_hash) +
     /// 1 (settled) + 1 (settled_victory) + 8 (settled_at)
-    pub const INIT_SPACE: usize = 32 + 8 + 1 + 8 + 8 + 1 + 1 + 10 + 32 + 32 + 1 + 1 + 8;
+    pub const INIT_SPACE: usize =
+        32 + 8 + 1 + 8 + 8 + 1 + 1 + 10 + 1 + (MAX_SESSION_RELICS * SessionRelicEntry::INIT_SPACE)
+            + 32
+            + 32
+            + 1
+            + 1
+            + 8;
 
     /// Byte offset of `player` field in serialized account data (after 8-byte discriminator).
     pub const PLAYER_OFFSET: usize = 8;
     /// Byte offset of `session_signer` field in serialized account data.
-    pub const SESSION_SIGNER_OFFSET: usize = 77;
+    pub const SESSION_SIGNER_OFFSET: usize = 718;
 }
 
 /// Per-player session nonces for override-based recovery.

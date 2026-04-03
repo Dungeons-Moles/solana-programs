@@ -1763,109 +1763,18 @@ pub mod gameplay_state {
         );
         let randomness = &vrf_state.randomness;
         let nonce = vrf_state.nonce;
-
-        // Build inventories from VRF
-        let pool_a = waiting_profile.active_item_pool;
-        let pool_b = ctx.accounts.player_profile.active_item_pool;
-
-        let waiting_inventory = build_pit_draft_inventory_vrf(
+        resolve_pit_draft_match(
+            ctx.accounts.pit_draft_vault.to_account_info(),
+            ctx.accounts.player.to_account_info(),
+            ctx.accounts.player_profile.active_item_pool,
             waiting_player,
-            pool_a,
-            (randomness, nonce),
-            b"pit_waiting",
+            waiting_profile.active_item_pool,
+            waiting_player_wallet.to_account_info(),
+            company_treasury.to_account_info(),
+            gauntlet_pool_vault.to_account_info(),
+            randomness,
+            nonce,
         )?;
-        let entrant_inventory =
-            build_pit_draft_inventory_vrf(player_key, pool_b, (randomness, nonce), b"pit_entrant")?;
-
-        let waiting_stats =
-            calculate_stats(&waiting_inventory, GAUNTLET_CAMPAIGN_LEVEL, RunMode::Duel);
-        let entrant_stats =
-            calculate_stats(&entrant_inventory, GAUNTLET_CAMPAIGN_LEVEL, RunMode::Duel);
-
-        // Gold derivation from VRF
-        let mut gold_rng =
-            vrf_rng::GameRng::from_vrf(randomness, nonce, vrf_rng::domains::PIT_DRAFT_GOLD);
-        let waiting_start_gold =
-            gold_rng.next_bounded(u64::from(PIT_DRAFT_MAX_START_GOLD) + 1) as u16;
-        let entrant_start_gold =
-            gold_rng.next_bounded(u64::from(PIT_DRAFT_MAX_START_GOLD) + 1) as u16;
-
-        let all_waiting_effects = generate_annotated_combat_effects(&waiting_inventory);
-        let all_entrant_effects = generate_annotated_combat_effects(&entrant_inventory);
-
-        // Build combatant inputs first (borrows effects by ref), then consume
-        // effects via strip (takes ownership) — avoids clone() heap waste.
-        let waiting_combatant = build_full_hp_combatant(&waiting_stats, &all_waiting_effects);
-        let entrant_combatant = build_full_hp_combatant(&entrant_stats, &all_entrant_effects);
-        let waiting_effects = strip_baked_battle_start_stat_effects(all_waiting_effects);
-        let entrant_effects = strip_baked_battle_start_stat_effects(all_entrant_effects);
-
-        let combat_outcome = resolve_pvp_combat_annotated_with_both_gold(
-            waiting_combatant,
-            entrant_combatant,
-            waiting_effects,
-            entrant_effects,
-            waiting_start_gold,
-            entrant_start_gold,
-            pit_draft_final_tie_player_a_wins(randomness, nonce),
-        )?;
-
-        emit!(PitDraftCombatVisual {
-            player_a: waiting_player,
-            player_b: player_key,
-            player_a_tool: waiting_inventory.tool,
-            player_a_gear: waiting_inventory.gear,
-            player_b_tool: entrant_inventory.tool,
-            player_b_gear: entrant_inventory.gear,
-            player_a_won: combat_outcome.player_won,
-            final_player_a_hp: combat_outcome.final_player_hp,
-            final_player_b_hp: combat_outcome.final_enemy_hp,
-            turns_taken: combat_outcome.turns_taken,
-        });
-
-        let total_pot = PIT_DRAFT_ENTRY_LAMPORTS
-            .checked_mul(2)
-            .ok_or(GameplayStateError::ArithmeticOverflow)?;
-        let (company_fee, gauntlet_fee, winner_payout) = compute_pvp_pot_split(total_pot)?;
-
-        let winner_account = if combat_outcome.player_won {
-            waiting_player_wallet.to_account_info()
-        } else {
-            ctx.accounts.player.to_account_info()
-        };
-        let winner = if combat_outcome.player_won {
-            waiting_player
-        } else {
-            player_key
-        };
-
-        transfer_lamports_from_vault(
-            &ctx.accounts.pit_draft_vault.to_account_info(),
-            &winner_account,
-            winner_payout,
-        )?;
-        transfer_lamports_from_vault(
-            &ctx.accounts.pit_draft_vault.to_account_info(),
-            &company_treasury.to_account_info(),
-            company_fee,
-        )?;
-        transfer_lamports_from_vault(
-            &ctx.accounts.pit_draft_vault.to_account_info(),
-            &gauntlet_pool_vault.to_account_info(),
-            gauntlet_fee,
-        )?;
-
-        emit!(PitDraftResolved {
-            player_a: waiting_player,
-            player_b: player_key,
-            winner,
-            entry_lamports: PIT_DRAFT_ENTRY_LAMPORTS,
-            total_pot,
-            winner_payout,
-            company_fee,
-            gauntlet_fee,
-            turns_taken: combat_outcome.turns_taken,
-        });
 
         // Clear queue
         queue.waiting_player = None;
@@ -3325,10 +3234,111 @@ fn build_pit_draft_inventory_vrf(
         session: Pubkey::default(),
         player,
         tool: Some(tool),
+        tool_relic_asset: None,
         gear,
+        gear_relic_assets: [None; 12],
         gear_slot_capacity: MAX_GEAR_SLOTS,
         bump: 0,
     })
+}
+
+#[inline(never)]
+fn resolve_pit_draft_match<'info>(
+    pit_draft_vault: AccountInfo<'info>,
+    entrant_wallet: AccountInfo<'info>,
+    entrant_pool: [u8; 10],
+    waiting_player: Pubkey,
+    waiting_pool: [u8; 10],
+    waiting_player_wallet: AccountInfo<'info>,
+    company_treasury: AccountInfo<'info>,
+    gauntlet_pool_vault: AccountInfo<'info>,
+    randomness: &[u8; 32],
+    nonce: u64,
+) -> Result<()> {
+    let waiting_inventory = Box::new(build_pit_draft_inventory_vrf(
+        waiting_player,
+        waiting_pool,
+        (randomness, nonce),
+        b"pit_waiting",
+    )?);
+    let entrant_inventory = Box::new(build_pit_draft_inventory_vrf(
+        entrant_wallet.key(),
+        entrant_pool,
+        (randomness, nonce),
+        b"pit_entrant",
+    )?);
+
+    let waiting_stats = calculate_stats(&waiting_inventory, GAUNTLET_CAMPAIGN_LEVEL, RunMode::Duel);
+    let entrant_stats = calculate_stats(&entrant_inventory, GAUNTLET_CAMPAIGN_LEVEL, RunMode::Duel);
+
+    let mut gold_rng =
+        vrf_rng::GameRng::from_vrf(randomness, nonce, vrf_rng::domains::PIT_DRAFT_GOLD);
+    let waiting_start_gold = gold_rng.next_bounded(u64::from(PIT_DRAFT_MAX_START_GOLD) + 1) as u16;
+    let entrant_start_gold = gold_rng.next_bounded(u64::from(PIT_DRAFT_MAX_START_GOLD) + 1) as u16;
+
+    let all_waiting_effects = generate_annotated_combat_effects(&waiting_inventory);
+    let all_entrant_effects = generate_annotated_combat_effects(&entrant_inventory);
+    let waiting_combatant = build_full_hp_combatant(&waiting_stats, &all_waiting_effects);
+    let entrant_combatant = build_full_hp_combatant(&entrant_stats, &all_entrant_effects);
+    let waiting_effects = strip_baked_battle_start_stat_effects(all_waiting_effects);
+    let entrant_effects = strip_baked_battle_start_stat_effects(all_entrant_effects);
+
+    let combat_outcome = resolve_pvp_combat_annotated_with_both_gold(
+        waiting_combatant,
+        entrant_combatant,
+        waiting_effects,
+        entrant_effects,
+        waiting_start_gold,
+        entrant_start_gold,
+        pit_draft_final_tie_player_a_wins(randomness, nonce),
+    )?;
+
+    emit!(PitDraftCombatVisual {
+        player_a: waiting_player,
+        player_b: entrant_wallet.key(),
+        player_a_tool: waiting_inventory.tool,
+        player_a_gear: waiting_inventory.gear,
+        player_b_tool: entrant_inventory.tool,
+        player_b_gear: entrant_inventory.gear,
+        player_a_won: combat_outcome.player_won,
+        final_player_a_hp: combat_outcome.final_player_hp,
+        final_player_b_hp: combat_outcome.final_enemy_hp,
+        turns_taken: combat_outcome.turns_taken,
+    });
+
+    let total_pot = PIT_DRAFT_ENTRY_LAMPORTS
+        .checked_mul(2)
+        .ok_or(GameplayStateError::ArithmeticOverflow)?;
+    let (company_fee, gauntlet_fee, winner_payout) = compute_pvp_pot_split(total_pot)?;
+    if combat_outcome.player_won {
+        transfer_lamports_from_vault(&pit_draft_vault, &waiting_player_wallet, winner_payout)?;
+    } else {
+        transfer_lamports_from_vault(&pit_draft_vault, &entrant_wallet, winner_payout)?;
+    }
+    transfer_lamports_from_vault(&pit_draft_vault, &company_treasury, company_fee)?;
+    transfer_lamports_from_vault(
+        &pit_draft_vault,
+        &gauntlet_pool_vault,
+        gauntlet_fee,
+    )?;
+
+    emit!(PitDraftResolved {
+        player_a: waiting_player,
+        player_b: entrant_wallet.key(),
+        winner: if combat_outcome.player_won {
+            waiting_player
+        } else {
+            entrant_wallet.key()
+        },
+        entry_lamports: PIT_DRAFT_ENTRY_LAMPORTS,
+        total_pot,
+        winner_payout,
+        company_fee,
+        gauntlet_fee,
+        turns_taken: combat_outcome.turns_taken,
+    });
+
+    Ok(())
 }
 
 /// Extracts VRF randomness from an optional GameplayVrfState account.
@@ -3550,7 +3560,9 @@ fn snapshot_duel_entry_inventory(entry: &DuelEntry) -> PlayerInventory {
         player: entry.player,
         session: entry.session,
         tool: entry.loadout.tool,
+        tool_relic_asset: None,
         gear: entry.loadout.gear,
+        gear_relic_assets: [None; 12],
         gear_slot_capacity: 12,
         bump: 0,
     }
@@ -3561,7 +3573,9 @@ fn snapshot_creator_inventory(entry: DuelCreatorEntry) -> PlayerInventory {
         player: entry.player,
         session: Pubkey::default(),
         tool: entry.loadout.tool,
+        tool_relic_asset: None,
         gear: entry.loadout.gear,
+        gear_relic_assets: [None; 12],
         gear_slot_capacity: 12,
         bump: 0,
     }
@@ -4543,7 +4557,9 @@ fn snapshot_to_inventory(
         session,
         player,
         tool: snapshot.loadout.tool,
+        tool_relic_asset: None,
         gear: snapshot.loadout.gear,
+        gear_relic_assets: [None; 12],
         gear_slot_capacity: MAX_GEAR_SLOTS,
         bump: 0,
     }

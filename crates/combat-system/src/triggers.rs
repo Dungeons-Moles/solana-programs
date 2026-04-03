@@ -284,7 +284,7 @@ pub fn apply_effect(
     value: i16,
     stats: &mut CombatantStats,
     status: &mut StatusEffects,
-    _turn: u8,
+    turn: u8,
     is_target_player: bool,
     player_gold: &mut u16,
     enemy_gold: &mut u16,
@@ -340,6 +340,11 @@ pub fn apply_effect(
         EffectType::ApplyBleed => {
             apply_status_effect(&mut status.bleed, value);
         }
+        EffectType::ApplyRotatingDebuff => match (turn.saturating_sub(1)) % 3 {
+            0 => apply_status_effect(&mut status.chill, value),
+            1 => apply_status_effect(&mut status.rust, value),
+            _ => apply_status_effect(&mut status.bleed, value),
+        },
         EffectType::RemoveArmor => {
             let reduced = stats.arm.checked_sub(value).unwrap_or(i16::MIN);
             stats.arm = reduced.max(0);
@@ -920,6 +925,7 @@ fn is_status_effect(effect_type: EffectType) -> bool {
             | EffectType::ApplyShrapnel
             | EffectType::ApplyRust
             | EffectType::ApplyBleed
+            | EffectType::ApplyRotatingDebuff
             | EffectType::ApplyReflection
     )
 }
@@ -938,6 +944,7 @@ fn targets_opponent(effect_type: EffectType) -> bool {
             | EffectType::ApplyChill
             | EffectType::ApplyRust
             | EffectType::ApplyBleed
+            | EffectType::ApplyRotatingDebuff
             | EffectType::RemoveArmor
             | EffectType::ApplyBomb
             | EffectType::StealGold
@@ -2413,5 +2420,86 @@ mod tests {
         );
 
         assert_eq!(opponent_stats.hp, 15);
+    }
+
+    #[test]
+    fn test_apply_rotating_debuff_cycles_by_turn() {
+        let mut owner_stats = CombatantStats::default();
+        let mut owner_status = StatusEffects::default();
+        let mut opponent_stats = CombatantStats::default();
+        opponent_stats.hp = 10;
+        opponent_stats.max_hp = 10;
+        let mut opponent_status = StatusEffects::default();
+
+        let mut effects = vec![annotate(ItemEffect {
+            trigger: TriggerType::OnHit,
+            once_per_turn: true,
+            effect_type: EffectType::ApplyRotatingDebuff,
+            value: 1,
+            condition: Condition::None,
+        })];
+        let mut flags = vec![false; effects.len()];
+        let mut player_gold: u16 = 0;
+        let mut enemy_gold: u16 = 0;
+        let mut gold_change = 0i16;
+
+        process_triggers_for_phase(
+            &mut effects,
+            TriggerType::OnHit,
+            1,
+            &mut owner_stats,
+            &mut owner_status,
+            &mut opponent_stats,
+            &mut opponent_status,
+            &mut flags,
+            true,
+            true,
+            &mut player_gold,
+            &mut enemy_gold,
+            &mut gold_change,
+        );
+        assert_eq!(opponent_status.chill, 1);
+        assert_eq!(opponent_status.rust, 0);
+        assert_eq!(opponent_status.bleed, 0);
+
+        reset_once_per_turn_flags(&mut flags);
+        process_triggers_for_phase(
+            &mut effects,
+            TriggerType::OnHit,
+            2,
+            &mut owner_stats,
+            &mut owner_status,
+            &mut opponent_stats,
+            &mut opponent_status,
+            &mut flags,
+            true,
+            true,
+            &mut player_gold,
+            &mut enemy_gold,
+            &mut gold_change,
+        );
+        assert_eq!(opponent_status.chill, 1);
+        assert_eq!(opponent_status.rust, 1);
+        assert_eq!(opponent_status.bleed, 0);
+
+        reset_once_per_turn_flags(&mut flags);
+        process_triggers_for_phase(
+            &mut effects,
+            TriggerType::OnHit,
+            3,
+            &mut owner_stats,
+            &mut owner_status,
+            &mut opponent_stats,
+            &mut opponent_status,
+            &mut flags,
+            true,
+            true,
+            &mut player_gold,
+            &mut enemy_gold,
+            &mut gold_change,
+        );
+        assert_eq!(opponent_status.chill, 1);
+        assert_eq!(opponent_status.rust, 1);
+        assert_eq!(opponent_status.bleed, 1);
     }
 }

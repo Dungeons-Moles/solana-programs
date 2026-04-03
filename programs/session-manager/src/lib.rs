@@ -13,7 +13,10 @@ use gameplay_state::state::{DuelEntry, GameState};
 use map_generator::program::MapGenerator;
 use map_generator::state::GeneratedMap;
 use player_inventory::program::PlayerInventory;
-use state::{GameSession, SessionCounter, SessionNonces, EMPTY_STATE_HASH};
+use state::{
+    GameSession, SessionCounter, SessionNonces, SessionRelicEntry, MAX_SESSION_RELICS,
+    EMPTY_STATE_HASH,
+};
 
 declare_id!("CrU4bUFreKy2XsoU2oksdJWKim11w2VpagKBQ2MTkyMz");
 
@@ -41,6 +44,12 @@ pub const MAP_GENERATOR_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     0x1b, 0x52, 0x47, 0x61, 0xfa, 0xb6, 0x73, 0x57, 0xc8, 0xa3, 0x1f, 0xbd, 0x67, 0xe8, 0x8d, 0xe5,
 ]);
 
+/// NFT marketplace program ID for validating relic metadata proofs.
+pub const NFT_MARKETPLACE_PROGRAM_ID: Pubkey = pubkey!("GLKxBpZ8hc7qzvD9VHAVsJEjHSu2JVp1HaPrGH4fpTci");
+
+/// Metaplex Core program ID for validating asset ownership proofs.
+pub const MPL_CORE_PROGRAM_ID: Pubkey = pubkey!("CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d");
+
 /// Discriminator for player_profile::consume_run instruction.
 /// Computed as sha256("global:consume_run")[..8].
 ///
@@ -48,6 +57,10 @@ pub const MAP_GENERATOR_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
 /// manual PlayerProfile struct (avoiding circular deps). If player-profile's
 /// consume_run instruction changes, this must be updated.
 pub const CONSUME_RUN_DISCRIMINATOR: [u8; 8] = [0x6b, 0x65, 0x36, 0x52, 0x84, 0x9c, 0x0f, 0x22];
+/// Discriminator for player_profile::sync_relic_ownership instruction.
+/// Computed as sha256("global:sync_relic_ownership")[..8].
+pub const SYNC_RELIC_OWNERSHIP_DISCRIMINATOR: [u8; 8] =
+    [35, 216, 49, 188, 212, 247, 12, 202];
 
 /// Discriminator for poi_system::initialize_map_pois instruction.
 /// Computed as sha256("global:initialize_map_pois")[..8].
@@ -126,6 +139,24 @@ pub mod session_manager {
         let clock = Clock::get()?;
         let session_player = ctx.accounts.player.key();
         let session_signer_key = ctx.accounts.session_signer.key();
+        if let Some(pool) = ctx.accounts.player_relic_pool.as_mut() {
+            let owned_item_ids =
+                collect_owned_relic_item_ids(ctx.accounts.player.key(), ctx.remaining_accounts)?;
+            sync_relic_ownership_cpi(
+                &ctx.accounts.player_profile_program.to_account_info(),
+                &pool.to_account_info(),
+                &ctx.accounts.player.to_account_info(),
+                owned_item_ids,
+            )?;
+            pool.reload()?;
+        } else {
+            require!(
+                ctx.remaining_accounts.is_empty(),
+                SessionManagerError::InvalidRelicOwnershipProofs
+            );
+        }
+        let (active_relic_count, active_relics) =
+            session_relic_snapshot(ctx.accounts.player_relic_pool.as_ref());
 
         // Increment counter and get new session ID
         counter.count = counter
@@ -145,6 +176,8 @@ pub mod session_manager {
             session.bump = ctx.bumps.game_session;
             // Copy active_item_pool from profile to session
             session.active_item_pool = player_profile.active_item_pool;
+            session.active_relic_count = active_relic_count;
+            session.active_relics = active_relics;
             // Store session key signer pubkey
             session.session_signer = session_signer_key;
             session.settled = false;
@@ -271,6 +304,24 @@ pub mod session_manager {
         let clock = Clock::get()?;
         let session_player = ctx.accounts.player.key();
         let session_signer_key = ctx.accounts.session_signer.key();
+        if let Some(pool) = ctx.accounts.player_relic_pool.as_mut() {
+            let owned_item_ids =
+                collect_owned_relic_item_ids(ctx.accounts.player.key(), ctx.remaining_accounts)?;
+            sync_relic_ownership_cpi(
+                &ctx.accounts.player_profile_program.to_account_info(),
+                &pool.to_account_info(),
+                &ctx.accounts.player.to_account_info(),
+                owned_item_ids,
+            )?;
+            pool.reload()?;
+        } else {
+            require!(
+                ctx.remaining_accounts.is_empty(),
+                SessionManagerError::InvalidRelicOwnershipProofs
+            );
+        }
+        let (active_relic_count, active_relics) =
+            session_relic_snapshot(ctx.accounts.player_relic_pool.as_ref());
 
         counter.count = counter
             .count
@@ -304,6 +355,8 @@ pub mod session_manager {
             session.state_hash = EMPTY_STATE_HASH;
             session.bump = ctx.bumps.game_session;
             session.active_item_pool = player_profile.active_item_pool;
+            session.active_relic_count = active_relic_count;
+            session.active_relics = active_relics;
             session.session_signer = session_signer_key;
             session.settled = false;
             session.settled_victory = false;
@@ -432,6 +485,24 @@ pub mod session_manager {
         let clock = Clock::get()?;
         let session_player = ctx.accounts.player.key();
         let session_signer_key = ctx.accounts.session_signer.key();
+        if let Some(pool) = ctx.accounts.player_relic_pool.as_mut() {
+            let owned_item_ids =
+                collect_owned_relic_item_ids(ctx.accounts.player.key(), ctx.remaining_accounts)?;
+            sync_relic_ownership_cpi(
+                &ctx.accounts.player_profile_program.to_account_info(),
+                &pool.to_account_info(),
+                &ctx.accounts.player.to_account_info(),
+                owned_item_ids,
+            )?;
+            pool.reload()?;
+        } else {
+            require!(
+                ctx.remaining_accounts.is_empty(),
+                SessionManagerError::InvalidRelicOwnershipProofs
+            );
+        }
+        let (active_relic_count, active_relics) =
+            session_relic_snapshot(ctx.accounts.player_relic_pool.as_ref());
 
         counter.count = counter
             .count
@@ -465,6 +536,8 @@ pub mod session_manager {
             session.state_hash = EMPTY_STATE_HASH;
             session.bump = ctx.bumps.game_session;
             session.active_item_pool = player_profile.active_item_pool;
+            session.active_relic_count = active_relic_count;
+            session.active_relics = active_relics;
             session.session_signer = session_signer_key;
             session.settled = false;
             session.settled_victory = false;
@@ -1856,6 +1929,165 @@ impl anchor_lang::Owner for PlayerProfile {
     }
 }
 
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, Default)]
+pub struct PlayerRelicEntry {
+    pub item_id: [u8; 8],
+    pub owned_count: u16,
+    pub in_active_pool: bool,
+}
+
+#[derive(Clone)]
+pub struct PlayerRelicPoolRef;
+
+impl anchor_lang::Id for PlayerRelicPoolRef {
+    fn id() -> Pubkey {
+        PLAYER_PROFILE_PROGRAM_ID
+    }
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct PlayerRelicPool {
+    pub owner: Pubkey,
+    pub count: u8,
+    pub relics: Vec<PlayerRelicEntry>,
+    pub bump: u8,
+}
+
+impl PlayerRelicPool {
+    pub const DISCRIMINATOR: [u8; 8] = [1, 105, 67, 203, 111, 254, 159, 128];
+}
+
+impl anchor_lang::AccountDeserialize for PlayerRelicPool {
+    fn try_deserialize_unchecked(buf: &mut &[u8]) -> anchor_lang::Result<Self> {
+        if buf.len() < 8 {
+            return Err(anchor_lang::error::ErrorCode::AccountDiscriminatorNotFound.into());
+        }
+        let discriminator = &buf[..8];
+        if discriminator != Self::DISCRIMINATOR {
+            return Err(anchor_lang::error::ErrorCode::AccountDiscriminatorMismatch.into());
+        }
+        *buf = &buf[8..];
+        Self::deserialize(buf)
+            .map_err(|_| anchor_lang::error::ErrorCode::AccountDidNotDeserialize.into())
+    }
+}
+
+impl anchor_lang::AccountSerialize for PlayerRelicPool {}
+
+impl anchor_lang::Owner for PlayerRelicPool {
+    fn owner() -> Pubkey {
+        PLAYER_PROFILE_PROGRAM_ID
+    }
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+struct RelicAssetAccount {
+    pub asset: Pubkey,
+    pub item_id: [u8; 8],
+    pub bump: u8,
+}
+
+impl RelicAssetAccount {
+    const DISCRIMINATOR: [u8; 8] = [222, 160, 151, 133, 226, 88, 154, 91];
+}
+
+impl anchor_lang::AccountDeserialize for RelicAssetAccount {
+    fn try_deserialize_unchecked(buf: &mut &[u8]) -> anchor_lang::Result<Self> {
+        if buf.len() < 8 {
+            return Err(anchor_lang::error::ErrorCode::AccountDiscriminatorNotFound.into());
+        }
+        let discriminator = &buf[..8];
+        if discriminator != Self::DISCRIMINATOR {
+            return Err(anchor_lang::error::ErrorCode::AccountDiscriminatorMismatch.into());
+        }
+        *buf = &buf[8..];
+        Self::deserialize(buf)
+            .map_err(|_| anchor_lang::error::ErrorCode::AccountDidNotDeserialize.into())
+    }
+}
+
+fn read_metaplex_asset_owner(asset_info: &AccountInfo<'_>) -> Result<Pubkey> {
+    require!(
+        *asset_info.owner == MPL_CORE_PROGRAM_ID,
+        SessionManagerError::InvalidRelicOwnershipProofs
+    );
+    let data = asset_info.try_borrow_data()?;
+    require!(
+        data.len() >= 33 && data[0] == 1,
+        SessionManagerError::InvalidRelicOwnershipProofs
+    );
+    let mut owner_bytes = [0u8; 32];
+    owner_bytes.copy_from_slice(&data[1..33]);
+    Ok(Pubkey::new_from_array(owner_bytes))
+}
+
+fn collect_owned_relic_item_ids(
+    owner: Pubkey,
+    remaining_accounts: &[AccountInfo<'_>],
+) -> Result<Vec<[u8; 8]>> {
+    require!(
+        remaining_accounts.len() % 2 == 0,
+        SessionManagerError::InvalidRelicOwnershipProofs
+    );
+
+    let mut owned_item_ids = Vec::with_capacity(remaining_accounts.len() / 2);
+    for proof_accounts in remaining_accounts.chunks_exact(2) {
+        let asset_info = &proof_accounts[0];
+        let relic_asset_info = &proof_accounts[1];
+
+        require!(
+            read_metaplex_asset_owner(asset_info)? == owner,
+            SessionManagerError::InvalidRelicOwnershipProofs
+        );
+        require!(
+            *relic_asset_info.owner == NFT_MARKETPLACE_PROGRAM_ID,
+            SessionManagerError::InvalidRelicOwnershipProofs
+        );
+
+        let expected_relic_asset = Pubkey::find_program_address(
+            &[b"relic_asset", asset_info.key.as_ref()],
+            &NFT_MARKETPLACE_PROGRAM_ID,
+        )
+        .0;
+        require!(
+            expected_relic_asset == *relic_asset_info.key,
+            SessionManagerError::InvalidRelicOwnershipProofs
+        );
+
+        let mut relic_asset_data: &[u8] = &relic_asset_info.try_borrow_data()?;
+        let relic_asset = RelicAssetAccount::try_deserialize_unchecked(&mut relic_asset_data)
+            .map_err(|_| SessionManagerError::InvalidRelicOwnershipProofs)?;
+        require!(
+            relic_asset.asset == *asset_info.key,
+            SessionManagerError::InvalidRelicOwnershipProofs
+        );
+
+        owned_item_ids.push(relic_asset.item_id);
+    }
+
+    Ok(owned_item_ids)
+}
+
+fn session_relic_snapshot(pool: Option<&Account<'_, PlayerRelicPool>>) -> (u8, [SessionRelicEntry; MAX_SESSION_RELICS]) {
+    let mut relics = [SessionRelicEntry::default(); MAX_SESSION_RELICS];
+    let mut count = 0usize;
+
+    if let Some(pool) = pool {
+        for entry in pool.relics.iter().filter(|entry| entry.in_active_pool) {
+            if count >= MAX_SESSION_RELICS {
+                break;
+            }
+            relics[count] = SessionRelicEntry {
+                asset: Pubkey::default(),
+                item_id: entry.item_id,
+            };
+            count += 1;
+        }
+    }
+
+    (count as u8, relics)
+}
+
 #[derive(Accounts)]
 #[instruction(campaign_level: u8)]
 pub struct StartSession<'info> {
@@ -1892,6 +2124,14 @@ pub struct StartSession<'info> {
         seeds::program = PlayerProfileRef::id()
     )]
     pub player_profile: Account<'info, PlayerProfile>,
+
+    #[account(
+        mut,
+        seeds = [b"player_relics", player.key().as_ref()],
+        bump,
+        seeds::program = PlayerRelicPoolRef::id()
+    )]
+    pub player_relic_pool: Option<Account<'info, PlayerRelicPool>>,
 
     #[account(mut)]
     pub player: Signer<'info>,
@@ -1968,6 +2208,14 @@ pub struct StartDuelSession<'info> {
     )]
     pub player_profile: Account<'info, PlayerProfile>,
 
+    #[account(
+        mut,
+        seeds = [b"player_relics", player.key().as_ref()],
+        bump,
+        seeds::program = PlayerRelicPoolRef::id()
+    )]
+    pub player_relic_pool: Option<Account<'info, PlayerRelicPool>>,
+
     #[account(mut)]
     pub player: Signer<'info>,
 
@@ -2012,6 +2260,9 @@ pub struct StartDuelSession<'info> {
     /// CHECK: POI system program for manual CPI, validated by address constraint
     pub poi_system_program: UncheckedAccount<'info>,
     pub player_inventory_program: Program<'info, PlayerInventory>,
+    #[account(address = PLAYER_PROFILE_PROGRAM_ID)]
+    /// CHECK: Player profile program for manual CPI, validated by address constraint
+    pub player_profile_program: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -2050,6 +2301,14 @@ pub struct StartGauntletSession<'info> {
     )]
     pub player_profile: Account<'info, PlayerProfile>,
 
+    #[account(
+        mut,
+        seeds = [b"player_relics", player.key().as_ref()],
+        bump,
+        seeds::program = PlayerRelicPoolRef::id()
+    )]
+    pub player_relic_pool: Option<Account<'info, PlayerRelicPool>>,
+
     #[account(mut)]
     pub player: Signer<'info>,
 
@@ -2094,6 +2353,9 @@ pub struct StartGauntletSession<'info> {
     /// CHECK: POI system program for manual CPI, validated by address constraint
     pub poi_system_program: UncheckedAccount<'info>,
     pub player_inventory_program: Program<'info, PlayerInventory>,
+    #[account(address = PLAYER_PROFILE_PROGRAM_ID)]
+    /// CHECK: Player profile program for manual CPI, validated by address constraint
+    pub player_profile_program: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -3047,6 +3309,25 @@ fn consume_run_cpi<'info>(
         &CONSUME_RUN_DISCRIMINATOR,
         &[],
         &[(player_profile, true, false), (owner, false, true)],
+    )
+}
+
+fn sync_relic_ownership_cpi<'info>(
+    program: &AccountInfo<'info>,
+    player_relic_pool: &AccountInfo<'info>,
+    owner: &AccountInfo<'info>,
+    owned_relic_item_ids: Vec<[u8; 8]>,
+) -> Result<()> {
+    let extra = owned_relic_item_ids
+        .try_to_vec()
+        .map_err(|_| anchor_lang::error::ErrorCode::InstructionDidNotSerialize)?;
+
+    invoke_manual_cpi(
+        program,
+        PLAYER_PROFILE_PROGRAM_ID,
+        &SYNC_RELIC_OWNERSHIP_DISCRIMINATOR,
+        &extra,
+        &[(player_relic_pool, true, false), (owner, false, true)],
     )
 }
 

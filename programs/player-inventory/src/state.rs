@@ -237,8 +237,12 @@ pub struct PlayerInventory {
     pub player: Pubkey,
     /// Equipped tool (0 or 1)
     pub tool: Option<ItemInstance>,
+    /// Relic asset for the equipped tool, when the tool came from the relic pool.
+    pub tool_relic_asset: Option<Pubkey>,
     /// Equipped gear (0-12)
     pub gear: [Option<ItemInstance>; 12],
+    /// Relic asset per equipped gear slot, when that gear came from the relic pool.
+    pub gear_relic_assets: [Option<Pubkey>; 12],
     /// Current gear limit (4, 6, 8, 10, or 12)
     pub gear_slot_capacity: u8,
     /// PDA bump seed
@@ -247,15 +251,22 @@ pub struct PlayerInventory {
 
 impl PlayerInventory {
     /// Account space calculation
-    /// 8 (discriminator) + 32 (session) + 32 (player) + 1 + 10 (tool option) + 12 * (1 + 10) (gear array) + 1 + 1
-    pub const LEN: usize = 8 + 32 + 32 + 1 + 10 + (12 * 11) + 1 + 1;
+    /// 8 (discriminator) + 32 (session) + 32 (player)
+    /// + 1 + 10 (tool option+item)
+    /// + 1 + 32 (tool relic asset)
+    /// + 12 * (1 + 10) (gear array)
+    /// + 12 * (1 + 32) (gear relic assets)
+    /// + 1 + 1
+    pub const LEN: usize = 8 + 32 + 32 + 11 + 33 + (12 * 11) + (12 * 33) + 1 + 1;
 
     /// Initialize a new PlayerInventory
     pub fn init(&mut self, session: Pubkey, player: Pubkey, bump: u8) {
         self.session = session;
         self.player = player;
         self.tool = None;
+        self.tool_relic_asset = None;
         self.gear = [None; 12];
+        self.gear_relic_assets = [None; 12];
         self.gear_slot_capacity = INITIAL_GEAR_SLOTS;
         self.bump = bump;
     }
@@ -285,6 +296,16 @@ impl PlayerInventory {
             }
         }
         false
+    }
+
+    pub fn tool_is_relic(&self) -> bool {
+        self.tool_relic_asset.is_some()
+    }
+
+    pub fn gear_slot_is_relic(&self, slot_index: usize) -> bool {
+        self.gear_relic_assets
+            .get(slot_index)
+            .is_some_and(Option::is_some)
     }
 
     /// Expand gear slots (after boss defeat)

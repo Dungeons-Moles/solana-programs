@@ -8,6 +8,31 @@ use crate::items::ItemDefinition;
 use crate::state::{EffectDefinition, EffectType, ItemTag, ItemType, Rarity, TriggerType};
 
 pub const NFT_ITEMS: &[ItemDefinition] = &[
+    // S-XX-07: Pioneer's Mattock — Tool, Heroic
+    // BattleStart: +3/4/5 ATK
+    // OnHit (once/turn): apply rotating debuff
+    // Turn 1: Chill, Turn 2: Rust, Turn 3: Bleed, then repeat
+    ItemDefinition {
+        id: b"S-XX-07\0",
+        name: "Pioneer's Mattock",
+        item_type: ItemType::Tool,
+        tag: ItemTag::None,
+        rarity: Rarity::Heroic,
+        effects: &[
+            EffectDefinition::new(
+                TriggerType::BattleStart,
+                EffectType::GainAtk,
+                false,
+                [3, 4, 5],
+            ),
+            EffectDefinition::new(
+                TriggerType::OnHit,
+                EffectType::ApplyRotatingDebuff,
+                true,
+                [1, 1, 1],
+            ),
+        ],
+    },
     // S-XX-01: Infernal Pickaxe — Blast/Gear, Heroic
     // On TurnStart: deal 2/3/4 non-weapon damage
     ItemDefinition {
@@ -125,17 +150,17 @@ mod tests {
 
     #[test]
     fn test_nft_item_count() {
-        assert_eq!(NFT_ITEMS.len(), 6, "Should have exactly 6 NFT items");
+        assert_eq!(NFT_ITEMS.len(), 7, "Should have exactly 7 relic items");
     }
 
     #[test]
     fn test_get_nft_item_by_id() {
-        let item = get_nft_item(b"S-XX-01\0");
+        let item = get_nft_item(b"S-XX-07\0");
         assert!(item.is_some());
         let item = item.unwrap();
-        assert_eq!(item.name, "Infernal Pickaxe");
-        assert_eq!(item.item_type, ItemType::Gear);
-        assert_eq!(item.tag, ItemTag::Blast);
+        assert_eq!(item.name, "Pioneer's Mattock");
+        assert_eq!(item.item_type, ItemType::Tool);
+        assert_eq!(item.tag, ItemTag::None);
         assert_eq!(item.rarity, Rarity::Heroic);
     }
 
@@ -158,14 +183,8 @@ mod tests {
     }
 
     #[test]
-    fn test_all_nft_items_are_gear() {
-        for item in NFT_ITEMS {
-            assert_eq!(
-                item.item_type,
-                ItemType::Gear,
-                "NFT item {} should be Gear type",
-                item.name
-            );
-        }
+    fn test_relic_catalog_has_tools_and_gear() {
+        assert!(NFT_ITEMS.iter().any(|item| item.item_type == ItemType::Tool));
+        assert!(NFT_ITEMS.iter().any(|item| item.item_type == ItemType::Gear));
     }
 }

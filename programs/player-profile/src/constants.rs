@@ -32,6 +32,9 @@ pub const RUNS_PER_PURCHASE: u32 = 20;
 /// Size of item bitmask in bytes (80 bits = 10 bytes)
 pub const ITEM_BITMASK_SIZE: usize = 10;
 
+/// Maximum number of relic entries tracked per player.
+pub const MAX_RELICS: usize = 32;
+
 /// Session Manager program ID (CrU4bUFreKy2XsoU2oksdJWKim11w2VpagKBQ2MTkyMz)
 /// Used to validate session account ownership in CPI authorization.
 pub const SESSION_MANAGER_PROGRAM_ID: [u8; 32] = [
@@ -53,8 +56,8 @@ pub const SESSION_CAMPAIGN_LEVEL_OFFSET: usize = 48;
 /// Byte offset of `session_signer` field in GameSession account data.
 /// Layout: 8 (discriminator) + 32 (player) + 8 (session_id) + 1 (campaign_level) +
 /// 8 (started_at) + 8 (last_activity) + 1 (is_delegated) + 1 (bump) +
-/// 10 (active_item_pool) = 77
-pub const SESSION_SESSION_SIGNER_OFFSET: usize = 77;
+/// 10 (active_item_pool) + 1 (active_relic_count) + 16 * 40 (active_relics) = 718
+pub const SESSION_SESSION_SIGNER_OFFSET: usize = 718;
 
 /// Minimum session account data length required to read through session_signer.
 /// SESSION_SESSION_SIGNER_OFFSET + 32 (Pubkey size) = 109
@@ -91,3 +94,7 @@ pub const PIT_DRAFT_QUEUE_SEED: &[u8] = b"pit_draft_queue";
 /// Metaplex Core program ID for NFT skin asset validation (CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d)
 pub const MPL_CORE_PROGRAM_ID: anchor_lang::prelude::Pubkey =
     anchor_lang::pubkey!("CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d");
+
+/// NFT marketplace program ID used to validate marketplace-authorized relic ownership CPIs.
+pub const NFT_MARKETPLACE_PROGRAM_PUBKEY: anchor_lang::prelude::Pubkey =
+    anchor_lang::pubkey!("GLKxBpZ8hc7qzvD9VHAVsJEjHSu2JVp1HaPrGH4fpTci");

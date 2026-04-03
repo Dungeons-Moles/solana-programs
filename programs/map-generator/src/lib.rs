@@ -283,7 +283,7 @@ pub mod map_generator {
         center_y: u8,
         radius: u8,
     ) -> Result<()> {
-        const SESSION_SESSION_SIGNER_OFFSET: usize = 77;
+        const SESSION_SESSION_SIGNER_OFFSET: usize = 718;
 
         let session_data = ctx.accounts.session.try_borrow_data()?;
         require!(
@@ -326,7 +326,7 @@ pub mod map_generator {
         center_y: u8,
         radius: u8,
     ) -> Result<()> {
-        const SESSION_SESSION_SIGNER_OFFSET: usize = 77;
+        const SESSION_SESSION_SIGNER_OFFSET: usize = 718;
 
         let session_data = ctx.accounts.session.try_borrow_data()?;
         require!(
@@ -378,7 +378,7 @@ pub mod map_generator {
     /// Closes the SessionDiscovery account, returning rent to player.
     pub fn close_session_discovery(ctx: Context<CloseSessionDiscovery>) -> Result<()> {
         const SESSION_PLAYER_OFFSET: usize = 8;
-        const SESSION_SESSION_SIGNER_OFFSET: usize = 77;
+        const SESSION_SESSION_SIGNER_OFFSET: usize = 718;
 
         let session_data = ctx.accounts.session.try_borrow_data()?;
         require!(
@@ -529,42 +529,75 @@ pub mod map_generator {
                 // Clear offer — no data needed
             }
             1 => {
-                // Shop: 6 * (8 item_id + 1 tier + 2 price + 1 purchased) + 1 reroll + 1 active = 74 bytes
-                require!(data.len() >= 74, MapGeneratorError::InvalidOfferData);
-                for i in 0..6 {
-                    let offset = i * 12;
-                    require!(
-                        offset + 12 <= data.len(),
-                        MapGeneratorError::InvalidOfferData
-                    );
-                    let mut item_id = [0u8; 8];
-                    item_id.copy_from_slice(&data[offset..offset + 8]);
-                    discovery.shop_offers[i] = state::DiscoveryShopOffer {
-                        item_id,
-                        tier: data[offset + 8],
-                        price: u16::from_le_bytes([data[offset + 9], data[offset + 10]]),
-                        purchased: data[offset + 11],
-                    };
+                match data.len() {
+                    len if len >= 272 => {
+                        // Backward-compatible decode for the expanded relic-aware payload:
+                        // 6 * (8 item_id + 32 relic_asset + 1 is_relic + 1 tier + 2 price + 1 purchased)
+                        // + 1 reroll + 1 active = 272 bytes
+                        for i in 0..6 {
+                            let offset = i * 45;
+                            let mut item_id = [0u8; 8];
+                            item_id.copy_from_slice(&data[offset..offset + 8]);
+                            discovery.shop_offers[i] = state::DiscoveryShopOffer {
+                                item_id,
+                                tier: data[offset + 41],
+                                price: u16::from_le_bytes([data[offset + 42], data[offset + 43]]),
+                                purchased: data[offset + 44],
+                            };
+                        }
+                        discovery.shop_reroll_count = data[270];
+                        discovery.shop_active = data[271];
+                    }
+                    len if len >= 74 => {
+                        // Compact payload:
+                        // 6 * (8 item_id + 1 tier + 2 price + 1 purchased) + 1 reroll + 1 active = 74 bytes
+                        for i in 0..6 {
+                            let offset = i * 12;
+                            let mut item_id = [0u8; 8];
+                            item_id.copy_from_slice(&data[offset..offset + 8]);
+                            discovery.shop_offers[i] = state::DiscoveryShopOffer {
+                                item_id,
+                                tier: data[offset + 8],
+                                price: u16::from_le_bytes([data[offset + 9], data[offset + 10]]),
+                                purchased: data[offset + 11],
+                            };
+                        }
+                        discovery.shop_reroll_count = data[72];
+                        discovery.shop_active = data[73];
+                    }
+                    _ => return Err(MapGeneratorError::InvalidOfferData.into()),
                 }
-                discovery.shop_reroll_count = data[72];
-                discovery.shop_active = data[73];
             }
             2 => {
-                // Cache: 3 * (8 item_id + 1 rarity + 1 tier) = 30 bytes
-                require!(data.len() >= 30, MapGeneratorError::InvalidOfferData);
-                for i in 0..3 {
-                    let offset = i * 10;
-                    require!(
-                        offset + 10 <= data.len(),
-                        MapGeneratorError::InvalidOfferData
-                    );
-                    let mut item_id = [0u8; 8];
-                    item_id.copy_from_slice(&data[offset..offset + 8]);
-                    discovery.cache_offer_items[i] = state::DiscoveryOfferItem {
-                        item_id,
-                        rarity: data[offset + 8],
-                        tier: data[offset + 9],
-                    };
+                match data.len() {
+                    len if len >= 129 => {
+                        // Backward-compatible decode for the expanded relic-aware payload:
+                        // 3 * (8 item_id + 32 relic_asset + 1 is_relic + 1 rarity + 1 tier) = 129 bytes
+                        for i in 0..3 {
+                            let offset = i * 43;
+                            let mut item_id = [0u8; 8];
+                            item_id.copy_from_slice(&data[offset..offset + 8]);
+                            discovery.cache_offer_items[i] = state::DiscoveryOfferItem {
+                                item_id,
+                                rarity: data[offset + 41],
+                                tier: data[offset + 42],
+                            };
+                        }
+                    }
+                    len if len >= 30 => {
+                        // Compact payload: 3 * (8 item_id + 1 rarity + 1 tier) = 30 bytes
+                        for i in 0..3 {
+                            let offset = i * 10;
+                            let mut item_id = [0u8; 8];
+                            item_id.copy_from_slice(&data[offset..offset + 8]);
+                            discovery.cache_offer_items[i] = state::DiscoveryOfferItem {
+                                item_id,
+                                rarity: data[offset + 8],
+                                tier: data[offset + 9],
+                            };
+                        }
+                    }
+                    _ => return Err(MapGeneratorError::InvalidOfferData.into()),
                 }
             }
             3 => {
@@ -637,7 +670,7 @@ pub mod map_generator {
         const SESSION_PLAYER_OFFSET: usize = 8;
         /// Byte offset of `session_signer` in GameSession account data.
         /// Keep in sync with session_manager::state::GameSession::SESSION_SIGNER_OFFSET.
-        const SESSION_SESSION_SIGNER_OFFSET: usize = 77;
+        const SESSION_SESSION_SIGNER_OFFSET: usize = 718;
 
         let session_data = ctx.accounts.session.try_borrow_data()?;
         require!(
@@ -735,6 +768,7 @@ pub mod map_generator {
         const GAME_STATE_PLAYER_OFFSET: usize = 8;
         const GAME_STATE_SESSION_SIGNER_OFFSET: usize = 40;
         const GAME_STATE_SESSION_OFFSET: usize = 72;
+        const SESSION_DISCOVERY_SESSION_OFFSET: usize = 8;
 
         let gs_data = ctx.accounts.game_state.try_borrow_data()?;
         require!(
@@ -747,10 +781,6 @@ pub mod map_generator {
                 &gs_data[GAME_STATE_SESSION_OFFSET..GAME_STATE_SESSION_OFFSET + 32],
             )
             .unwrap(),
-        );
-        require!(
-            stored_session == ctx.accounts.session_discovery.session,
-            MapGeneratorError::InvalidSession
         );
 
         let stored_session_signer = Pubkey::from(
@@ -775,8 +805,39 @@ pub mod map_generator {
 
         drop(gs_data);
 
+        let expected_session_discovery = Pubkey::find_program_address(
+            &[SessionDiscovery::SEED_PREFIX, stored_session.as_ref()],
+            &crate::ID,
+        )
+        .0;
+        require!(
+            expected_session_discovery == ctx.accounts.session_discovery.key(),
+            MapGeneratorError::InvalidSession
+        );
+
+        let discovery_info = ctx.accounts.session_discovery.to_account_info();
+        let discovery_data = discovery_info.try_borrow_data()?;
+        require!(
+            discovery_data.len() >= SESSION_DISCOVERY_SESSION_OFFSET + 32,
+            MapGeneratorError::InvalidSession
+        );
+        let discovery_session = Pubkey::from(
+            <[u8; 32]>::try_from(
+                &discovery_data
+                    [SESSION_DISCOVERY_SESSION_OFFSET..SESSION_DISCOVERY_SESSION_OFFSET + 32],
+            )
+            .unwrap(),
+        );
+        require!(
+            discovery_session == stored_session,
+            MapGeneratorError::InvalidSession
+        );
+        drop(discovery_data);
+
+        close_owned_account(&discovery_info, &ctx.accounts.player)?;
+
         emit!(SessionDiscoveryClosed {
-            session: ctx.accounts.session_discovery.session,
+            session: stored_session,
         });
 
         Ok(())
@@ -995,7 +1056,7 @@ pub mod map_generator {
     /// Called via CPI from session-manager during end_session/abandon_session.
     pub fn close_map_vrf_state(ctx: Context<CloseMapVrfState>) -> Result<()> {
         const SESSION_PLAYER_OFFSET: usize = 8;
-        const SESSION_SESSION_SIGNER_OFFSET: usize = 77;
+        const SESSION_SESSION_SIGNER_OFFSET: usize = 718;
 
         let session_data = ctx.accounts.session.try_borrow_data()?;
         require!(
@@ -1054,6 +1115,18 @@ pub mod map_generator {
         )?;
         Ok(())
     }
+}
+
+fn close_owned_account(account: &AccountInfo, destination: &AccountInfo) -> Result<()> {
+    let lamports = account.lamports();
+    **destination.try_borrow_mut_lamports()? = destination
+        .lamports()
+        .checked_add(lamports)
+        .ok_or(ProgramError::ArithmeticOverflow)?;
+    **account.try_borrow_mut_lamports()? = 0;
+    account.assign(&system_program::ID);
+    account.realloc(0, false)?;
+    Ok(())
 }
 
 // ============================================================================
@@ -1746,13 +1819,9 @@ pub struct CloseGeneratedMapOrphaned<'info> {
 /// Validates via GameState which stores session_signer and player.
 #[derive(Accounts)]
 pub struct CloseSessionDiscoveryOrphaned<'info> {
-    #[account(
-        mut,
-        seeds = [SessionDiscovery::SEED_PREFIX, session_discovery.session.as_ref()],
-        bump = session_discovery.bump,
-        close = player,
-    )]
-    pub session_discovery: Account<'info, SessionDiscovery>,
+    #[account(mut, owner = crate::ID)]
+    /// CHECK: PDA and stored session are validated in the handler. Closed manually.
+    pub session_discovery: UncheckedAccount<'info>,
 
     /// GameState for auth — must belong to the same session.
     /// CHECK: Owner checked (gameplay-state program). Fields validated via raw-byte reads.

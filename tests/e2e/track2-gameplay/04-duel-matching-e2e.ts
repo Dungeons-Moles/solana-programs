@@ -25,7 +25,6 @@ import {
   getMapVrfStatePda,
   getGameStatePda,
   getGameplayVrfStatePda,
-  getMapEnemiesPda,
   getGameplayAuthorityPda,
   getDuelVaultPda,
   getDuelOpenQueuePda,
@@ -102,7 +101,6 @@ interface PlayerContext {
   playerProfilePda: PublicKey;
   sessionPda: PublicKey;
   gameStatePda: PublicKey;
-  mapEnemiesPda: PublicKey;
   generatedMapPda: PublicKey;
   inventoryPda: PublicKey;
   mapPoisPda: PublicKey;
@@ -126,7 +124,6 @@ async function setupPlayer(label: string): Promise<PlayerContext> {
   const [playerProfilePda] = getPlayerProfilePda(user.publicKey);
   const [sessionPda] = getDuelSessionPda(user.publicKey);
   const [gameStatePda] = getGameStatePda(sessionPda);
-  const [mapEnemiesPda] = getMapEnemiesPda(sessionPda);
   const [generatedMapPda] = getGeneratedMapPda(sessionPda);
   const [inventoryPda] = getInventoryPda(sessionPda);
   const [mapPoisPda] = getMapPoisPda(sessionPda);
@@ -142,7 +139,6 @@ async function setupPlayer(label: string): Promise<PlayerContext> {
     playerProfilePda,
     sessionPda,
     gameStatePda,
-    mapEnemiesPda,
     generatedMapPda,
     inventoryPda,
     mapPoisPda,
@@ -340,6 +336,7 @@ async function createProfileAndStartDuelSession(
       gameSession: p.sessionPda,
       sessionCounter: sessionCounterPda,
       playerProfile: p.playerProfilePda,
+      playerRelicPool: null,
       player: p.user.publicKey,
       sessionSigner: p.sessionSigner.publicKey,
       sessionManagerAuthority: sessionManagerAuthorityPda,
@@ -347,7 +344,6 @@ async function createProfileAndStartDuelSession(
       generatedMap: p.generatedMapPda,
       sessionDiscovery: p.sessionDiscoveryPda,
       gameState: p.gameStatePda,
-      mapEnemies: p.mapEnemiesPda,
       mapPois: p.mapPoisPda,
       inventory: p.inventoryPda,
       mapVrfState: null,
@@ -455,7 +451,6 @@ async function resetDuelEntryAndEndSession(
     .accounts({
       gameSession: p.sessionPda,
       gameState: p.gameStatePda,
-      mapEnemies: p.mapEnemiesPda,
       generatedMap: p.generatedMapPda,
       mapPois: p.mapPoisPda,
       sessionDiscovery: p.sessionDiscoveryPda,
@@ -860,6 +855,21 @@ describe("Duel Matching E2E", function () {
       const vaultAfter = await connection.getBalance(duelVaultPda);
       const totalPot = DUEL_ENTRY_LAMPORTS * 2;
       expect(vaultBefore - vaultAfter).to.equal(totalPot);
+    });
+
+    it("rejects replaying settle_duel_payout after the duel is already settled", async () => {
+      try {
+        await settleDuelPayout(playerB, playerAWallet);
+        expect.fail("expected DuelAlreadyQueued on second settlement");
+      } catch (error: any) {
+        expect(String(error)).to.include("DuelAlreadyQueued");
+      }
+
+      const duelEntry = await (
+        programs.gameplayState.account as any
+      ).duelEntry.fetch(playerB.duelEntryPda);
+      expect(duelEntry.settled).to.be.true;
+      expect(duelEntry.finalized).to.be.true;
     });
 
     it("ends session for player B", async () => {

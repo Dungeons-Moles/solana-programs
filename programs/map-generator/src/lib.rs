@@ -283,8 +283,6 @@ pub mod map_generator {
         center_y: u8,
         radius: u8,
     ) -> Result<()> {
-        const SESSION_SESSION_SIGNER_OFFSET: usize = 718;
-
         let session_data = ctx.accounts.session.try_borrow_data()?;
         require!(
             session_data.len() >= SESSION_SESSION_SIGNER_OFFSET + 32,
@@ -326,8 +324,6 @@ pub mod map_generator {
         center_y: u8,
         radius: u8,
     ) -> Result<()> {
-        const SESSION_SESSION_SIGNER_OFFSET: usize = 718;
-
         let session_data = ctx.accounts.session.try_borrow_data()?;
         require!(
             session_data.len() >= SESSION_SESSION_SIGNER_OFFSET + 32,
@@ -377,8 +373,6 @@ pub mod map_generator {
 
     /// Closes the SessionDiscovery account, returning rent to player.
     pub fn close_session_discovery(ctx: Context<CloseSessionDiscovery>) -> Result<()> {
-        const SESSION_PLAYER_OFFSET: usize = 8;
-        const SESSION_SESSION_SIGNER_OFFSET: usize = 718;
 
         let session_data = ctx.accounts.session.try_borrow_data()?;
         require!(
@@ -667,11 +661,9 @@ pub mod map_generator {
     pub fn close_generated_map(ctx: Context<CloseGeneratedMap>) -> Result<()> {
         /// Byte offset of `player` in GameSession account data.
         /// Must match session_manager::state::GameSession layout.
-        const SESSION_PLAYER_OFFSET: usize = 8;
+
         /// Byte offset of `session_signer` in GameSession account data.
         /// Keep in sync with session_manager::state::GameSession::SESSION_SIGNER_OFFSET.
-        const SESSION_SESSION_SIGNER_OFFSET: usize = 718;
-
         let session_data = ctx.accounts.session.try_borrow_data()?;
         require!(
             session_data.len() >= SESSION_SESSION_SIGNER_OFFSET + 32,
@@ -710,9 +702,7 @@ pub mod map_generator {
     /// Close GeneratedMap when the session PDA no longer exists (orphaned).
     /// Validates session_signer and player via the GameState account instead.
     pub fn close_generated_map_orphaned(ctx: Context<CloseGeneratedMapOrphaned>) -> Result<()> {
-        const GAME_STATE_PLAYER_OFFSET: usize = 8;
-        const GAME_STATE_SESSION_SIGNER_OFFSET: usize = 40;
-        const GAME_STATE_SESSION_OFFSET: usize = 72;
+
 
         let gs_data = ctx.accounts.game_state.try_borrow_data()?;
         require!(
@@ -765,10 +755,7 @@ pub mod map_generator {
     pub fn close_session_discovery_orphaned(
         ctx: Context<CloseSessionDiscoveryOrphaned>,
     ) -> Result<()> {
-        const GAME_STATE_PLAYER_OFFSET: usize = 8;
-        const GAME_STATE_SESSION_SIGNER_OFFSET: usize = 40;
-        const GAME_STATE_SESSION_OFFSET: usize = 72;
-        const SESSION_DISCOVERY_SESSION_OFFSET: usize = 8;
+
 
         let gs_data = ctx.accounts.game_state.try_borrow_data()?;
         require!(
@@ -1055,8 +1042,6 @@ pub mod map_generator {
     /// Closes MapVrfState account and returns rent to the player.
     /// Called via CPI from session-manager during end_session/abandon_session.
     pub fn close_map_vrf_state(ctx: Context<CloseMapVrfState>) -> Result<()> {
-        const SESSION_PLAYER_OFFSET: usize = 8;
-        const SESSION_SESSION_SIGNER_OFFSET: usize = 718;
 
         let session_data = ctx.accounts.session.try_borrow_data()?;
         require!(

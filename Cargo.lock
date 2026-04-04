@@ -858,11 +858,13 @@ name = "gameplay-state"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
+ "bincode",
  "boss-system",
  "combat-system",
  "ephemeral-rollups-sdk",
  "ephemeral-vrf-sdk",
  "field-enemies",
+ "magicblock-magic-program-api",
  "map-generator",
  "player-inventory",
  "player-profile",

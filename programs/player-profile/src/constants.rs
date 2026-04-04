@@ -49,6 +49,9 @@ pub const SESSION_MANAGER_PROGRAM_PUBKEY: anchor_lang::prelude::Pubkey =
 /// Seed for session-manager authority PDA that signs authorized CPIs.
 pub const SESSION_MANAGER_AUTHORITY_SEED: &[u8] = b"session_manager_authority";
 
+/// Byte offset of `player` field in GameSession account data (after 8-byte discriminator).
+pub const SESSION_PLAYER_OFFSET: usize = 8;
+
 /// Byte offset of `campaign_level` field in GameSession account data.
 /// Layout: 8 (discriminator) + 32 (player) + 8 (session_id) = 48
 pub const SESSION_CAMPAIGN_LEVEL_OFFSET: usize = 48;

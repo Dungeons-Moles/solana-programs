@@ -212,9 +212,11 @@ pub mod player_profile {
             PlayerProfileError::SessionDataTooShort
         );
 
-        // Read player pubkey from session account (offset 8 for discriminator)
-        let session_player = Pubkey::try_from(&session_data[8..40])
-            .map_err(|_| PlayerProfileError::InvalidSession)?;
+        // Read player pubkey from session account
+        let session_player = Pubkey::try_from(
+            &session_data[SESSION_PLAYER_OFFSET..SESSION_PLAYER_OFFSET + 32],
+        )
+        .map_err(|_| PlayerProfileError::InvalidSession)?;
 
         // Verify session's player matches profile's owner
         require!(
@@ -363,16 +365,32 @@ pub mod player_profile {
             PlayerProfileError::InvalidSkinAsset
         );
 
-        // Read raw bytes to validate ownership
+        // Metaplex Core AssetV1 raw byte layout (mpl-core 0.11.x):
+        //   Byte 0:     Key discriminator (1 = AssetV1)
+        //   Bytes 1-32: Owner Pubkey (32 bytes)
+        //   Bytes 33+:  UpdateAuthority, Name, URI, etc.
+        // Minimum viable read: 33 bytes for discriminator + owner.
+        // If mpl-core changes this layout, the discriminator byte will change too,
+        // so the check below will reject accounts with an incompatible layout.
+        const MPL_CORE_ASSET_V1_DISCRIMINATOR: u8 = 1;
+        const MPL_CORE_OWNER_OFFSET: usize = 1;
+        const MPL_CORE_MIN_DATA_LEN: usize = MPL_CORE_OWNER_OFFSET + 32;
+
         let data = skin_asset.try_borrow_data()?;
-        require!(data.len() >= 33, PlayerProfileError::InvalidSkinAsset);
+        require!(
+            data.len() >= MPL_CORE_MIN_DATA_LEN,
+            PlayerProfileError::InvalidSkinAsset
+        );
 
-        // Byte 0: Key discriminator (1 = AssetV1)
-        require!(data[0] == 1, PlayerProfileError::InvalidSkinAsset);
+        // Validate AssetV1 discriminator
+        require!(
+            data[0] == MPL_CORE_ASSET_V1_DISCRIMINATOR,
+            PlayerProfileError::InvalidSkinAsset
+        );
 
-        // Bytes 1..33: Owner pubkey
+        // Extract and validate owner
         let mut owner_bytes = [0u8; 32];
-        owner_bytes.copy_from_slice(&data[1..33]);
+        owner_bytes.copy_from_slice(&data[MPL_CORE_OWNER_OFFSET..MPL_CORE_MIN_DATA_LEN]);
         let asset_owner = Pubkey::new_from_array(owner_bytes);
         require!(
             asset_owner == ctx.accounts.owner.key(),

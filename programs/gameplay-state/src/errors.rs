@@ -150,6 +150,9 @@ pub enum GameplayStateError {
     #[msg("Gauntlet epoch pool is not finalized")]
     GauntletEpochNotFinalized,
 
+    #[msg("Gauntlet reward record is not settled")]
+    GauntletRewardNotSettled,
+
     #[msg("Gauntlet entry already paid for this run")]
     GauntletAlreadyEntered,
 

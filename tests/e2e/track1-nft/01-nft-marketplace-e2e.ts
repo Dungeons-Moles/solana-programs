@@ -257,20 +257,32 @@ describe("Initialize infrastructure", function () {
   });
 
   it("initializes marketplace config", async () => {
-    await nftMarketplace.methods
-      .initializeMarketplace(skinsCollectionPubkey, itemsCollectionPubkey)
-      .accounts({
-        marketplaceConfig: marketplaceConfigPda,
-        authority: admin.publicKey,
-        gauntletPool: gauntletPoolVaultPda,
-        systemProgram: SystemProgram.programId,
-      } as any)
-      .rpc();
+    try {
+      await nftMarketplace.methods
+        .initializeMarketplace(skinsCollectionPubkey, itemsCollectionPubkey)
+        .accounts({
+          marketplaceConfig: marketplaceConfigPda,
+          authority: admin.publicKey,
+          gauntletPool: gauntletPoolVaultPda,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .rpc();
+    } catch (error: any) {
+      const msg = String(error);
+      if (!msg.includes("already in use")) {
+        throw error;
+      }
+    }
 
     // Verify marketplace config account fields
     const config = await (
       nftMarketplace.account as any
     ).marketplaceConfig.fetch(marketplaceConfigPda);
+
+    // On a Surfpool devnet fork, the marketplace config PDA may already exist.
+    // In that case, reuse the configured collections for the mint/list flows below.
+    skinsCollectionPubkey = new PublicKey(config.skinsCollection.toString());
+    itemsCollectionPubkey = new PublicKey(config.itemsCollection.toString());
 
     expect(config.authority.toString()).to.equal(admin.publicKey.toString());
     expect(config.skinsCollection.toString()).to.equal(
@@ -769,6 +781,78 @@ describe("List/buy/cancel", function () {
     expect(listingInfo).to.be.null;
   });
 
+  it("rejects unauthorized cancel attempts from a non-seller", async () => {
+    const sellerProvider = createProvider(
+      RPC_URL,
+      walletFromKeypair(seller)
+    );
+    const sellerMarketplace = loadProgram("nft_marketplace", sellerProvider);
+
+    const attacker = Keypair.generate();
+    await fundKeypair(attacker, 2);
+    await createProfileForUser(attacker, "market-attacker");
+
+    const protectedSkin = await mintSkinToOwner(
+      seller.publicKey,
+      "Protected Listing Skin",
+      23
+    );
+    const [listingPda] = getListingPda(protectedSkin);
+
+    await sellerMarketplace.methods
+      .listNft(listPrice)
+      .accounts({
+        listing: listingPda,
+        marketplaceConfig: marketplaceConfigPda,
+        mintAuthority: mintAuthorityPda,
+        asset: protectedSkin,
+        collection: skinsCollectionPubkey,
+        seller: seller.publicKey,
+        playerProfile: sellerProfilePda,
+        mplCoreProgram: PROGRAM_IDS.mplCore,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .rpc();
+
+    const attackerProvider = createProvider(
+      RPC_URL,
+      walletFromKeypair(attacker)
+    );
+    const attackerMarketplace = loadProgram("nft_marketplace", attackerProvider);
+
+    try {
+      await attackerMarketplace.methods
+        .cancelListing()
+        .accounts({
+          listing: listingPda,
+          asset: protectedSkin,
+          collection: skinsCollectionPubkey,
+          seller: attacker.publicKey,
+          mplCoreProgram: PROGRAM_IDS.mplCore,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .rpc();
+      expect.fail("Should have thrown Unauthorized");
+    } catch (error: any) {
+      expect(String(error)).to.include("Unauthorized");
+    }
+
+    const listingInfo = await connection.getAccountInfo(listingPda);
+    expect(listingInfo).to.not.be.null;
+
+    await sellerMarketplace.methods
+      .cancelListing()
+      .accounts({
+        listing: listingPda,
+        asset: protectedSkin,
+        collection: skinsCollectionPubkey,
+        seller: seller.publicKey,
+        mplCoreProgram: PROGRAM_IDS.mplCore,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .rpc();
+  });
+
   it("re-lists and buyer purchases with fee split", async () => {
     // Re-list
     const sellerProvider = createProvider(
@@ -813,12 +897,16 @@ describe("List/buy/cancel", function () {
         marketplaceConfig: marketplaceConfigPda,
         mintAuthority: mintAuthorityPda,
         asset: sellerSkinAsset,
+        relicAssetRecord: null,
         collection: skinsCollectionPubkey,
         buyer: buyer.publicKey,
         seller: seller.publicKey,
+        sellerPlayerRelicPool: null,
+        buyerPlayerRelicPool: getPlayerRelicPoolPda(buyer.publicKey)[0],
         companyTreasury: COMPANY_TREASURY,
         gauntletPool: gauntletPoolVaultPda,
         mplCoreProgram: PROGRAM_IDS.mplCore,
+        playerProfileProgram: PROGRAM_IDS.playerProfile,
         systemProgram: SystemProgram.programId,
       } as any)
       .rpc();
@@ -889,12 +977,16 @@ describe("List/buy/cancel", function () {
           marketplaceConfig: marketplaceConfigPda,
           mintAuthority: mintAuthorityPda,
           asset: newSkin,
+          relicAssetRecord: null,
           collection: skinsCollectionPubkey,
           buyer: seller.publicKey,
           seller: seller.publicKey,
+          sellerPlayerRelicPool: null,
+          buyerPlayerRelicPool: getPlayerRelicPoolPda(seller.publicKey)[0],
           companyTreasury: COMPANY_TREASURY,
           gauntletPool: gauntletPoolVaultPda,
           mplCoreProgram: PROGRAM_IDS.mplCore,
+          playerProfileProgram: PROGRAM_IDS.playerProfile,
           systemProgram: SystemProgram.programId,
         } as any)
         .rpc();
@@ -1020,7 +1112,8 @@ describe("List/buy/cancel", function () {
 describe("Quests", function () {
   this.timeout(60_000);
 
-  const questId = 1;
+  const questId = 30_000 + (Math.floor(Date.now() / 1000) % 10_000);
+  const incompleteQuestId = questId + 1;
   const objectiveCount = 5; // Need to win 5 battles
   let questPlayer: Keypair;
 
@@ -1154,7 +1247,6 @@ describe("Quests", function () {
 
   it("rejects claiming incomplete quest", async () => {
     // Create a second quest that has not been completed
-    const incompleteQuestId = 2;
     const [incQuestDefPda] = getQuestDefinitionPda(incompleteQuestId);
 
     const rewardData = Array(32).fill(0);

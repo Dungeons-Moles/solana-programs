@@ -192,14 +192,20 @@ pub mod nft_marketplace {
             MarketplaceError::PriceTooLow
         );
 
-        // Validate asset is owned by seller by reading raw bytes.
-        // Metaplex Core asset: byte 0 = Key discriminator (1 = AssetV1), bytes 1..33 = owner.
+        // Metaplex Core AssetV1 raw byte layout (mpl-core 0.11.x):
+        //   Byte 0:     Key discriminator (1 = AssetV1)
+        //   Bytes 1-32: Owner Pubkey (32 bytes)
+        // If mpl-core changes this layout, the discriminator will change too.
+        const MPL_CORE_ASSET_V1_DISCRIMINATOR: u8 = 1;
+        const MPL_CORE_OWNER_OFFSET: usize = 1;
+        const MPL_CORE_MIN_DATA_LEN: usize = MPL_CORE_OWNER_OFFSET + 32;
+
         let asset_data = ctx.accounts.asset.try_borrow_data()?;
-        require!(asset_data.len() >= 33, MarketplaceError::InvalidAsset);
-        require!(asset_data[0] == 1, MarketplaceError::InvalidAsset); // AssetV1
+        require!(asset_data.len() >= MPL_CORE_MIN_DATA_LEN, MarketplaceError::InvalidAsset);
+        require!(asset_data[0] == MPL_CORE_ASSET_V1_DISCRIMINATOR, MarketplaceError::InvalidAsset);
 
         let mut owner_bytes = [0u8; 32];
-        owner_bytes.copy_from_slice(&asset_data[1..33]);
+        owner_bytes.copy_from_slice(&asset_data[MPL_CORE_OWNER_OFFSET..MPL_CORE_MIN_DATA_LEN]);
         let asset_owner = Pubkey::new_from_array(owner_bytes);
         require!(
             asset_owner == ctx.accounts.seller.key(),

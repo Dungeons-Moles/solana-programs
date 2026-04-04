@@ -567,6 +567,21 @@ impl GauntletPlayerScore {
     pub const INIT_SPACE: usize = 8 + 32 + 8 + 1 + 1;
 }
 
+#[account]
+pub struct GauntletRewardRecord {
+    pub epoch_id: u64,
+    pub player: Pubkey,
+    pub final_points: u64,
+    pub payout_lamports: u64,
+    pub settled: bool,
+    pub paid: bool,
+    pub bump: u8,
+}
+
+impl GauntletRewardRecord {
+    pub const INIT_SPACE: usize = 8 + 32 + 8 + 8 + 1 + 1 + 1;
+}
+
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct GauntletPendingPoints {
     pub player: Pubkey,
@@ -705,6 +720,31 @@ mod tests {
             "GauntletEpochPool INIT_SPACE mismatch: serialized={}, init_space={}",
             serialized_len,
             GauntletEpochPool::INIT_SPACE
+        );
+    }
+
+    #[test]
+    fn gauntlet_reward_record_init_space_matches_max_serialized_size() {
+        let reward_record = GauntletRewardRecord {
+            epoch_id: u64::MAX,
+            player: Pubkey::new_from_array([0x44; 32]),
+            final_points: u64::MAX - 1,
+            payout_lamports: u64::MAX - 2,
+            settled: true,
+            paid: true,
+            bump: 255,
+        };
+        let serialized_len = reward_record
+            .try_to_vec()
+            .expect("gauntlet reward record should serialize")
+            .len();
+
+        assert_eq!(
+            serialized_len,
+            GauntletRewardRecord::INIT_SPACE,
+            "GauntletRewardRecord INIT_SPACE mismatch: serialized={}, init_space={}",
+            serialized_len,
+            GauntletRewardRecord::INIT_SPACE
         );
     }
 

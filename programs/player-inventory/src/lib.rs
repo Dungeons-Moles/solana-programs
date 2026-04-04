@@ -215,7 +215,6 @@ pub mod player_inventory {
             remove_hp_bonus_cpi(
                 &ctx.accounts.game_state,
                 &ctx.accounts.inventory_authority,
-                &ctx.accounts.gameplay_state_program,
                 ctx.bumps.inventory_authority,
                 hp_bonus,
                 new_max_hp,
@@ -451,7 +450,6 @@ pub mod player_inventory {
             add_hp_bonus_cpi(
                 &ctx.accounts.game_state,
                 &ctx.accounts.inventory_authority,
-                &ctx.accounts.gameplay_state_program,
                 ctx.bumps.inventory_authority,
                 hp_bonus,
             )?;
@@ -516,7 +514,6 @@ pub mod player_inventory {
             add_hp_bonus_cpi(
                 &ctx.accounts.game_state,
                 &ctx.accounts.inventory_authority,
-                &ctx.accounts.gameplay_state_program,
                 ctx.bumps.inventory_authority,
                 hp_delta,
             )?;
@@ -527,7 +524,6 @@ pub mod player_inventory {
             remove_hp_bonus_cpi(
                 &ctx.accounts.game_state,
                 &ctx.accounts.inventory_authority,
-                &ctx.accounts.gameplay_state_program,
                 ctx.bumps.inventory_authority,
                 -hp_delta, // Convert to positive
                 new_max_hp,
@@ -567,7 +563,6 @@ pub mod player_inventory {
                     add_hp_bonus_cpi(
                         &ctx.accounts.game_state,
                         &ctx.accounts.inventory_authority,
-                        &ctx.accounts.gameplay_state_program,
                         ctx.bumps.inventory_authority,
                         hp_bonus,
                     )?;
@@ -591,7 +586,6 @@ pub mod player_inventory {
                     add_hp_bonus_cpi(
                         &ctx.accounts.game_state,
                         &ctx.accounts.inventory_authority,
-                        &ctx.accounts.gameplay_state_program,
                         ctx.bumps.inventory_authority,
                         hp_delta,
                     )?;
@@ -601,7 +595,6 @@ pub mod player_inventory {
                     remove_hp_bonus_cpi(
                         &ctx.accounts.game_state,
                         &ctx.accounts.inventory_authority,
-                        &ctx.accounts.gameplay_state_program,
                         ctx.bumps.inventory_authority,
                         -hp_delta,
                         new_max_hp,
@@ -748,7 +741,6 @@ fn apply_tool_oil_internal(
 fn add_hp_bonus_cpi<'info>(
     game_state: &AccountInfo<'info>,
     inventory_authority: &AccountInfo<'info>,
-    _gameplay_state_program: &AccountInfo<'info>,
     inventory_authority_bump: u8,
     hp_bonus: i16,
 ) -> Result<()> {
@@ -788,7 +780,6 @@ fn add_hp_bonus_cpi<'info>(
 fn remove_hp_bonus_cpi<'info>(
     game_state: &AccountInfo<'info>,
     inventory_authority: &AccountInfo<'info>,
-    _gameplay_state_program: &AccountInfo<'info>,
     inventory_authority_bump: u8,
     hp_bonus: i16,
     new_max_hp: i16,

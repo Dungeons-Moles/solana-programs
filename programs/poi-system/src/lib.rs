@@ -2747,7 +2747,10 @@ pub struct DelegatePoiVrfState<'info> {
 #[derive(Accounts)]
 pub struct UndelegateMapPois<'info> {
     #[account(mut)]
-    /// CHECK: PDA is validated and deserialized in handler.
+    /// CHECK: Owner is NOT checked because during undelegation the account is owned
+    /// by the delegation program, not this program. Validated in handler via:
+    /// (1) PDA address derivation with crate::ID, (2) Anchor discriminator in
+    /// try_deserialize, (3) map_pois.session == session_key cross-reference.
     pub map_pois: AccountInfo<'info>,
     /// CHECK: Session PDA used only for seed derivation. Owner not checked because
     /// the session may already be delegated (owned by delegation program) at this point.
@@ -2760,7 +2763,9 @@ pub struct UndelegateMapPois<'info> {
 #[derive(Accounts)]
 pub struct UndelegatePoiVrfState<'info> {
     #[account(mut)]
-    /// CHECK: PDA is validated in handler.
+    /// CHECK: Owner is NOT checked because during undelegation the account is owned
+    /// by the delegation program, not this program. Validated in handler via PDA
+    /// address derivation with crate::ID and discriminator check in try_deserialize.
     pub poi_vrf_state: AccountInfo<'info>,
     /// CHECK: Session PDA used only for seed derivation. Owner not checked because
     /// the session may already be delegated (owned by delegation program) at this point.
@@ -3074,7 +3079,8 @@ pub struct InteractRest<'info> {
     pub session: Option<UncheckedAccount<'info>>,
 
     /// Map generator program for mark_discovered_poi_used CPI
-    /// CHECK: Program ID validated by Anchor CPI.
+    /// CHECK: Address validated by constraint; only used for CPI.
+    #[account(address = MAP_GENERATOR_PROGRAM_ID)]
     pub map_generator_program: Option<UncheckedAccount<'info>>,
 }
 
@@ -3154,7 +3160,8 @@ pub struct InteractPickItem<'info> {
     pub session: Option<UncheckedAccount<'info>>,
 
     /// Map generator program for offer data CPI
-    /// CHECK: Program ID validated by Anchor CPI.
+    /// CHECK: Address validated by constraint; only used for CPI.
+    #[account(address = MAP_GENERATOR_PROGRAM_ID)]
     pub map_generator_program: Option<UncheckedAccount<'info>>,
 }
 
@@ -3214,7 +3221,8 @@ pub struct InteractToolOil<'info> {
     pub session: Option<UncheckedAccount<'info>>,
 
     /// Map generator program for offer data CPI
-    /// CHECK: Program ID validated by Anchor CPI.
+    /// CHECK: Address validated by constraint; only used for CPI.
+    #[account(address = MAP_GENERATOR_PROGRAM_ID)]
     pub map_generator_program: Option<UncheckedAccount<'info>>,
 }
 
@@ -3259,7 +3267,8 @@ pub struct EnterShop<'info> {
     pub session: Option<UncheckedAccount<'info>>,
 
     /// Map generator program for offer data CPI
-    /// CHECK: Program ID validated by Anchor CPI.
+    /// CHECK: Address validated by constraint; only used for CPI.
+    #[account(address = MAP_GENERATOR_PROGRAM_ID)]
     pub map_generator_program: Option<UncheckedAccount<'info>>,
 }
 
@@ -3328,7 +3337,8 @@ pub struct ShopPurchase<'info> {
     pub session: Option<UncheckedAccount<'info>>,
 
     /// Map generator program for offer data CPI
-    /// CHECK: Program ID validated by Anchor CPI.
+    /// CHECK: Address validated by constraint; only used for CPI.
+    #[account(address = MAP_GENERATOR_PROGRAM_ID)]
     pub map_generator_program: Option<UncheckedAccount<'info>>,
 }
 
@@ -3385,7 +3395,8 @@ pub struct ShopReroll<'info> {
     pub session: Option<UncheckedAccount<'info>>,
 
     /// Map generator program for offer data CPI
-    /// CHECK: Program ID validated by Anchor CPI.
+    /// CHECK: Address validated by constraint; only used for CPI.
+    #[account(address = MAP_GENERATOR_PROGRAM_ID)]
     pub map_generator_program: Option<UncheckedAccount<'info>>,
 }
 
@@ -3527,7 +3538,8 @@ pub struct DiscoverVisibleWaypoints<'info> {
     pub session: Option<UncheckedAccount<'info>>,
 
     /// Map generator program for record_discovered_poi CPI
-    /// CHECK: Program ID validated by Anchor CPI.
+    /// CHECK: Address validated by constraint; only used for CPI.
+    #[account(address = MAP_GENERATOR_PROGRAM_ID)]
     pub map_generator_program: Option<UncheckedAccount<'info>>,
 }
 
@@ -3558,7 +3570,8 @@ pub struct DiscoverVisibleWaypointsAuthorized<'info> {
     pub session_signer: Option<UncheckedAccount<'info>>,
 
     /// Map generator program for record_discovered_poi CPI
-    /// CHECK: Program ID validated by Anchor CPI.
+    /// CHECK: Address validated by constraint; only used for CPI.
+    #[account(address = MAP_GENERATOR_PROGRAM_ID)]
     pub map_generator_program: Option<UncheckedAccount<'info>>,
 }
 
@@ -3723,7 +3736,8 @@ pub struct GenerateScannerOffer<'info> {
     pub session: Option<UncheckedAccount<'info>>,
 
     /// Map generator program for offer data CPI
-    /// CHECK: Program ID validated by Anchor CPI.
+    /// CHECK: Address validated by constraint; only used for CPI.
+    #[account(address = MAP_GENERATOR_PROGRAM_ID)]
     pub map_generator_program: Option<UncheckedAccount<'info>>,
 }
 
@@ -3888,8 +3902,8 @@ pub struct RequestPoiVrf<'info> {
     )]
     pub vrf_state: Account<'info, PoiVrfState>,
 
-    /// CHECK: Oracle queue for VRF requests. Must be the ER oracle queue.
-    #[account(mut)]
+    /// CHECK: Oracle queue for VRF requests — must be owned by the VRF program.
+    #[account(mut, owner = ephemeral_vrf_sdk::consts::VRF_PROGRAM_ID)]
     pub oracle_queue: UncheckedAccount<'info>,
 }
 

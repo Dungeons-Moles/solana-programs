@@ -11,7 +11,7 @@
 use anchor_lang::prelude::*;
 use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
 use ephemeral_rollups_sdk::cpi::DelegateConfig;
-use ephemeral_rollups_sdk::ephem::commit_and_undelegate_accounts;
+use ephemeral_rollups_sdk::ephem::{FoldableIntentBuilder, MagicIntentBundleBuilder};
 
 pub mod constants;
 pub mod effects;
@@ -136,12 +136,13 @@ pub mod player_inventory {
         );
 
         let inventory_info = ctx.accounts.inventory.to_account_info();
-        commit_and_undelegate_accounts(
-            &ctx.accounts.session_signer.to_account_info(),
-            vec![&inventory_info],
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program.to_account_info(),
-        )?;
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.session_signer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .commit_and_undelegate(&[inventory_info])
+        .build_and_invoke()?;
         Ok(())
     }
 

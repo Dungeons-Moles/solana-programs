@@ -6,7 +6,7 @@ use core::str::FromStr;
 use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
 use ephemeral_rollups_sdk::consts::MAGIC_PROGRAM_ID;
 use ephemeral_rollups_sdk::cpi::DelegateConfig;
-use ephemeral_rollups_sdk::ephem::commit_and_undelegate_accounts;
+use ephemeral_rollups_sdk::ephem::{FoldableIntentBuilder, MagicIntentBundleBuilder};
 use ephemeral_vrf_sdk::instructions::{create_request_randomness_ix, RequestRandomnessParams};
 use ephemeral_vrf_sdk::types::SerializableAccountMeta;
 use magicblock_magic_program_api::{args::ScheduleTaskArgs, instruction::MagicBlockInstruction};
@@ -676,9 +676,9 @@ pub mod gameplay_state {
             &ctx.accounts.gauntlet_config,
             vec![ctx.accounts.gauntlet_pool_vault.clone(), ctx.accounts.gauntlet_epoch_pool.clone()],
             ScheduleTaskArgs {
-                task_id: args.task_id,
-                execution_interval_millis: args.execution_interval_millis,
-                iterations: args.iterations,
+                task_id: args.task_id as i64,
+                execution_interval_millis: args.execution_interval_millis as i64,
+                iterations: args.iterations as i64,
                 instructions: vec![finalize_ix],
             },
         )?;
@@ -710,9 +710,9 @@ pub mod gameplay_state {
                 ctx.accounts.gauntlet_player_score.clone(),
             ],
             ScheduleTaskArgs {
-                task_id: args.task_id,
-                execution_interval_millis: args.execution_interval_millis,
-                iterations: args.iterations,
+                task_id: args.task_id as i64,
+                execution_interval_millis: args.execution_interval_millis as i64,
+                iterations: args.iterations as i64,
                 instructions: vec![reward_ix],
             },
         )?;
@@ -803,12 +803,13 @@ pub mod gameplay_state {
         );
 
         let game_state_info = ctx.accounts.game_state.to_account_info();
-        commit_and_undelegate_accounts(
-            &ctx.accounts.session_signer.to_account_info(),
-            vec![&game_state_info],
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program.to_account_info(),
-        )?;
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.session_signer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .commit_and_undelegate(&[game_state_info])
+        .build_and_invoke()?;
         Ok(())
     }
 
@@ -825,12 +826,13 @@ pub mod gameplay_state {
             GameplayStateError::Unauthorized
         );
         let ge_info = ctx.accounts.gauntlet_echoes.to_account_info();
-        commit_and_undelegate_accounts(
-            &ctx.accounts.session_signer.to_account_info(),
-            vec![&ge_info],
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program.to_account_info(),
-        )?;
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.session_signer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .commit_and_undelegate(&[ge_info])
+        .build_and_invoke()?;
         Ok(())
     }
 
@@ -864,12 +866,13 @@ pub mod gameplay_state {
         let config_info = ctx.accounts.gauntlet_config.to_account_info();
         let vault_info = ctx.accounts.gauntlet_pool_vault.to_account_info();
         let epoch_info = ctx.accounts.gauntlet_epoch_pool.to_account_info();
-        commit_and_undelegate_accounts(
-            &ctx.accounts.payer.to_account_info(),
-            vec![&config_info, &vault_info, &epoch_info],
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program.to_account_info(),
-        )?;
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.payer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .commit_and_undelegate(&[config_info, vault_info, epoch_info])
+        .build_and_invoke()?;
         Ok(())
     }
 
@@ -901,12 +904,13 @@ pub mod gameplay_state {
 
         let player_score_info = ctx.accounts.gauntlet_player_score.to_account_info();
         let reward_record_info = ctx.accounts.gauntlet_reward_record.to_account_info();
-        commit_and_undelegate_accounts(
-            &ctx.accounts.payer.to_account_info(),
-            vec![&player_score_info, &reward_record_info],
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program.to_account_info(),
-        )?;
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.payer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .commit_and_undelegate(&[player_score_info, reward_record_info])
+        .build_and_invoke()?;
         Ok(())
     }
 
@@ -932,12 +936,13 @@ pub mod gameplay_state {
         );
 
         let game_state_info = ctx.accounts.game_state.to_account_info();
-        commit_and_undelegate_accounts(
-            &ctx.accounts.session_signer.to_account_info(),
-            vec![&game_state_info],
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program.to_account_info(),
-        )?;
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.session_signer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .commit_and_undelegate(&[game_state_info])
+        .build_and_invoke()?;
         Ok(())
     }
 
@@ -3103,12 +3108,13 @@ pub mod gameplay_state {
         );
 
         let vrf_info = ctx.accounts.gameplay_vrf_state.to_account_info();
-        commit_and_undelegate_accounts(
-            &ctx.accounts.session_signer.to_account_info(),
-            vec![&vrf_info],
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program.to_account_info(),
-        )?;
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.session_signer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .commit_and_undelegate(&[vrf_info])
+        .build_and_invoke()?;
         Ok(())
     }
 
@@ -3157,12 +3163,13 @@ pub mod gameplay_state {
         );
 
         let vrf_info = ctx.accounts.gameplay_vrf_state.to_account_info();
-        commit_and_undelegate_accounts(
-            &ctx.accounts.payer.to_account_info(),
-            vec![&vrf_info],
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program.to_account_info(),
-        )?;
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.payer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .commit_and_undelegate(&[vrf_info])
+        .build_and_invoke()?;
         Ok(())
     }
 

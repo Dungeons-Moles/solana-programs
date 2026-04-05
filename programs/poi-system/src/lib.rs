@@ -10,7 +10,7 @@ pub mod state;
 use anchor_lang::context::CpiContext;
 use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
 use ephemeral_rollups_sdk::cpi::DelegateConfig;
-use ephemeral_rollups_sdk::ephem::commit_and_undelegate_accounts;
+use ephemeral_rollups_sdk::ephem::{FoldableIntentBuilder, MagicIntentBundleBuilder};
 use ephemeral_vrf_sdk::anchor::vrf;
 use ephemeral_vrf_sdk::instructions::{create_request_randomness_ix, RequestRandomnessParams};
 use ephemeral_vrf_sdk::types::SerializableAccountMeta;
@@ -968,12 +968,13 @@ pub mod poi_system {
         drop(session_data);
 
         let map_pois_info = ctx.accounts.map_pois.to_account_info();
-        commit_and_undelegate_accounts(
-            &ctx.accounts.session_signer.to_account_info(),
-            vec![&map_pois_info],
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program.to_account_info(),
-        )?;
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.session_signer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .commit_and_undelegate(&[map_pois_info])
+        .build_and_invoke()?;
         Ok(())
     }
 
@@ -1012,12 +1013,13 @@ pub mod poi_system {
         drop(session_data);
 
         let poi_vrf_state_info = ctx.accounts.poi_vrf_state.to_account_info();
-        commit_and_undelegate_accounts(
-            &ctx.accounts.session_signer.to_account_info(),
-            vec![&poi_vrf_state_info],
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program.to_account_info(),
-        )?;
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.session_signer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .commit_and_undelegate(&[poi_vrf_state_info])
+        .build_and_invoke()?;
         Ok(())
     }
 

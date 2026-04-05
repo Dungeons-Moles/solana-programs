@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
 use ephemeral_rollups_sdk::cpi::DelegateConfig;
-use ephemeral_rollups_sdk::ephem::{commit_accounts, commit_and_undelegate_accounts};
+use ephemeral_rollups_sdk::ephem::{FoldableIntentBuilder, MagicIntentBundleBuilder};
 pub mod constants;
 pub mod errors;
 pub mod state;
@@ -942,21 +942,22 @@ pub mod session_manager {
             .as_ref()
             .map(|a| a.to_account_info());
         let mut accounts_to_commit = vec![
-            &game_session_info,
-            &game_state_info,
-            &generated_map_info,
-            &inventory_info,
-            &map_pois_info,
+            game_session_info,
+            game_state_info,
+            generated_map_info,
+            inventory_info,
+            map_pois_info,
         ];
-        if let Some(ref info) = poi_vrf_info {
+        if let Some(info) = poi_vrf_info {
             accounts_to_commit.push(info);
         }
-        commit_accounts(
-            &ctx.accounts.player.to_account_info(),
-            accounts_to_commit,
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program.to_account_info(),
-        )?;
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.player.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .commit(&accounts_to_commit)
+        .build_and_invoke()?;
 
         Ok(())
     }
@@ -986,12 +987,13 @@ pub mod session_manager {
             SessionManagerError::InvalidCampaignLevel
         );
 
-        commit_and_undelegate_accounts(
-            &ctx.accounts.session_signer.to_account_info(),
-            vec![&game_session_info],
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program.to_account_info(),
-        )?;
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.session_signer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .commit_and_undelegate(&[game_session_info])
+        .build_and_invoke()?;
 
         // NOTE: After scheduling commit+undelegate, this program may no longer own `game_session`
         // during this instruction, so we must not mutate account data here.

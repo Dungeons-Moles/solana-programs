@@ -56,3 +56,6 @@ test-ledger/
 # Temp files
 *.tmp
 *.temp
+
+# Lean 4 build artifacts
+formal_verification/.lake/

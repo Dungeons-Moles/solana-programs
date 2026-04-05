@@ -21,7 +21,7 @@
  *   NFT_ITEM_ID   - Relic item ID, e.g. "S-XX-01" (required for items)
  */
 
-import * as anchor from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
 import * as fs from "fs";
 import * as os from "os";
 

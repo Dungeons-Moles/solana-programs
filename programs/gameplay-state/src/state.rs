@@ -643,8 +643,7 @@ mod tests {
             initialized: true,
             bump: 255,
         };
-        let serialized_len = queue
-            .try_to_vec()
+        let serialized_len = borsh::to_vec(&queue)
             .expect("duel open queue should serialize")
             .len();
 
@@ -677,8 +676,7 @@ mod tests {
             initialized: true,
             bump: 255,
         };
-        let serialized_len = pool
-            .try_to_vec()
+        let serialized_len = borsh::to_vec(&pool)
             .expect("gauntlet week pool should serialize")
             .len();
 
@@ -709,8 +707,7 @@ mod tests {
             finalized: true,
             bump: 255,
         };
-        let serialized_len = epoch_pool
-            .try_to_vec()
+        let serialized_len = borsh::to_vec(&epoch_pool)
             .expect("gauntlet epoch pool should serialize")
             .len();
 
@@ -734,8 +731,7 @@ mod tests {
             paid: true,
             bump: 255,
         };
-        let serialized_len = reward_record
-            .try_to_vec()
+        let serialized_len = borsh::to_vec(&reward_record)
             .expect("gauntlet reward record should serialize")
             .len();
 
@@ -760,8 +756,7 @@ mod tests {
             echoes: [Some(echo); 5],
             bump: 255,
         };
-        let serialized_len = ge
-            .try_to_vec()
+        let serialized_len = borsh::to_vec(&ge)
             .expect("gauntlet echoes should serialize")
             .len();
 

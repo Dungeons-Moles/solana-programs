@@ -5,26 +5,24 @@ __metadata:
   version: 8
   cacheKey: 10c0
 
-"@babel/runtime@npm:^7.25.0":
-  version: 7.28.6
-  resolution: "@babel/runtime@npm:7.28.6"
-  checksum: 10c0/358cf2429992ac1c466df1a21c1601d595c46930a13c1d4662fde908d44ee78ec3c183aaff513ecb01ef8c55c3624afe0309eeeb34715672dbfadb7feedb2c0d
-  languageName: node
-  linkType: hard
-
-"@coral-xyz/anchor-errors@npm:^0.31.1":
-  version: 0.31.1
-  resolution: "@coral-xyz/anchor-errors@npm:0.31.1"
-  checksum: 10c0/d359d6244a89bcfb606e6d31d545c3be8e32dccd47b78dac6ec0091a51b2eb6c78aad9601f39db2659d8e66db8fffc36477247d58d570bc9d866e7ec3e40b5b2
-  languageName: node
-  linkType: hard
-
-"@coral-xyz/anchor@npm:^0.32.0":
-  version: 0.32.1
-  resolution: "@coral-xyz/anchor@npm:0.32.1"
+"@anchor-lang/borsh@npm:^1.0.0":
+  version: 1.0.0
+  resolution: "@anchor-lang/borsh@npm:1.0.0"
   dependencies:
-    "@coral-xyz/anchor-errors": "npm:^0.31.1"
-    "@coral-xyz/borsh": "npm:^0.31.1"
+    bn.js: "npm:^5.1.2"
+    buffer-layout: "npm:^1.2.0"
+  peerDependencies:
+    "@solana/web3.js": ^1.69.0
+  checksum: 10c0/23b034f98a92ae7852dda5c9acd78f1d5a86978acdfc10d1292e0a29e6dadb853404975a46cdd01a6a2022dc26d1f63f7efcae1291b22db83fd4c792f11f58b4
+  languageName: node
+  linkType: hard
+
+"@anchor-lang/core@npm:^1.0.0":
+  version: 1.0.0
+  resolution: "@anchor-lang/core@npm:1.0.0"
+  dependencies:
+    "@anchor-lang/borsh": "npm:^1.0.0"
+    "@anchor-lang/errors": "npm:^1.0.0"
     "@noble/hashes": "npm:^1.3.1"
     "@solana/web3.js": "npm:^1.69.0"
     bn.js: "npm:^5.1.2"
@@ -36,19 +34,21 @@ __metadata:
     pako: "npm:^2.0.3"
     superstruct: "npm:^0.15.4"
     toml: "npm:^3.0.0"
-  checksum: 10c0/669b6f54efb0a5a96dad9e055d30b3b803f691b1b058379efefb87c11f97a9d369d513b2f200082c0b55b4cb31540dc5404e244c6f23f0a14b6d2ad2e18f08b7
+  checksum: 10c0/b1ab6e237ce81621f111bbb9387e69e2eeb742a5533f997e171d24c9874f4f149500deb5de58c725d6d96cb0f0c4333646a6334325bdb3f9b240dd6b3096d181
   languageName: node
   linkType: hard
 
-"@coral-xyz/borsh@npm:^0.31.1":
-  version: 0.31.1
-  resolution: "@coral-xyz/borsh@npm:0.31.1"
-  dependencies:
-    bn.js: "npm:^5.1.2"
-    buffer-layout: "npm:^1.2.0"
-  peerDependencies:
-    "@solana/web3.js": ^1.69.0
-  checksum: 10c0/3d6d40a1476df5eb0635d8687a640de89fd7e7ffd135f733907f13ff2569a2a07f65f64768d632fb45ed55006d9c9ee94e40fd775813a9cf1211fefa567f98dd
+"@anchor-lang/errors@npm:^1.0.0":
+  version: 1.0.0
+  resolution: "@anchor-lang/errors@npm:1.0.0"
+  checksum: 10c0/6956387cad22995d1108104e94c66d92b4a5e5cb9d0f15f721ebdc3106024d60d5bde567d93edbb1b24a0a68b355866767c18b08711efbfd65820bbc835c6ac3
+  languageName: node
+  linkType: hard
+
+"@babel/runtime@npm:^7.25.0":
+  version: 7.28.6
+  resolution: "@babel/runtime@npm:7.28.6"
+  checksum: 10c0/358cf2429992ac1c466df1a21c1601d595c46930a13c1d4662fde908d44ee78ec3c183aaff513ecb01ef8c55c3624afe0309eeeb34715672dbfadb7feedb2c0d
   languageName: node
   linkType: hard
 
@@ -1879,7 +1879,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "solana-programs@workspace:."
   dependencies:
-    "@coral-xyz/anchor": "npm:^0.32.0"
+    "@anchor-lang/core": "npm:^1.0.0"
     "@metaplex-foundation/mpl-core": "npm:^1.7.0"
     "@metaplex-foundation/umi": "npm:^1.5.1"
     "@metaplex-foundation/umi-bundle-defaults": "npm:^1.5.1"

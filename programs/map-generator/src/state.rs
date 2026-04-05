@@ -63,8 +63,8 @@ pub struct SeedUpdate {
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum TileType {
-    Floor = 0,
-    Wall = 1,
+    Floor,
+    Wall,
 }
 
 /// Position on the map grid

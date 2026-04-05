@@ -1,7 +1,12 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::program::{invoke, invoke_signed};
-use anchor_lang::solana_program::pubkey;
+use borsh::BorshSerialize;
+
+/// Replacement for borsh 0.10's `try_to_vec()` method (removed in borsh 1.x).
+fn serialize_borsh(value: &impl BorshSerialize) -> Result<Vec<u8>> {
+    borsh::to_vec(value).map_err(|e| error::Error::from(ProgramError::from(e)))
+}
 
 pub const MPL_CORE_ID: Pubkey = pubkey!("CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d");
 
@@ -182,15 +187,14 @@ pub fn create_v1<'a, 'info>(
     uri: String,
     signers_seeds: &[&[&[u8]]],
 ) -> Result<()> {
-    let mut data = CreateV1InstructionData { discriminator: 0 }.try_to_vec()?;
+    let mut data = serialize_borsh(&CreateV1InstructionData { discriminator: 0 })?;
     data.extend_from_slice(
-        &CreateV1InstructionArgs {
+        &serialize_borsh(&CreateV1InstructionArgs {
             data_state: DataState::AccountState,
             name,
             uri,
             plugins: None,
-        }
-        .try_to_vec()?,
+        })?,
     );
 
     let mut metas = vec![AccountMeta::new(*accounts.asset.key, true)];
@@ -235,13 +239,12 @@ pub struct AddPluginV1Accounts<'a, 'info> {
 pub fn add_transfer_delegate_plugin<'a, 'info>(
     accounts: AddPluginV1Accounts<'a, 'info>,
 ) -> Result<()> {
-    let mut data = AddPluginV1InstructionData { discriminator: 2 }.try_to_vec()?;
+    let mut data = serialize_borsh(&AddPluginV1InstructionData { discriminator: 2 })?;
     data.extend_from_slice(
-        &AddPluginV1InstructionArgs {
+        &serialize_borsh(&AddPluginV1InstructionArgs {
             plugin: Plugin::TransferDelegate(TransferDelegate {}),
             init_authority: None,
-        }
-        .try_to_vec()?,
+        })?,
     );
 
     let mut metas = vec![AccountMeta::new(*accounts.asset.key, false)];
@@ -281,13 +284,12 @@ pub fn approve_plugin_authority<'a, 'info>(
     new_authority: PluginAuthority,
 ) -> Result<()> {
     let mut data =
-        ApprovePluginAuthorityV1InstructionData { discriminator: 8 }.try_to_vec()?;
+        serialize_borsh(&ApprovePluginAuthorityV1InstructionData { discriminator: 8 })?;
     data.extend_from_slice(
-        &ApprovePluginAuthorityV1InstructionArgs {
+        &serialize_borsh(&ApprovePluginAuthorityV1InstructionArgs {
             plugin_type,
             new_authority,
-        }
-        .try_to_vec()?,
+        })?,
     );
 
     let mut metas = vec![AccountMeta::new(*accounts.asset.key, false)];
@@ -325,8 +327,8 @@ pub fn remove_plugin<'a, 'info>(
     accounts: RemovePluginV1Accounts<'a, 'info>,
     plugin_type: PluginType,
 ) -> Result<()> {
-    let mut data = RemovePluginV1InstructionData { discriminator: 4 }.try_to_vec()?;
-    data.extend_from_slice(&RemovePluginV1InstructionArgs { plugin_type }.try_to_vec()?);
+    let mut data = serialize_borsh(&RemovePluginV1InstructionData { discriminator: 4 })?;
+    data.extend_from_slice(&serialize_borsh(&RemovePluginV1InstructionArgs { plugin_type })?);
 
     let mut metas = vec![AccountMeta::new(*accounts.asset.key, false)];
     push_optional_meta(&mut metas, accounts.collection, true, false);
@@ -363,12 +365,11 @@ pub fn transfer_v1<'a, 'info>(
     accounts: TransferV1Accounts<'a, 'info>,
     signers_seeds: &[&[&[u8]]],
 ) -> Result<()> {
-    let mut data = TransferV1InstructionData { discriminator: 14 }.try_to_vec()?;
+    let mut data = serialize_borsh(&TransferV1InstructionData { discriminator: 14 })?;
     data.extend_from_slice(
-        &TransferV1InstructionArgs {
+        &serialize_borsh(&TransferV1InstructionArgs {
             compression_proof: None,
-        }
-        .try_to_vec()?,
+        })?,
     );
 
     let mut metas = vec![AccountMeta::new(*accounts.asset.key, false)];

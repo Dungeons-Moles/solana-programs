@@ -7,9 +7,9 @@ use anchor_lang::prelude::*;
 #[repr(u8)]
 pub enum EnemyTier {
     #[default]
-    T1 = 0,
-    T2 = 1,
-    T3 = 2,
+    T1,
+    T2,
+    T3,
 }
 
 impl EnemyTier {

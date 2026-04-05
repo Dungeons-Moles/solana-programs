@@ -28,7 +28,7 @@ fn grant_relic_to_owner<'info>(
 ) -> Result<()> {
     player_profile::cpi::grant_relic_ownership(
         CpiContext::new_with_signer(
-            player_profile_program.to_account_info(),
+            player_profile_program.key(),
             player_profile::cpi::accounts::GrantRelicOwnership {
                 player_relic_pool: player_relic_pool.clone(),
                 owner: owner.clone(),
@@ -52,7 +52,7 @@ fn revoke_relic_from_owner<'info>(
 ) -> Result<()> {
     player_profile::cpi::revoke_relic_ownership(
         CpiContext::new_with_signer(
-            player_profile_program.to_account_info(),
+            player_profile_program.key(),
             player_profile::cpi::accounts::RevokeRelicOwnership {
                 player_relic_pool: player_relic_pool.clone(),
                 owner: owner.clone(),
@@ -343,7 +343,7 @@ pub mod nft_marketplace {
         // Transfer SOL to seller.
         system_program::transfer(
             CpiContext::new(
-                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.system_program.key(),
                 system_program::Transfer {
                     from: ctx.accounts.buyer.to_account_info(),
                     to: ctx.accounts.seller.to_account_info(),
@@ -356,7 +356,7 @@ pub mod nft_marketplace {
         if company_fee > 0 {
             system_program::transfer(
                 CpiContext::new(
-                    ctx.accounts.system_program.to_account_info(),
+                    ctx.accounts.system_program.key(),
                     system_program::Transfer {
                         from: ctx.accounts.buyer.to_account_info(),
                         to: ctx.accounts.company_treasury.to_account_info(),
@@ -370,7 +370,7 @@ pub mod nft_marketplace {
         if gauntlet_fee > 0 {
             system_program::transfer(
                 CpiContext::new(
-                    ctx.accounts.system_program.to_account_info(),
+                    ctx.accounts.system_program.key(),
                     system_program::Transfer {
                         from: ctx.accounts.buyer.to_account_info(),
                         to: ctx.accounts.gauntlet_pool.to_account_info(),
@@ -551,7 +551,7 @@ pub struct InitializeMarketplace<'info> {
     pub authority: Signer<'info>,
 
     /// CHECK: Validated in handler against gameplay-state gauntlet pool vault PDA.
-    pub gauntlet_pool: AccountInfo<'info>,
+    pub gauntlet_pool: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -567,7 +567,7 @@ pub struct MintSkin<'info> {
         mut,
         address = marketplace_config.skins_collection @ MarketplaceError::InvalidCollection
     )]
-    pub collection: AccountInfo<'info>,
+    pub collection: UncheckedAccount<'info>,
 
     #[account(
         seeds = [MarketplaceConfig::SEED_PREFIX],
@@ -581,7 +581,7 @@ pub struct MintSkin<'info> {
         seeds = [b"mint_authority"],
         bump,
     )]
-    pub mint_authority: AccountInfo<'info>,
+    pub mint_authority: UncheckedAccount<'info>,
 
     /// Admin who triggers the mint.
     #[account(
@@ -591,15 +591,15 @@ pub struct MintSkin<'info> {
     pub payer: Signer<'info>,
 
     /// CHECK: The wallet that will own the minted NFT.
-    pub owner: AccountInfo<'info>,
+    pub owner: UncheckedAccount<'info>,
 
     /// CHECK: Metaplex Core program.
     #[account(address = MPL_CORE_PROGRAM_ID)]
-    pub mpl_core_program: AccountInfo<'info>,
+    pub mpl_core_program: UncheckedAccount<'info>,
 
     /// CHECK: SPL Noop program used by mpl-core create.
     #[account(address = SPL_NOOP_PROGRAM_ID)]
-    pub log_wrapper: AccountInfo<'info>,
+    pub log_wrapper: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -615,7 +615,7 @@ pub struct MintNftItem<'info> {
         mut,
         address = marketplace_config.items_collection @ MarketplaceError::InvalidCollection
     )]
-    pub collection: AccountInfo<'info>,
+    pub collection: UncheckedAccount<'info>,
 
     #[account(
         seeds = [MarketplaceConfig::SEED_PREFIX],
@@ -628,7 +628,7 @@ pub struct MintNftItem<'info> {
         seeds = [b"mint_authority"],
         bump,
     )]
-    pub mint_authority: AccountInfo<'info>,
+    pub mint_authority: UncheckedAccount<'info>,
 
     #[account(
         mut,
@@ -647,20 +647,20 @@ pub struct MintNftItem<'info> {
 
     /// CHECK: Player relic pool PDA credited automatically on mint.
     #[account(mut)]
-    pub player_relic_pool: AccountInfo<'info>,
+    pub player_relic_pool: UncheckedAccount<'info>,
 
     /// CHECK: The wallet that will own the minted NFT.
-    pub owner: AccountInfo<'info>,
+    pub owner: UncheckedAccount<'info>,
 
     /// CHECK: Metaplex Core program.
     #[account(address = MPL_CORE_PROGRAM_ID)]
-    pub mpl_core_program: AccountInfo<'info>,
+    pub mpl_core_program: UncheckedAccount<'info>,
 
     pub player_profile_program: Program<'info, PlayerProfile>,
 
     /// CHECK: SPL Noop program used by mpl-core create.
     #[account(address = SPL_NOOP_PROGRAM_ID)]
-    pub log_wrapper: AccountInfo<'info>,
+    pub log_wrapper: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -687,15 +687,15 @@ pub struct ListNft<'info> {
         seeds = [b"mint_authority"],
         bump,
     )]
-    pub mint_authority: AccountInfo<'info>,
+    pub mint_authority: UncheckedAccount<'info>,
 
     /// CHECK: Metaplex Core asset account. Validated in handler.
     #[account(mut)]
-    pub asset: AccountInfo<'info>,
+    pub asset: UncheckedAccount<'info>,
 
     /// CHECK: Collection the asset belongs to. Validated against config.
     #[account(mut)]
-    pub collection: AccountInfo<'info>,
+    pub collection: UncheckedAccount<'info>,
 
     #[account(mut)]
     pub seller: Signer<'info>,
@@ -706,11 +706,11 @@ pub struct ListNft<'info> {
         bump,
         seeds::program = PLAYER_PROFILE_PROGRAM_ID,
     )]
-    pub player_profile: AccountInfo<'info>,
+    pub player_profile: UncheckedAccount<'info>,
 
     /// CHECK: Metaplex Core program.
     #[account(address = MPL_CORE_PROGRAM_ID)]
-    pub mpl_core_program: AccountInfo<'info>,
+    pub mpl_core_program: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -729,18 +729,18 @@ pub struct CancelListing<'info> {
 
     /// CHECK: Metaplex Core asset account.
     #[account(mut)]
-    pub asset: AccountInfo<'info>,
+    pub asset: UncheckedAccount<'info>,
 
     /// CHECK: Collection for the asset.
     #[account(mut)]
-    pub collection: AccountInfo<'info>,
+    pub collection: UncheckedAccount<'info>,
 
     #[account(mut)]
     pub seller: Signer<'info>,
 
     /// CHECK: Metaplex Core program.
     #[account(address = MPL_CORE_PROGRAM_ID)]
-    pub mpl_core_program: AccountInfo<'info>,
+    pub mpl_core_program: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -768,11 +768,11 @@ pub struct BuyNft<'info> {
         seeds = [b"mint_authority"],
         bump,
     )]
-    pub mint_authority: AccountInfo<'info>,
+    pub mint_authority: UncheckedAccount<'info>,
 
     /// CHECK: Metaplex Core asset account.
     #[account(mut)]
-    pub asset: AccountInfo<'info>,
+    pub asset: UncheckedAccount<'info>,
 
     #[account(
         mut,
@@ -783,34 +783,34 @@ pub struct BuyNft<'info> {
 
     /// CHECK: Collection for the asset.
     #[account(mut)]
-    pub collection: AccountInfo<'info>,
+    pub collection: UncheckedAccount<'info>,
 
     #[account(mut)]
     pub buyer: Signer<'info>,
 
     /// CHECK: Seller wallet, receives payment.
     #[account(mut, address = listing.seller @ MarketplaceError::Unauthorized)]
-    pub seller: AccountInfo<'info>,
+    pub seller: UncheckedAccount<'info>,
 
     /// CHECK: Seller relic pool PDA, present for relic trades.
     #[account(mut)]
-    pub seller_player_relic_pool: Option<AccountInfo<'info>>,
+    pub seller_player_relic_pool: Option<UncheckedAccount<'info>>,
 
     /// CHECK: Buyer relic pool PDA, created on demand when buying a relic.
     #[account(mut)]
-    pub buyer_player_relic_pool: AccountInfo<'info>,
+    pub buyer_player_relic_pool: UncheckedAccount<'info>,
 
     /// CHECK: Company treasury, receives fee.
     #[account(mut, address = marketplace_config.company_treasury)]
-    pub company_treasury: AccountInfo<'info>,
+    pub company_treasury: UncheckedAccount<'info>,
 
     /// CHECK: Gauntlet pool, receives fee.
     #[account(mut, address = marketplace_config.gauntlet_pool)]
-    pub gauntlet_pool: AccountInfo<'info>,
+    pub gauntlet_pool: UncheckedAccount<'info>,
 
     /// CHECK: Metaplex Core program.
     #[account(address = MPL_CORE_PROGRAM_ID)]
-    pub mpl_core_program: AccountInfo<'info>,
+    pub mpl_core_program: UncheckedAccount<'info>,
 
     pub player_profile_program: Program<'info, PlayerProfile>,
 
@@ -901,7 +901,7 @@ pub struct UpdateQuestProgress<'info> {
 
     /// CHECK: Player whose quest progress is being updated. Not a signer —
     /// only the authority can advance quest progress.
-    pub player: AccountInfo<'info>,
+    pub player: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]

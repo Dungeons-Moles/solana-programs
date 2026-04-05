@@ -316,7 +316,7 @@ pub mod player_profile {
         // Transfer treasury split.
         system_program::transfer(
             CpiContext::new(
-                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.system_program.key(),
                 system_program::Transfer {
                     from: ctx.accounts.owner.to_account_info(),
                     to: ctx.accounts.treasury.to_account_info(),
@@ -328,7 +328,7 @@ pub mod player_profile {
         // Transfer gauntlet pool split.
         system_program::transfer(
             CpiContext::new(
-                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.system_program.key(),
                 system_program::Transfer {
                     from: ctx.accounts.owner.to_account_info(),
                     to: ctx.accounts.gauntlet_pool.to_account_info(),
@@ -605,7 +605,7 @@ pub struct UpdateActiveItemPool<'info> {
 
     /// CHECK: Validated via owner constraint + PDA/discriminator checks in handler.
     #[account(owner = GAMEPLAY_STATE_PROGRAM_PUBKEY @ PlayerProfileError::InvalidPitDraftQueue)]
-    pub pit_draft_queue: AccountInfo<'info>,
+    pub pit_draft_queue: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -634,7 +634,7 @@ pub struct RecordRunResultCpi<'info> {
     /// 3. session.campaign_level == level_completed input
     /// 4. session.session_signer == session_signer signer
     #[account(owner = SESSION_MANAGER_PROGRAM_PUBKEY @ PlayerProfileError::InvalidSessionOwner)]
-    pub session: AccountInfo<'info>,
+    pub session: UncheckedAccount<'info>,
 
     /// Session key signer signer - verified against session's stored session_signer field.
     pub session_signer: Signer<'info>,
@@ -672,7 +672,7 @@ pub struct PurchaseRuns<'info> {
     /// CHECK: Validated in instruction to be the canonical gameplay-state
     /// gauntlet pool vault PDA and owned by gameplay-state program.
     #[account(mut)]
-    pub gauntlet_pool: AccountInfo<'info>,
+    pub gauntlet_pool: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -706,7 +706,7 @@ pub struct EquipSkin<'info> {
     /// 1. Account owner == Metaplex Core program ID
     /// 2. Asset discriminator == 1 (AssetV1)
     /// 3. Asset owner field == player wallet
-    pub skin_asset: AccountInfo<'info>,
+    pub skin_asset: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -747,7 +747,7 @@ pub struct GrantRelicOwnership<'info> {
     pub player_relic_pool: Account<'info, PlayerRelicPool>,
 
     /// CHECK: Relic owner whose pool is being credited.
-    pub owner: AccountInfo<'info>,
+    pub owner: UncheckedAccount<'info>,
 
     #[account(mut)]
     pub payer: Signer<'info>,
@@ -773,7 +773,7 @@ pub struct RevokeRelicOwnership<'info> {
     pub player_relic_pool: Account<'info, PlayerRelicPool>,
 
     /// CHECK: Relic owner whose pool is being debited.
-    pub owner: AccountInfo<'info>,
+    pub owner: UncheckedAccount<'info>,
 
     #[account(
         seeds = [b"mint_authority"],

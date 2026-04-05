@@ -8,10 +8,7 @@ pub mod spawn;
 pub mod state;
 
 use anchor_lang::context::CpiContext;
-use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
-use ephemeral_rollups_sdk::cpi::DelegateConfig;
-use ephemeral_rollups_sdk::ephem::{FoldableIntentBuilder, MagicIntentBundleBuilder};
-use ephemeral_vrf_sdk::anchor::vrf;
+use er_compat::DelegateConfig;
 use ephemeral_vrf_sdk::instructions::{create_request_randomness_ix, RequestRandomnessParams};
 use ephemeral_vrf_sdk::types::SerializableAccountMeta;
 use errors::PoiSystemError;
@@ -45,7 +42,7 @@ pub const MAP_GENERATOR_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
 ]);
 fn local_delegate_config(validator: Option<Pubkey>) -> DelegateConfig {
     DelegateConfig {
-        validator,
+        validator: validator.map(|v| unsafe { std::mem::transmute(v) }),
         ..DelegateConfig::default()
     }
 }
@@ -150,7 +147,7 @@ fn reveal_radius_cpi<'info>(
 ) -> Result<()> {
     map_generator::cpi::reveal_radius(
         CpiContext::new(
-            map_generator_program.clone(),
+            map_generator_program.key(),
             map_generator::cpi::accounts::RevealRadius {
                 generated_map: generated_map.clone(),
                 session: session.clone(),
@@ -178,7 +175,7 @@ fn reveal_manhattan_radius_cpi<'info>(
 ) -> Result<()> {
     map_generator::cpi::reveal_manhattan_radius(
         CpiContext::new(
-            map_generator_program.clone(),
+            map_generator_program.key(),
             map_generator::cpi::accounts::RevealRadius {
                 generated_map: generated_map.clone(),
                 session: session.clone(),
@@ -206,7 +203,7 @@ fn update_active_offer_cpi<'info>(
 ) -> Result<()> {
     map_generator::cpi::update_active_offer(
         CpiContext::new(
-            map_generator_program.clone(),
+            map_generator_program.key(),
             map_generator::cpi::accounts::UpdateActiveOffer {
                 session_discovery: session_discovery.clone(),
                 session: session.clone(),
@@ -232,7 +229,7 @@ fn record_discovered_poi_cpi<'info>(
 ) -> Result<()> {
     map_generator::cpi::record_discovered_poi(
         CpiContext::new(
-            map_generator_program.clone(),
+            map_generator_program.key(),
             map_generator::cpi::accounts::RecordDiscoveredPoi {
                 session_discovery: session_discovery.clone(),
                 session: session.clone(),
@@ -256,7 +253,7 @@ fn mark_discovered_poi_used_cpi<'info>(
 ) -> Result<()> {
     map_generator::cpi::mark_discovered_poi_used(
         CpiContext::new(
-            map_generator_program.clone(),
+            map_generator_program.key(),
             map_generator::cpi::accounts::RecordDiscoveredPoi {
                 session_discovery: session_discovery.clone(),
                 session: session.clone(),
@@ -281,7 +278,7 @@ fn refresh_discovered_enemies_authorized_cpi<'info>(
 ) -> Result<()> {
     let seeds = &[POI_AUTHORITY_SEED, &[poi_authority_bump]];
     gameplay_state::cpi::refresh_discovered_enemies_authorized(CpiContext::new_with_signer(
-        gameplay_state_program.clone(),
+        gameplay_state_program.key(),
         gameplay_state::cpi::accounts::RefreshDiscoveredEnemiesAuthorized {
             poi_authority: poi_authority.clone(),
             session: session.clone(),
@@ -537,7 +534,7 @@ fn equip_gear_authorized_cpi<'info>(
 
     player_inventory::cpi::equip_gear_authorized(
         CpiContext::new_with_signer(
-            player_inventory_program.clone(),
+            player_inventory_program.key(),
             player_inventory::cpi::accounts::EquipGearAuthorized {
                 inventory: inventory.clone(),
                 game_state: game_state.clone(),
@@ -571,7 +568,7 @@ fn equip_tool_authorized_cpi<'info>(
 
     player_inventory::cpi::equip_tool_authorized(
         CpiContext::new_with_signer(
-            player_inventory_program.clone(),
+            player_inventory_program.key(),
             player_inventory::cpi::accounts::EquipToolAuthorized {
                 inventory: inventory.clone(),
                 game_state: game_state.clone(),
@@ -615,7 +612,7 @@ fn equip_item_authorized_cpi<'info>(
         let signer_seeds: &[&[&[u8]]] = &[&[POI_AUTHORITY_SEED, &[poi_authority_bump]]];
         player_inventory::cpi::equip_relic_authorized(
             CpiContext::new_with_signer(
-                player_inventory_program.clone(),
+                player_inventory_program.key(),
                 player_inventory::cpi::accounts::EquipRelicAuthorized {
                     inventory: inventory.clone(),
                     poi_authority: poi_authority.clone(),
@@ -668,7 +665,6 @@ fn copy_shop_offers(shop_state: &mut ShopState, filtered: &[state::ItemOffer], r
     }
 }
 
-#[ephemeral]
 #[program]
 pub mod poi_system {
     use super::*;
@@ -901,8 +897,15 @@ pub mod poi_system {
             PoiSystemError::Unauthorized
         );
         let map_pois_seeds: &[&[u8]] = &[MAP_POIS_SEED, session_key.as_ref()];
-        ctx.accounts.delegate_map_pois(
-            &ctx.accounts.player,
+        er_compat::delegate_account(
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.map_pois,
+            &ctx.accounts.owner_program,
+            &ctx.accounts.buffer_map_pois,
+            &ctx.accounts.delegation_record_map_pois,
+            &ctx.accounts.delegation_metadata_map_pois,
+            &ctx.accounts.delegation_program,
+            &ctx.accounts.system_program.to_account_info(),
             map_pois_seeds,
             local_delegate_config(validator),
         )?;
@@ -925,8 +928,15 @@ pub mod poi_system {
             PoiSystemError::Unauthorized
         );
         let poi_vrf_state_seeds: &[&[u8]] = &[PoiVrfState::SEED_PREFIX, session_key.as_ref()];
-        ctx.accounts.delegate_poi_vrf_state(
-            &ctx.accounts.player,
+        er_compat::delegate_account(
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.poi_vrf_state,
+            &ctx.accounts.owner_program,
+            &ctx.accounts.buffer_poi_vrf_state,
+            &ctx.accounts.delegation_record_poi_vrf_state,
+            &ctx.accounts.delegation_metadata_poi_vrf_state,
+            &ctx.accounts.delegation_program,
+            &ctx.accounts.system_program.to_account_info(),
             poi_vrf_state_seeds,
             local_delegate_config(validator),
         )?;
@@ -968,13 +978,12 @@ pub mod poi_system {
         drop(session_data);
 
         let map_pois_info = ctx.accounts.map_pois.to_account_info();
-        MagicIntentBundleBuilder::new(
+        er_compat::commit_and_undelegate(
             ctx.accounts.session_signer.to_account_info(),
             ctx.accounts.magic_context.to_account_info(),
             ctx.accounts.magic_program.to_account_info(),
-        )
-        .commit_and_undelegate(&[map_pois_info])
-        .build_and_invoke()?;
+            &[map_pois_info],
+        )?;
         Ok(())
     }
 
@@ -1013,13 +1022,12 @@ pub mod poi_system {
         drop(session_data);
 
         let poi_vrf_state_info = ctx.accounts.poi_vrf_state.to_account_info();
-        MagicIntentBundleBuilder::new(
+        er_compat::commit_and_undelegate(
             ctx.accounts.session_signer.to_account_info(),
             ctx.accounts.magic_context.to_account_info(),
             ctx.accounts.magic_program.to_account_info(),
-        )
-        .commit_and_undelegate(&[poi_vrf_state_info])
-        .build_and_invoke()?;
+            &[poi_vrf_state_info],
+        )?;
         Ok(())
     }
 
@@ -1171,7 +1179,7 @@ pub mod poi_system {
         if result.heal_amount > 0 {
             gameplay_state::cpi::heal_player(
                 CpiContext::new_with_signer(
-                    ctx.accounts.gameplay_state_program.to_account_info(),
+                    ctx.accounts.gameplay_state_program.key(),
                     gameplay_state::cpi::accounts::HealPlayer {
                         game_state: ctx.accounts.game_state.to_account_info(),
                         inventory: ctx.accounts.inventory.to_account_info(),
@@ -1185,7 +1193,7 @@ pub mod poi_system {
 
         // CPI to gameplay-state to skip to day (or trigger boss fight if Night3)
         gameplay_state::cpi::skip_to_day(CpiContext::new_with_signer(
-            ctx.accounts.gameplay_state_program.to_account_info(),
+            ctx.accounts.gameplay_state_program.key(),
             gameplay_state::cpi::accounts::SkipToDay {
                 game_state: ctx.accounts.game_state.to_account_info(),
                 inventory: ctx.accounts.inventory.to_account_info(),
@@ -1576,7 +1584,7 @@ pub mod poi_system {
         let seeds = &[POI_AUTHORITY_SEED, &[ctx.bumps.poi_authority]];
         player_inventory::cpi::apply_tool_oil_authorized(
             CpiContext::new_with_signer(
-                ctx.accounts.player_inventory_program.to_account_info(),
+                ctx.accounts.player_inventory_program.key(),
                 player_inventory::cpi::accounts::ApplyToolOilAuthorized {
                     inventory: ctx.accounts.inventory.to_account_info(),
                     poi_authority: ctx.accounts.poi_authority.to_account_info(),
@@ -1734,7 +1742,7 @@ pub mod poi_system {
         let seeds = &[POI_AUTHORITY_SEED, &[ctx.bumps.poi_authority]];
         gameplay_state::cpi::modify_gold_authorized(
             CpiContext::new_with_signer(
-                ctx.accounts.gameplay_state_program.to_account_info(),
+                ctx.accounts.gameplay_state_program.key(),
                 gameplay_state::cpi::accounts::ModifyGoldAuthorized {
                     game_state: ctx.accounts.game_state.to_account_info(),
                     poi_authority: ctx.accounts.poi_authority.to_account_info(),
@@ -1803,7 +1811,7 @@ pub mod poi_system {
         let seeds = &[POI_AUTHORITY_SEED, &[ctx.bumps.poi_authority]];
         gameplay_state::cpi::modify_gold_authorized(
             CpiContext::new_with_signer(
-                ctx.accounts.gameplay_state_program.to_account_info(),
+                ctx.accounts.gameplay_state_program.key(),
                 gameplay_state::cpi::accounts::ModifyGoldAuthorized {
                     game_state: ctx.accounts.game_state.to_account_info(),
                     poi_authority: ctx.accounts.poi_authority.to_account_info(),
@@ -1938,7 +1946,7 @@ pub mod poi_system {
         let seeds = &[POI_AUTHORITY_SEED, &[ctx.bumps.poi_authority]];
         gameplay_state::cpi::modify_gold_authorized(
             CpiContext::new_with_signer(
-                ctx.accounts.gameplay_state_program.to_account_info(),
+                ctx.accounts.gameplay_state_program.key(),
                 gameplay_state::cpi::accounts::ModifyGoldAuthorized {
                     game_state: ctx.accounts.game_state.to_account_info(),
                     poi_authority: ctx.accounts.poi_authority.to_account_info(),
@@ -1950,7 +1958,7 @@ pub mod poi_system {
 
         player_inventory::cpi::upgrade_tool_tier_authorized(
             CpiContext::new_with_signer(
-                ctx.accounts.player_inventory_program.to_account_info(),
+                ctx.accounts.player_inventory_program.key(),
                 player_inventory::cpi::accounts::UpgradeToolTierAuthorized {
                     inventory: ctx.accounts.inventory.to_account_info(),
                     poi_authority: ctx.accounts.poi_authority.to_account_info(),
@@ -2006,7 +2014,7 @@ pub mod poi_system {
         let seeds = &[POI_AUTHORITY_SEED, &[ctx.bumps.poi_authority]];
         player_inventory::cpi::fuse_items_authorized(
             CpiContext::new_with_signer(
-                ctx.accounts.player_inventory_program.to_account_info(),
+                ctx.accounts.player_inventory_program.key(),
                 player_inventory::cpi::accounts::FuseItemsAuthorized {
                     inventory: ctx.accounts.inventory.to_account_info(),
                     poi_authority: ctx.accounts.poi_authority.to_account_info(),
@@ -2179,7 +2187,7 @@ pub mod poi_system {
         let seeds = &[POI_AUTHORITY_SEED, &[ctx.bumps.poi_authority]];
         gameplay_state::cpi::set_position_authorized(
             CpiContext::new_with_signer(
-                ctx.accounts.gameplay_state_program.to_account_info(),
+                ctx.accounts.gameplay_state_program.key(),
                 gameplay_state::cpi::accounts::SetPositionAuthorized {
                     game_state: ctx.accounts.game_state.to_account_info(),
                     poi_authority: ctx.accounts.poi_authority.to_account_info(),
@@ -2564,7 +2572,7 @@ pub mod poi_system {
         let seeds = &[POI_AUTHORITY_SEED, &[ctx.bumps.poi_authority]];
         player_inventory::cpi::unequip_gear_authorized(
             CpiContext::new_with_signer(
-                ctx.accounts.player_inventory_program.to_account_info(),
+                ctx.accounts.player_inventory_program.key(),
                 player_inventory::cpi::accounts::UnequipGearAuthorized {
                     inventory: ctx.accounts.inventory.to_account_info(),
                     game_state: ctx.accounts.game_state.to_account_info(),
@@ -2582,7 +2590,7 @@ pub mod poi_system {
             i16::try_from(result.refund).unwrap_or(0) - i16::try_from(result.cost).unwrap_or(0);
         gameplay_state::cpi::modify_gold_authorized(
             CpiContext::new_with_signer(
-                ctx.accounts.gameplay_state_program.to_account_info(),
+                ctx.accounts.gameplay_state_program.key(),
                 gameplay_state::cpi::accounts::ModifyGoldAuthorized {
                     game_state: ctx.accounts.game_state.to_account_info(),
                     poi_authority: ctx.accounts.poi_authority.to_account_info(),
@@ -2634,6 +2642,7 @@ pub mod poi_system {
     /// Uses the `#[vrf]` macro which auto-adds program_identity, vrf_program,
     /// slot_hashes, system_program and provides `invoke_signed_vrf`.
     /// Inits the VrfState account in the same instruction (matching map/gameplay pattern).
+    #[allow(clippy::missing_transmute_annotations)]
     pub fn request_poi_vrf(ctx: Context<RequestPoiVrf>) -> Result<()> {
         let vrf_state = &mut ctx.accounts.vrf_state;
         require!(
@@ -2651,22 +2660,26 @@ pub mod poi_system {
         caller_seed[..8].copy_from_slice(&1u64.to_le_bytes());
         caller_seed[8..].copy_from_slice(&ctx.accounts.session.key().to_bytes()[..24]);
 
-        let ix = create_request_randomness_ix(RequestRandomnessParams {
-            payer: ctx.accounts.payer.key(),
-            oracle_queue: ctx.accounts.oracle_queue.key(),
-            callback_program_id: ID,
-            callback_discriminator: instruction::FulfillPoiVrf::DISCRIMINATOR.to_vec(),
-            caller_seed,
-            accounts_metas: Some(vec![SerializableAccountMeta {
-                pubkey: ctx.accounts.vrf_state.key(),
-                is_signer: false,
-                is_writable: true,
-            }]),
-            ..Default::default()
-        });
-
+        // SAFETY: Pubkey layout is identical between versions (32 bytes).
+        let ix = unsafe {
+            create_request_randomness_ix(RequestRandomnessParams {
+                payer: std::mem::transmute(ctx.accounts.payer.key()),
+                oracle_queue: std::mem::transmute(ctx.accounts.oracle_queue.key()),
+                callback_program_id: std::mem::transmute(ID),
+                callback_discriminator: instruction::FulfillPoiVrf::DISCRIMINATOR.to_vec(),
+                caller_seed,
+                accounts_metas: Some(vec![SerializableAccountMeta {
+                    pubkey: std::mem::transmute(ctx.accounts.vrf_state.key()),
+                    is_signer: false,
+                    is_writable: true,
+                }]),
+                ..Default::default()
+            })
+        };
+        // SAFETY: Instruction layout is identical between versions.
+        let ix_new: anchor_lang::solana_program::instruction::Instruction = unsafe { std::mem::transmute(ix) };
         ctx.accounts
-            .invoke_signed_vrf(&ctx.accounts.payer.to_account_info(), &ix)?;
+            .invoke_signed_vrf(&ctx.accounts.payer.to_account_info(), &ix_new)?;
         Ok(())
     }
 
@@ -2715,37 +2728,93 @@ pub mod poi_system {
         );
         Ok(())
     }
+
+    /// Processes undelegation (replaces #[ephemeral] macro output).
+    pub fn process_undelegation(ctx: Context<InitializeAfterUndelegation>, account_seeds: Vec<Vec<u8>>) -> Result<()> {
+        er_compat::undelegate_account(
+            &ctx.accounts.base_account,
+            &crate::id(),
+            &ctx.accounts.buffer,
+            &ctx.accounts.payer,
+            &ctx.accounts.system_program,
+            account_seeds,
+        )
+    }
+}
+
+/// Context for undelegation processing (replaces #[ephemeral] macro output).
+#[derive(Accounts)]
+pub struct InitializeAfterUndelegation<'info> {
+    /// CHECK: Account being undelegated
+    #[account(mut)]
+    pub base_account: UncheckedAccount<'info>,
+    /// CHECK: Delegation buffer
+    pub buffer: UncheckedAccount<'info>,
+    /// CHECK: Payer
+    #[account(mut)]
+    pub payer: UncheckedAccount<'info>,
+    /// CHECK: System program
+    pub system_program: UncheckedAccount<'info>,
 }
 
 // =============================================================================
 // Account Contexts
 // =============================================================================
 
-#[delegate]
 #[derive(Accounts)]
 pub struct DelegateMapPois<'info> {
-    #[account(mut, del)]
+    #[account(mut)]
     /// CHECK: PDA is validated in handler.
-    pub map_pois: AccountInfo<'info>,
+    pub map_pois: UncheckedAccount<'info>,
     /// CHECK: Session PDA used only for seed derivation. Owner not checked because
     /// the session may already be delegated (owned by delegation program) at this point.
     pub game_session: UncheckedAccount<'info>,
     pub player: Signer<'info>,
+    /// CHECK: Buffer for delegation
+    #[account(mut, seeds = [er_compat::DELEGATE_BUFFER_TAG, map_pois.key().as_ref()], bump, seeds::program = crate::id())]
+    pub buffer_map_pois: UncheckedAccount<'info>,
+    /// CHECK: Delegation record
+    #[account(mut, seeds = [er_compat::DELEGATION_RECORD_TAG, map_pois.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_record_map_pois: UncheckedAccount<'info>,
+    /// CHECK: Delegation metadata
+    #[account(mut, seeds = [er_compat::DELEGATION_METADATA_TAG, map_pois.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_metadata_map_pois: UncheckedAccount<'info>,
+    /// CHECK: Owner program
+    #[account(address = crate::id())]
+    pub owner_program: UncheckedAccount<'info>,
+    /// CHECK: Delegation program
+    #[account(address = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
-#[delegate]
 #[derive(Accounts)]
 pub struct DelegatePoiVrfState<'info> {
-    #[account(mut, del)]
+    #[account(mut)]
     /// CHECK: PDA is validated in handler.
-    pub poi_vrf_state: AccountInfo<'info>,
+    pub poi_vrf_state: UncheckedAccount<'info>,
     /// CHECK: Session PDA used only for seed derivation. Owner not checked because
     /// the session may already be delegated (owned by delegation program) at this point.
     pub game_session: UncheckedAccount<'info>,
     pub player: Signer<'info>,
+    /// CHECK: Buffer for delegation
+    #[account(mut, seeds = [er_compat::DELEGATE_BUFFER_TAG, poi_vrf_state.key().as_ref()], bump, seeds::program = crate::id())]
+    pub buffer_poi_vrf_state: UncheckedAccount<'info>,
+    /// CHECK: Delegation record
+    #[account(mut, seeds = [er_compat::DELEGATION_RECORD_TAG, poi_vrf_state.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_record_poi_vrf_state: UncheckedAccount<'info>,
+    /// CHECK: Delegation metadata
+    #[account(mut, seeds = [er_compat::DELEGATION_METADATA_TAG, poi_vrf_state.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_metadata_poi_vrf_state: UncheckedAccount<'info>,
+    /// CHECK: Owner program
+    #[account(address = crate::id())]
+    pub owner_program: UncheckedAccount<'info>,
+    /// CHECK: Delegation program
+    #[account(address = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
-#[commit]
 #[derive(Accounts)]
 pub struct UndelegateMapPois<'info> {
     #[account(mut)]
@@ -2753,27 +2822,38 @@ pub struct UndelegateMapPois<'info> {
     /// by the delegation program, not this program. Validated in handler via:
     /// (1) PDA address derivation with crate::ID, (2) Anchor discriminator in
     /// try_deserialize, (3) map_pois.session == session_key cross-reference.
-    pub map_pois: AccountInfo<'info>,
+    pub map_pois: UncheckedAccount<'info>,
     /// CHECK: Session PDA used only for seed derivation. Owner not checked because
     /// the session may already be delegated (owned by delegation program) at this point.
     pub game_session: UncheckedAccount<'info>,
     #[account(mut)]
     pub session_signer: Signer<'info>,
+    /// CHECK: Magic program
+    #[account(address = er_compat::MAGIC_PROGRAM_ID)]
+    pub magic_program: UncheckedAccount<'info>,
+    /// CHECK: Magic context
+    #[account(mut, address = er_compat::MAGIC_CONTEXT_ID)]
+    pub magic_context: UncheckedAccount<'info>,
 }
 
-#[commit]
 #[derive(Accounts)]
 pub struct UndelegatePoiVrfState<'info> {
     #[account(mut)]
     /// CHECK: Owner is NOT checked because during undelegation the account is owned
     /// by the delegation program, not this program. Validated in handler via PDA
     /// address derivation with crate::ID and discriminator check in try_deserialize.
-    pub poi_vrf_state: AccountInfo<'info>,
+    pub poi_vrf_state: UncheckedAccount<'info>,
     /// CHECK: Session PDA used only for seed derivation. Owner not checked because
     /// the session may already be delegated (owned by delegation program) at this point.
     pub game_session: UncheckedAccount<'info>,
     #[account(mut)]
     pub session_signer: Signer<'info>,
+    /// CHECK: Magic program
+    #[account(address = er_compat::MAGIC_PROGRAM_ID)]
+    pub magic_program: UncheckedAccount<'info>,
+    /// CHECK: Magic context
+    #[account(mut, address = er_compat::MAGIC_CONTEXT_ID)]
+    pub magic_context: UncheckedAccount<'info>,
 }
 
 fn read_map_pois(map_pois: &AccountInfo<'_>) -> Result<MapPois> {
@@ -2804,7 +2884,7 @@ pub struct InitializeMapPois<'info> {
 
     /// The GameSession PDA (must exist)
     /// CHECK: We only verify this account exists as validation of the session
-    pub session: AccountInfo<'info>,
+    pub session: UncheckedAccount<'info>,
 
     /// Generated map containing POIs to copy
     /// CHECK: Validated by owner check (must be owned by map-generator program)
@@ -2812,7 +2892,7 @@ pub struct InitializeMapPois<'info> {
     #[account(
         owner = MAP_GENERATOR_PROGRAM_ID @ PoiSystemError::InvalidGeneratedMap
     )]
-    pub generated_map: AccountInfo<'info>,
+    pub generated_map: UncheckedAccount<'info>,
 
     #[account(
         constraint = game_state.session == session.key() @ PoiSystemError::InvalidSession
@@ -2839,13 +2919,13 @@ pub struct RefreshMapPois<'info> {
         constraint = session.key() == map_pois.session @ PoiSystemError::InvalidSession,
         owner = SESSION_MANAGER_PROGRAM_ID @ PoiSystemError::InvalidSessionOwner
     )]
-    pub session: AccountInfo<'info>,
+    pub session: UncheckedAccount<'info>,
 
     /// CHECK: Validated by owner check (must be owned by map-generator program).
     #[account(
         owner = MAP_GENERATOR_PROGRAM_ID @ PoiSystemError::InvalidGeneratedMap
     )]
-    pub generated_map: AccountInfo<'info>,
+    pub generated_map: UncheckedAccount<'info>,
 
     #[account(
         constraint = game_state.session == session.key() @ PoiSystemError::InvalidSession,
@@ -2870,13 +2950,13 @@ pub struct RefreshMapPoisForCampaign<'info> {
         constraint = session.key() == map_pois.session @ PoiSystemError::InvalidSession,
         owner = SESSION_MANAGER_PROGRAM_ID @ PoiSystemError::InvalidSessionOwner
     )]
-    pub session: AccountInfo<'info>,
+    pub session: UncheckedAccount<'info>,
 
     /// CHECK: Validated by owner check (must be owned by map-generator program).
     #[account(
         owner = MAP_GENERATOR_PROGRAM_ID @ PoiSystemError::InvalidGeneratedMap
     )]
-    pub generated_map: AccountInfo<'info>,
+    pub generated_map: UncheckedAccount<'info>,
 
     #[account(
         seeds = [map_generator::state::MapConfig::SEED_PREFIX],
@@ -2910,7 +2990,7 @@ pub struct CloseMapPois<'info> {
         constraint = game_session.key() == map_pois.session @ PoiSystemError::Unauthorized,
         owner = SESSION_MANAGER_PROGRAM_ID @ PoiSystemError::InvalidSessionOwner,
     )]
-    pub game_session: AccountInfo<'info>,
+    pub game_session: UncheckedAccount<'info>,
 
     /// Session owner — must match GameSession.player (validated in instruction body).
     #[account(mut)]
@@ -2935,11 +3015,11 @@ pub struct CloseMapPoisViaSessionSigner<'info> {
         constraint = game_session.key() == map_pois.session @ PoiSystemError::Unauthorized,
         owner = SESSION_MANAGER_PROGRAM_ID @ PoiSystemError::InvalidSessionOwner,
     )]
-    pub game_session: AccountInfo<'info>,
+    pub game_session: UncheckedAccount<'info>,
 
     /// Player wallet.
     /// CHECK: Validated against session.player in instruction body.
-    pub player: AccountInfo<'info>,
+    pub player: UncheckedAccount<'info>,
 
     /// Session key signer must sign to authorize closure. Receives rent refund.
     #[account(mut)]
@@ -2968,7 +3048,7 @@ pub struct CloseMapPoisOrphaned<'info> {
     /// Player wallet receives the rent refund.
     /// CHECK: Validated via game_state.player.
     #[account(mut, address = game_state.player @ PoiSystemError::Unauthorized)]
-    pub player: AccountInfo<'info>,
+    pub player: UncheckedAccount<'info>,
 
     /// Session key signer — validated via game_state.session_signer.
     pub session_signer: Signer<'info>,
@@ -2989,7 +3069,7 @@ pub struct CloseEmptyMapPois<'info> {
     /// Receives the lamports from the closed account.
     #[account(mut)]
     /// CHECK: Any destination is fine since the account is corrupted/empty.
-    pub destination: AccountInfo<'info>,
+    pub destination: UncheckedAccount<'info>,
 
     pub payer: Signer<'info>,
 }
@@ -3034,7 +3114,7 @@ pub struct InteractRest<'info> {
         seeds::program = MAP_GENERATOR_PROGRAM_ID,
     )]
     /// CHECK: PDA validated by seeds against map-generator program.
-    pub generated_map: AccountInfo<'info>,
+    pub generated_map: UncheckedAccount<'info>,
 
     /// POI authority PDA for signing CPI calls
     /// CHECK: PDA derived from this program, used as signer in CPI
@@ -3042,7 +3122,7 @@ pub struct InteractRest<'info> {
         seeds = [POI_AUTHORITY_SEED],
         bump,
     )]
-    pub poi_authority: AccountInfo<'info>,
+    pub poi_authority: UncheckedAccount<'info>,
 
     /// Gameplay authority PDA from gameplay-state for gear slot expansion CPI
     /// CHECK: PDA derived from gameplay-state program
@@ -3051,7 +3131,7 @@ pub struct InteractRest<'info> {
         bump,
         seeds::program = gameplay_state::ID,
     )]
-    pub gameplay_authority: AccountInfo<'info>,
+    pub gameplay_authority: UncheckedAccount<'info>,
 
     /// Gameplay state program for CPI (heal_player and skip_to_day)
     pub gameplay_state_program: Program<'info, gameplay_state::program::GameplayState>,
@@ -3061,12 +3141,12 @@ pub struct InteractRest<'info> {
 
     /// Optional GameplayVrfState for VRF-backed boss selection in skip_to_day CPI.
     /// CHECK: Passed through to gameplay-state CPI; validated there.
-    pub gameplay_vrf_state: Option<AccountInfo<'info>>,
+    pub gameplay_vrf_state: Option<UncheckedAccount<'info>>,
 
     /// Optional GauntletEchoes for gauntlet echo resolution in skip_to_day CPI.
     /// CHECK: Passed through to gameplay-state CPI; validated there.
     #[account(mut)]
-    pub gauntlet_echoes: Option<AccountInfo<'info>>,
+    pub gauntlet_echoes: Option<UncheckedAccount<'info>>,
 
     /// Player initiating the interaction
     pub player: Signer<'info>,
@@ -3095,7 +3175,7 @@ pub struct InteractPickItem<'info> {
         seeds = [MAP_POIS_SEED, map_pois.session.as_ref()],
         bump = map_pois.bump
     )]
-    pub map_pois: Account<'info, MapPois>,
+    pub map_pois: Box<Account<'info, MapPois>>,
 
     /// Player's GameState for position/time validation and HP modification via CPI
     #[account(
@@ -3122,7 +3202,7 @@ pub struct InteractPickItem<'info> {
         bump,
         seeds::program = player_inventory::ID,
     )]
-    pub inventory_authority: AccountInfo<'info>,
+    pub inventory_authority: UncheckedAccount<'info>,
 
     /// POI authority PDA for signing CPI calls to player-inventory
     /// CHECK: PDA derived from this program, used as signer in CPI
@@ -3130,7 +3210,7 @@ pub struct InteractPickItem<'info> {
         seeds = [POI_AUTHORITY_SEED],
         bump,
     )]
-    pub poi_authority: AccountInfo<'info>,
+    pub poi_authority: UncheckedAccount<'info>,
 
     /// Player inventory program for CPI (equip_gear_authorized, equip_tool_authorized)
     pub player_inventory_program: Program<'info, player_inventory::program::PlayerInventory>,
@@ -3142,7 +3222,7 @@ pub struct InteractPickItem<'info> {
     #[account(
         constraint = game_session.key() == map_pois.session @ PoiSystemError::InvalidSession,
     )]
-    pub game_session: Account<'info, session_manager::state::GameSession>,
+    pub game_session: Box<Account<'info, session_manager::state::GameSession>>,
 
     /// Optional VRF state for PvP offer generation.
     /// Required when RunMode is Duel or Gauntlet; ignored for Campaign.
@@ -3201,7 +3281,7 @@ pub struct InteractToolOil<'info> {
         seeds = [POI_AUTHORITY_SEED],
         bump,
     )]
-    pub poi_authority: AccountInfo<'info>,
+    pub poi_authority: UncheckedAccount<'info>,
 
     /// Player inventory program for CPI (apply_tool_oil)
     pub player_inventory_program: Program<'info, player_inventory::program::PlayerInventory>,
@@ -3310,7 +3390,7 @@ pub struct ShopPurchase<'info> {
         bump,
         seeds::program = player_inventory::ID,
     )]
-    pub inventory_authority: AccountInfo<'info>,
+    pub inventory_authority: UncheckedAccount<'info>,
 
     /// POI authority PDA for signing CPI calls
     /// CHECK: PDA derived from this program, used as signer in CPI
@@ -3318,7 +3398,7 @@ pub struct ShopPurchase<'info> {
         seeds = [POI_AUTHORITY_SEED],
         bump,
     )]
-    pub poi_authority: AccountInfo<'info>,
+    pub poi_authority: UncheckedAccount<'info>,
 
     /// Player inventory program for CPI (equip_gear_authorized, equip_tool_authorized)
     pub player_inventory_program: Program<'info, player_inventory::program::PlayerInventory>,
@@ -3375,7 +3455,7 @@ pub struct ShopReroll<'info> {
         seeds = [POI_AUTHORITY_SEED],
         bump,
     )]
-    pub poi_authority: AccountInfo<'info>,
+    pub poi_authority: UncheckedAccount<'info>,
 
     /// Gameplay state program for CPI
     pub gameplay_state_program: Program<'info, gameplay_state::program::GameplayState>,
@@ -3456,7 +3536,7 @@ pub struct InteractRustyAnvil<'info> {
         seeds = [POI_AUTHORITY_SEED],
         bump,
     )]
-    pub poi_authority: AccountInfo<'info>,
+    pub poi_authority: UncheckedAccount<'info>,
 
     /// Gameplay state program for CPI
     pub gameplay_state_program: Program<'info, gameplay_state::program::GameplayState>,
@@ -3501,7 +3581,7 @@ pub struct InteractRuneKiln<'info> {
         seeds = [POI_AUTHORITY_SEED],
         bump,
     )]
-    pub poi_authority: AccountInfo<'info>,
+    pub poi_authority: UncheckedAccount<'info>,
 
     /// Player inventory program for CPI (fuse_items)
     pub player_inventory_program: Program<'info, player_inventory::program::PlayerInventory>,
@@ -3558,7 +3638,7 @@ pub struct DiscoverVisibleWaypointsAuthorized<'info> {
         seeds::program = gameplay_state::ID,
         constraint = gameplay_authority.is_signer @ PoiSystemError::Unauthorized,
     )]
-    pub gameplay_authority: AccountInfo<'info>,
+    pub gameplay_authority: UncheckedAccount<'info>,
 
     /// Optional SessionDiscovery for recording waypoints
     pub session_discovery: Option<Box<Account<'info, map_generator::state::SessionDiscovery>>>,
@@ -3584,7 +3664,7 @@ pub struct FastTravel<'info> {
         seeds = [MAP_POIS_SEED, map_pois.session.as_ref()],
         bump = map_pois.bump
     )]
-    pub map_pois: Account<'info, MapPois>,
+    pub map_pois: Box<Account<'info, MapPois>>,
 
     /// Player's GameState for position/time validation
     #[account(
@@ -3601,7 +3681,7 @@ pub struct FastTravel<'info> {
         seeds = [POI_AUTHORITY_SEED],
         bump,
     )]
-    pub poi_authority: AccountInfo<'info>,
+    pub poi_authority: UncheckedAccount<'info>,
 
     /// Gameplay state program for CPI (set_position_authorized)
     pub gameplay_state_program: Program<'info, gameplay_state::program::GameplayState>,
@@ -3613,7 +3693,7 @@ pub struct FastTravel<'info> {
         bump,
         seeds::program = gameplay_state::ID,
     )]
-    pub gameplay_authority: AccountInfo<'info>,
+    pub gameplay_authority: UncheckedAccount<'info>,
 
     #[account(
         mut,
@@ -3621,7 +3701,7 @@ pub struct FastTravel<'info> {
         bump = generated_map.bump,
         seeds::program = map_generator::ID,
     )]
-    pub generated_map: Account<'info, map_generator::state::GeneratedMap>,
+    pub generated_map: Box<Account<'info, map_generator::state::GeneratedMap>>,
 
     /// CHECK: Session PDA reference validated by generated_map and game_state seeds.
     pub session: UncheckedAccount<'info>,
@@ -3645,7 +3725,7 @@ pub struct InteractSurveyBeacon<'info> {
         seeds = [MAP_POIS_SEED, map_pois.session.as_ref()],
         bump = map_pois.bump
     )]
-    pub map_pois: Account<'info, MapPois>,
+    pub map_pois: Box<Account<'info, MapPois>>,
 
     /// Player's GameState for position/time validation
     #[account(
@@ -3661,7 +3741,7 @@ pub struct InteractSurveyBeacon<'info> {
         bump = generated_map.bump,
         seeds::program = map_generator::ID,
     )]
-    pub generated_map: Account<'info, map_generator::state::GeneratedMap>,
+    pub generated_map: Box<Account<'info, map_generator::state::GeneratedMap>>,
 
     /// CHECK: Session PDA reference validated by generated_map and game_state seeds.
     pub session: UncheckedAccount<'info>,
@@ -3672,7 +3752,7 @@ pub struct InteractSurveyBeacon<'info> {
         seeds = [POI_AUTHORITY_SEED],
         bump,
     )]
-    pub poi_authority: AccountInfo<'info>,
+    pub poi_authority: UncheckedAccount<'info>,
 
     /// Gameplay authority PDA from gameplay-state for CPI into map-generator.
     /// CHECK: PDA derived from gameplay-state program.
@@ -3681,7 +3761,7 @@ pub struct InteractSurveyBeacon<'info> {
         bump,
         seeds::program = gameplay_state::ID,
     )]
-    pub gameplay_authority: AccountInfo<'info>,
+    pub gameplay_authority: UncheckedAccount<'info>,
 
     /// Gameplay state program for CPI (refresh_discovered_enemies_authorized)
     pub gameplay_state_program: Program<'info, gameplay_state::program::GameplayState>,
@@ -3705,7 +3785,7 @@ pub struct GenerateScannerOffer<'info> {
         seeds = [MAP_POIS_SEED, map_pois.session.as_ref()],
         bump = map_pois.bump
     )]
-    pub map_pois: Account<'info, MapPois>,
+    pub map_pois: Box<Account<'info, MapPois>>,
 
     #[account(
         seeds = [b"game_state", map_pois.session.as_ref()],
@@ -3719,7 +3799,7 @@ pub struct GenerateScannerOffer<'info> {
         bump = generated_map.bump,
         seeds::program = map_generator::ID,
     )]
-    pub generated_map: Account<'info, map_generator::state::GeneratedMap>,
+    pub generated_map: Box<Account<'info, map_generator::state::GeneratedMap>>,
 
     /// Optional VRF state for PvP offer generation.
     /// CHECK: Validated via PDA derivation and manual deserialization in handler.
@@ -3751,7 +3831,7 @@ pub struct InteractSeismicScanner<'info> {
         seeds = [MAP_POIS_SEED, map_pois.session.as_ref()],
         bump = map_pois.bump
     )]
-    pub map_pois: Account<'info, MapPois>,
+    pub map_pois: Box<Account<'info, MapPois>>,
 
     /// Player's GameState for position/time validation
     #[account(
@@ -3767,7 +3847,7 @@ pub struct InteractSeismicScanner<'info> {
         bump = generated_map.bump,
         seeds::program = map_generator::ID,
     )]
-    pub generated_map: Account<'info, map_generator::state::GeneratedMap>,
+    pub generated_map: Box<Account<'info, map_generator::state::GeneratedMap>>,
 
     /// CHECK: Session PDA reference validated by generated_map and game_state seeds.
     pub session: UncheckedAccount<'info>,
@@ -3778,7 +3858,7 @@ pub struct InteractSeismicScanner<'info> {
         seeds = [POI_AUTHORITY_SEED],
         bump,
     )]
-    pub poi_authority: AccountInfo<'info>,
+    pub poi_authority: UncheckedAccount<'info>,
 
     /// Gameplay authority PDA from gameplay-state for CPI into map-generator.
     /// CHECK: PDA derived from gameplay-state program.
@@ -3787,7 +3867,7 @@ pub struct InteractSeismicScanner<'info> {
         bump,
         seeds::program = gameplay_state::ID,
     )]
-    pub gameplay_authority: AccountInfo<'info>,
+    pub gameplay_authority: UncheckedAccount<'info>,
 
     /// Gameplay state program for CPI (refresh_discovered_enemies_authorized)
     pub gameplay_state_program: Program<'info, gameplay_state::program::GameplayState>,
@@ -3839,7 +3919,7 @@ pub struct InteractScrapChute<'info> {
         bump,
         seeds::program = player_inventory::ID,
     )]
-    pub inventory_authority: AccountInfo<'info>,
+    pub inventory_authority: UncheckedAccount<'info>,
 
     /// POI authority PDA for signing CPI calls
     /// CHECK: PDA derived from this program, used as signer in CPI
@@ -3847,7 +3927,7 @@ pub struct InteractScrapChute<'info> {
         seeds = [POI_AUTHORITY_SEED],
         bump,
     )]
-    pub poi_authority: AccountInfo<'info>,
+    pub poi_authority: UncheckedAccount<'info>,
 
     /// Gameplay state program for CPI
     pub gameplay_state_program: Program<'info, gameplay_state::program::GameplayState>,
@@ -3884,14 +3964,12 @@ pub struct InitPoiVrfState<'info> {
     pub system_program: Program<'info, System>,
 }
 
-#[vrf]
 #[derive(Accounts)]
 pub struct RequestPoiVrf<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
 
     /// CHECK: Session PDA key used only for VRF PDA derivation.
-    /// Same pattern as map_generator::RequestMapVrf and gameplay_state::RequestGameplayVrf.
     #[account(owner = SESSION_MANAGER_PROGRAM_ID @ PoiSystemError::InvalidSessionOwner)]
     pub session: UncheckedAccount<'info>,
 
@@ -3904,9 +3982,41 @@ pub struct RequestPoiVrf<'info> {
     )]
     pub vrf_state: Account<'info, PoiVrfState>,
 
-    /// CHECK: Oracle queue for VRF requests — must be owned by the VRF program.
-    #[account(mut, owner = ephemeral_vrf_sdk::consts::VRF_PROGRAM_ID)]
+    /// CHECK: Oracle queue for VRF requests.
+    #[account(mut, owner = er_compat::VRF_PROGRAM_ID)]
     pub oracle_queue: UncheckedAccount<'info>,
+
+    /// CHECK: Program identity PDA
+    #[account(seeds = [b"identity"], bump)]
+    pub program_identity: UncheckedAccount<'info>,
+
+    /// CHECK: VRF program
+    #[account(address = er_compat::VRF_PROGRAM_ID)]
+    pub vrf_program: UncheckedAccount<'info>,
+
+    /// CHECK: Slot hashes sysvar
+    #[account(address = er_compat::SLOT_HASHES_ID)]
+    pub slot_hashes: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+impl<'info> RequestPoiVrf<'info> {
+    fn invoke_signed_vrf(&self, payer: &AccountInfo<'info>, ix: &anchor_lang::solana_program::instruction::Instruction) -> Result<()> {
+        let bump = Pubkey::try_find_program_address(&[er_compat::VRF_IDENTITY_SEED], &crate::ID)
+            .ok_or(ProgramError::InvalidSeeds)?;
+        anchor_lang::solana_program::program::invoke_signed(
+            ix,
+            &[
+                payer.clone(),
+                self.program_identity.to_account_info(),
+                self.oracle_queue.to_account_info(),
+                self.slot_hashes.to_account_info(),
+            ],
+            &[&[er_compat::VRF_IDENTITY_SEED, &[bump.1]]],
+        )?;
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -3914,7 +4024,7 @@ pub struct FulfillPoiVrf<'info> {
     /// Oracle identity signer.
     #[cfg_attr(
         not(feature = "mock-vrf"),
-        account(address = ephemeral_vrf_sdk::consts::VRF_PROGRAM_IDENTITY)
+        account(address = er_compat::VRF_PROGRAM_IDENTITY)
     )]
     pub oracle: Signer<'info>,
 
@@ -3941,10 +4051,10 @@ pub struct ClosePoiVrfState<'info> {
         constraint = game_session.key() == vrf_state.session @ PoiSystemError::Unauthorized,
         owner = SESSION_MANAGER_PROGRAM_ID @ PoiSystemError::InvalidSessionOwner,
     )]
-    pub game_session: AccountInfo<'info>,
+    pub game_session: UncheckedAccount<'info>,
 
     /// CHECK: Validated against session.player in instruction body.
-    pub player: AccountInfo<'info>,
+    pub player: UncheckedAccount<'info>,
 
     #[account(mut)]
     pub session_signer: Signer<'info>,

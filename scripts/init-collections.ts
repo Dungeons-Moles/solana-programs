@@ -32,7 +32,7 @@ import {
   keypairIdentity,
 } from "@metaplex-foundation/umi";
 import { fromWeb3JsKeypair } from "@metaplex-foundation/umi-web3js-adapters";
-import * as anchor from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
 import * as fs from "fs";
 import * as os from "os";
 

@@ -9,9 +9,7 @@
 //! - Combat effect integration
 
 use anchor_lang::prelude::*;
-use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
-use ephemeral_rollups_sdk::cpi::DelegateConfig;
-use ephemeral_rollups_sdk::ephem::{FoldableIntentBuilder, MagicIntentBundleBuilder};
+use er_compat::DelegateConfig;
 
 pub mod constants;
 pub mod effects;
@@ -63,12 +61,12 @@ pub const SESSION_MANAGER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
 pub const SESSION_MANAGER_AUTHORITY_SEED: &[u8] = b"session_manager_authority";
 fn local_delegate_config(validator: Option<Pubkey>) -> DelegateConfig {
     DelegateConfig {
-        validator,
+        // Transmute Pubkey between versions (identical 32-byte layout)
+        validator: validator.map(|v| unsafe { std::mem::transmute(v) }),
         ..DelegateConfig::default()
     }
 }
 
-#[ephemeral]
 #[program]
 pub mod player_inventory {
     use super::*;
@@ -109,8 +107,15 @@ pub mod player_inventory {
             InventoryError::Unauthorized
         );
         let inventory_seeds: &[&[u8]] = &[b"inventory", session_key.as_ref()];
-        ctx.accounts.delegate_inventory(
-            &ctx.accounts.player,
+        er_compat::delegate_account(
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.inventory,
+            &ctx.accounts.owner_program,
+            &ctx.accounts.buffer_inventory,
+            &ctx.accounts.delegation_record_inventory,
+            &ctx.accounts.delegation_metadata_inventory,
+            &ctx.accounts.delegation_program,
+            &ctx.accounts.system_program.to_account_info(),
             inventory_seeds,
             local_delegate_config(validator),
         )?;
@@ -136,13 +141,12 @@ pub mod player_inventory {
         );
 
         let inventory_info = ctx.accounts.inventory.to_account_info();
-        MagicIntentBundleBuilder::new(
+        er_compat::commit_and_undelegate(
             ctx.accounts.session_signer.to_account_info(),
             ctx.accounts.magic_context.to_account_info(),
             ctx.accounts.magic_program.to_account_info(),
-        )
-        .commit_and_undelegate(&[inventory_info])
-        .build_and_invoke()?;
+            &[inventory_info],
+        )?;
         Ok(())
     }
 
@@ -304,8 +308,8 @@ pub mod player_inventory {
         slot_b: u8,
     ) -> Result<()> {
         let inventory = &mut ctx.accounts.inventory;
-        let item_a = inventory.gear[slot_a as usize].ok_or(InventoryError::SlotEmpty)?;
-        let item_b = inventory.gear[slot_b as usize].ok_or(InventoryError::SlotEmpty)?;
+        let _item_a = inventory.gear[slot_a as usize].ok_or(InventoryError::SlotEmpty)?;
+        let _item_b = inventory.gear[slot_b as usize].ok_or(InventoryError::SlotEmpty)?;
         require!(
             !inventory.gear_slot_is_relic(slot_a as usize)
                 && !inventory.gear_slot_is_relic(slot_b as usize),
@@ -395,6 +399,19 @@ pub mod player_inventory {
         });
 
         Ok(())
+    }
+
+    /// Processes undelegation of a previously delegated account.
+    /// Generated equivalent of what #[ephemeral] macro would produce.
+    pub fn process_undelegation(ctx: Context<InitializeAfterUndelegation>, account_seeds: Vec<Vec<u8>>) -> Result<()> {
+        er_compat::undelegate_account(
+            &ctx.accounts.base_account,
+            &crate::id(),
+            &ctx.accounts.buffer,
+            &ctx.accounts.payer,
+            &ctx.accounts.system_program,
+            account_seeds,
+        )
     }
 
     /// Rotates the owner (session_signer) on an inventory account.
@@ -821,29 +838,79 @@ fn remove_hp_bonus_cpi<'info>(
 // Account Contexts
 // =============================================================================
 
-#[delegate]
 #[derive(Accounts)]
 pub struct DelegateInventory<'info> {
-    #[account(mut, del)]
+    #[account(mut)]
     /// CHECK: PDA is validated in handler.
-    pub inventory: AccountInfo<'info>,
+    pub inventory: UncheckedAccount<'info>,
     /// CHECK: Session PDA used only for seed derivation. Owner not checked because
     /// the session may already be delegated (owned by delegation program) at this point.
     pub session: UncheckedAccount<'info>,
     pub player: Signer<'info>,
+    /// CHECK: Buffer for delegation
+    #[account(
+        mut,
+        seeds = [er_compat::DELEGATE_BUFFER_TAG, inventory.key().as_ref()],
+        bump,
+        seeds::program = crate::id()
+    )]
+    pub buffer_inventory: UncheckedAccount<'info>,
+    /// CHECK: Delegation record
+    #[account(
+        mut,
+        seeds = [er_compat::DELEGATION_RECORD_TAG, inventory.key().as_ref()],
+        bump,
+        seeds::program = er_compat::DELEGATION_PROGRAM_ID
+    )]
+    pub delegation_record_inventory: UncheckedAccount<'info>,
+    /// CHECK: Delegation metadata
+    #[account(
+        mut,
+        seeds = [er_compat::DELEGATION_METADATA_TAG, inventory.key().as_ref()],
+        bump,
+        seeds::program = er_compat::DELEGATION_PROGRAM_ID
+    )]
+    pub delegation_metadata_inventory: UncheckedAccount<'info>,
+    /// CHECK: Owner program
+    #[account(address = crate::id())]
+    pub owner_program: UncheckedAccount<'info>,
+    /// CHECK: Delegation program
+    #[account(address = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
-#[commit]
 #[derive(Accounts)]
 pub struct UndelegateInventory<'info> {
     #[account(mut)]
     /// CHECK: PDA is validated and deserialized in handler.
-    pub inventory: AccountInfo<'info>,
+    pub inventory: UncheckedAccount<'info>,
     /// CHECK: Session PDA used only for seed derivation. Owner not checked because
     /// the session may already be delegated (owned by delegation program) at this point.
     pub session: UncheckedAccount<'info>,
     #[account(mut)]
     pub session_signer: Signer<'info>,
+    /// CHECK: Magic program
+    #[account(address = er_compat::MAGIC_PROGRAM_ID)]
+    pub magic_program: UncheckedAccount<'info>,
+    /// CHECK: Magic context
+    #[account(mut, address = er_compat::MAGIC_CONTEXT_ID)]
+    pub magic_context: UncheckedAccount<'info>,
+}
+
+/// Context for undelegation processing (replaces #[ephemeral] macro output).
+#[derive(Accounts)]
+pub struct InitializeAfterUndelegation<'info> {
+    /// CHECK: Account being undelegated
+    #[account(mut)]
+    pub base_account: UncheckedAccount<'info>,
+    /// CHECK: Delegation buffer
+    pub buffer: UncheckedAccount<'info>,
+    /// CHECK: Payer
+    #[account(mut)]
+    pub payer: UncheckedAccount<'info>,
+    /// CHECK: System program
+    pub system_program: UncheckedAccount<'info>,
 }
 
 fn read_inventory(inventory: &AccountInfo<'_>) -> Result<PlayerInventory> {
@@ -867,7 +934,7 @@ pub struct InitializeInventory<'info> {
     /// The game session this inventory belongs to
     /// CHECK: Session account from session-manager program, owner validated by constraint
     #[account(owner = SESSION_MANAGER_PROGRAM_ID)]
-    pub session: AccountInfo<'info>,
+    pub session: UncheckedAccount<'info>,
 
     /// Player wallet, pays for account creation
     #[account(mut)]
@@ -945,7 +1012,7 @@ pub struct UnequipGear<'info> {
     /// Game state for HP bonus removal
     /// CHECK: Validated by gameplay-state program
     #[account(mut)]
-    pub game_state: AccountInfo<'info>,
+    pub game_state: UncheckedAccount<'info>,
 
     /// Inventory authority PDA for signing CPI calls to gameplay-state
     /// CHECK: This is a PDA derived from player-inventory program, validated by seeds
@@ -953,12 +1020,12 @@ pub struct UnequipGear<'info> {
         seeds = [INVENTORY_AUTHORITY_SEED],
         bump,
     )]
-    pub inventory_authority: AccountInfo<'info>,
+    pub inventory_authority: UncheckedAccount<'info>,
 
     /// Gameplay state program for HP modification CPI
     /// CHECK: Validated by program ID constant
     #[account(address = GAMEPLAY_STATE_PROGRAM_ID)]
-    pub gameplay_state_program: AccountInfo<'info>,
+    pub gameplay_state_program: UncheckedAccount<'info>,
 
     pub player: Signer<'info>,
 }
@@ -975,7 +1042,7 @@ pub struct UnequipGearAuthorized<'info> {
     /// Game state for HP bonus removal
     /// CHECK: Validated by gameplay-state program
     #[account(mut)]
-    pub game_state: AccountInfo<'info>,
+    pub game_state: UncheckedAccount<'info>,
 
     /// Inventory authority PDA for signing CPI calls to gameplay-state
     /// CHECK: This is a PDA derived from player-inventory program, validated by seeds
@@ -983,7 +1050,7 @@ pub struct UnequipGearAuthorized<'info> {
         seeds = [INVENTORY_AUTHORITY_SEED],
         bump,
     )]
-    pub inventory_authority: AccountInfo<'info>,
+    pub inventory_authority: UncheckedAccount<'info>,
 
     /// POI authority PDA from poi-system that must sign
     #[account(
@@ -996,7 +1063,7 @@ pub struct UnequipGearAuthorized<'info> {
     /// Gameplay state program for HP modification CPI
     /// CHECK: Validated by program ID constant
     #[account(address = GAMEPLAY_STATE_PROGRAM_ID)]
-    pub gameplay_state_program: AccountInfo<'info>,
+    pub gameplay_state_program: UncheckedAccount<'info>,
 }
 
 /// Context for equipping gear via authorized CPI from poi-system.
@@ -1014,7 +1081,7 @@ pub struct EquipGearAuthorized<'info> {
     /// Game state for HP bonus updates
     /// CHECK: Validated by gameplay-state program
     #[account(mut)]
-    pub game_state: AccountInfo<'info>,
+    pub game_state: UncheckedAccount<'info>,
 
     /// Inventory authority PDA for signing CPI calls to gameplay-state
     /// CHECK: This is a PDA derived from player-inventory program, validated by seeds
@@ -1022,7 +1089,7 @@ pub struct EquipGearAuthorized<'info> {
         seeds = [INVENTORY_AUTHORITY_SEED],
         bump,
     )]
-    pub inventory_authority: AccountInfo<'info>,
+    pub inventory_authority: UncheckedAccount<'info>,
 
     /// POI authority PDA from poi-system that must sign
     #[account(
@@ -1035,7 +1102,7 @@ pub struct EquipGearAuthorized<'info> {
     /// Gameplay state program for HP modification CPI
     /// CHECK: Validated by program ID constant
     #[account(address = GAMEPLAY_STATE_PROGRAM_ID)]
-    pub gameplay_state_program: AccountInfo<'info>,
+    pub gameplay_state_program: UncheckedAccount<'info>,
 }
 
 /// Context for equipping tool via authorized CPI from poi-system.
@@ -1053,7 +1120,7 @@ pub struct EquipToolAuthorized<'info> {
     /// Game state for HP bonus updates
     /// CHECK: Validated by gameplay-state program
     #[account(mut)]
-    pub game_state: AccountInfo<'info>,
+    pub game_state: UncheckedAccount<'info>,
 
     /// Inventory authority PDA for signing CPI calls to gameplay-state
     /// CHECK: This is a PDA derived from player-inventory program, validated by seeds
@@ -1061,7 +1128,7 @@ pub struct EquipToolAuthorized<'info> {
         seeds = [INVENTORY_AUTHORITY_SEED],
         bump,
     )]
-    pub inventory_authority: AccountInfo<'info>,
+    pub inventory_authority: UncheckedAccount<'info>,
 
     /// POI authority PDA from poi-system that must sign
     #[account(
@@ -1074,7 +1141,7 @@ pub struct EquipToolAuthorized<'info> {
     /// Gameplay state program for HP modification CPI
     /// CHECK: Validated by program ID constant
     #[account(address = GAMEPLAY_STATE_PROGRAM_ID)]
-    pub gameplay_state_program: AccountInfo<'info>,
+    pub gameplay_state_program: UncheckedAccount<'info>,
 }
 
 /// Context for equipping relic items via authorized CPI from poi-system.
@@ -1100,17 +1167,17 @@ pub struct EquipRelicAuthorized<'info> {
         seeds = [INVENTORY_AUTHORITY_SEED],
         bump,
     )]
-    pub inventory_authority: AccountInfo<'info>,
+    pub inventory_authority: UncheckedAccount<'info>,
 
     /// Gameplay state program for HP modification CPI
     /// CHECK: Validated by program ID constant
     #[account(address = GAMEPLAY_STATE_PROGRAM_ID)]
-    pub gameplay_state_program: AccountInfo<'info>,
+    pub gameplay_state_program: UncheckedAccount<'info>,
 
     /// Game state for HP bonus updates
     /// CHECK: Validated by gameplay-state program
     #[account(mut)]
-    pub game_state: AccountInfo<'info>,
+    pub game_state: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]

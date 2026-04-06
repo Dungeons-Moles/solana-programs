@@ -5298,9 +5298,9 @@ fn item_index_by_type(item_type: ItemType, nth: usize) -> Option<usize> {
 
 fn should_resolve_weekly_boss(run_mode: RunMode, _week: u8) -> bool {
     match run_mode {
-        RunMode::Campaign => true,
-        // Duel and Gauntlet: boss/echo resolved via trigger_boss_fight (separate TX)
-        // to avoid CU/heap exhaustion in move_player's Night3 inline path.
+        // All modes: boss resolved via trigger_boss_fight (separate TX)
+        // to avoid heap exhaustion (32KB limit) in move_player's Night3 inline path.
+        RunMode::Campaign => false,
         RunMode::Duel => false,
         RunMode::Gauntlet => false,
     }
@@ -7910,10 +7910,11 @@ mod hp_logic_tests {
     }
 
     #[test]
-    fn test_should_resolve_weekly_boss_campaign_all_weeks() {
-        assert!(should_resolve_weekly_boss(RunMode::Campaign, 1));
-        assert!(should_resolve_weekly_boss(RunMode::Campaign, 2));
-        assert!(should_resolve_weekly_boss(RunMode::Campaign, 3));
+    fn test_should_resolve_weekly_boss_campaign_never_inline() {
+        // Campaign boss resolved via separate trigger_boss_fight TX (heap limit)
+        assert!(!should_resolve_weekly_boss(RunMode::Campaign, 1));
+        assert!(!should_resolve_weekly_boss(RunMode::Campaign, 2));
+        assert!(!should_resolve_weekly_boss(RunMode::Campaign, 3));
     }
 
     #[test]

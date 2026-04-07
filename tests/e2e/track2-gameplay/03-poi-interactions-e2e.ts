@@ -23,7 +23,7 @@ import {
   getMapConfigPda,
   getGeneratedMapPda,
   getGameStatePda,
-  getMapEnemiesPda,
+
   getGameplayAuthorityPda,
   getDuelVaultPda,
   getDuelOpenQueuePda,
@@ -34,6 +34,7 @@ import {
   getGauntletWeekPoolPda,
   getGauntletEpochPoolPda,
   getGauntletPlayerScorePda,
+  getGauntletRewardRecordPda,
   getGauntletEchoesPda,
   getInventoryPda,
   getMapPoisPda,
@@ -107,7 +108,7 @@ interface SessionCtx {
   playerProfilePda: PublicKey;
   sessionPda: PublicKey;
   gameStatePda: PublicKey;
-  mapEnemiesPda: PublicKey;
+
   generatedMapPda: PublicKey;
   inventoryPda: PublicKey;
   mapPoisPda: PublicKey;
@@ -355,7 +356,7 @@ const navigatePlayerTo = async (
         .accounts({
           gameState: ctx.gameStatePda,
           gameSession: ctx.sessionPda,
-          mapEnemies: ctx.mapEnemiesPda,
+
           generatedMap: ctx.generatedMapPda,
           inventory: ctx.inventoryPda,
           gameplayAuthority: gameplayAuthorityPda,
@@ -452,7 +453,7 @@ const exhaustMovesToNight = async (
         .accounts({
           gameState: ctx.gameStatePda,
           gameSession: ctx.sessionPda,
-          mapEnemies: ctx.mapEnemiesPda,
+
           generatedMap: ctx.generatedMapPda,
           inventory: ctx.inventoryPda,
           gameplayAuthority: gameplayAuthorityPda,
@@ -574,7 +575,7 @@ const buildInteractRest = async (
     .accounts({
       mapPois: ctx.mapPoisPda,
       gameState: ctx.gameStatePda,
-      mapEnemies: ctx.mapEnemiesPda,
+
       inventory: ctx.inventoryPda,
       generatedMap: ctx.generatedMapPda,
       poiAuthority: poiAuthorityPda,
@@ -712,7 +713,7 @@ const buildInteractSurveyBeacon = async (
       gameState: ctx.gameStatePda,
       generatedMap: ctx.generatedMapPda,
       session: ctx.sessionPda,
-      mapEnemies: ctx.mapEnemiesPda,
+
       poiAuthority: poiAuthorityPda,
       gameplayAuthority: gameplayAuthorityPda,
       gameplayStateProgram: PROGRAM_IDS.gameplayState,
@@ -736,7 +737,7 @@ const buildInteractSeismicScanner = async (
       gameState: ctx.gameStatePda,
       generatedMap: ctx.generatedMapPda,
       session: ctx.sessionPda,
-      mapEnemies: ctx.mapEnemiesPda,
+
       poiAuthority: poiAuthorityPda,
       gameplayAuthority: gameplayAuthorityPda,
       gameplayStateProgram: PROGRAM_IDS.gameplayState,
@@ -775,7 +776,7 @@ const buildFastTravel = async (
       poiAuthority: poiAuthorityPda,
       gameplayStateProgram: PROGRAM_IDS.gameplayState,
       gameplayAuthority: gameplayAuthorityPda,
-      mapEnemies: ctx.mapEnemiesPda,
+
       generatedMap: ctx.generatedMapPda,
       session: ctx.sessionPda,
       mapGeneratorProgram: PROGRAM_IDS.mapGenerator,
@@ -877,7 +878,7 @@ const createProfileAndCampaignSession = async (
       generatedMap: ctx.generatedMapPda,
       sessionDiscovery: sessionDiscoveryPda,
       gameState: ctx.gameStatePda,
-      mapEnemies: ctx.mapEnemiesPda,
+
       mapPois: ctx.mapPoisPda,
       inventory: ctx.inventoryPda,
       mapVrfState: null,
@@ -887,6 +888,7 @@ const createProfileAndCampaignSession = async (
       gameplayStateProgram: PROGRAM_IDS.gameplayState,
       poiSystemProgram: PROGRAM_IDS.poiSystem,
       playerInventoryProgram: PROGRAM_IDS.playerInventory,
+      playerRelicPool: null,
       systemProgram: SystemProgram.programId,
     } as any)
     .preInstructions([
@@ -925,7 +927,7 @@ const createProfileAndDuelSession = async (
       generatedMap: ctx.generatedMapPda,
       sessionDiscovery: duelDiscoveryPda,
       gameState: ctx.gameStatePda,
-      mapEnemies: ctx.mapEnemiesPda,
+
       mapPois: ctx.mapPoisPda,
       inventory: ctx.inventoryPda,
       mapVrfState: null,
@@ -935,6 +937,7 @@ const createProfileAndDuelSession = async (
       gameplayStateProgram: PROGRAM_IDS.gameplayState,
       poiSystemProgram: PROGRAM_IDS.poiSystem,
       playerInventoryProgram: PROGRAM_IDS.playerInventory,
+      playerRelicPool: null,
       systemProgram: SystemProgram.programId,
     } as any)
     .preInstructions([
@@ -972,7 +975,7 @@ const createProfileAndGauntletSession = async (
       generatedMap: ctx.generatedMapPda,
       sessionDiscovery: gauntletDiscoveryPda,
       gameState: ctx.gameStatePda,
-      mapEnemies: ctx.mapEnemiesPda,
+
       mapPois: ctx.mapPoisPda,
       inventory: ctx.inventoryPda,
       mapVrfState: null,
@@ -982,6 +985,7 @@ const createProfileAndGauntletSession = async (
       gameplayStateProgram: PROGRAM_IDS.gameplayState,
       poiSystemProgram: PROGRAM_IDS.poiSystem,
       playerInventoryProgram: PROGRAM_IDS.playerInventory,
+      playerRelicPool: null,
       systemProgram: SystemProgram.programId,
     } as any)
     .preInstructions([
@@ -1013,6 +1017,10 @@ const createProfileAndGauntletSession = async (
     epochIdBigInt,
     ctx.user.publicKey
   );
+  const [rewardRecordPda] = getGauntletRewardRecordPda(
+    epochIdBigInt,
+    ctx.user.publicKey
+  );
 
   const [gauntletEchoesPda] = getGauntletEchoesPda(ctx.sessionPda);
   const enterIx = await (programs.gameplayState.methods as any)
@@ -1026,6 +1034,7 @@ const createProfileAndGauntletSession = async (
       companyTreasury: treasuryPk,
       gauntletEpochPool: epochPoolPda,
       gauntletPlayerScore: playerScorePda,
+      gauntletRewardRecord: rewardRecordPda,
       gauntletEchoes: gauntletEchoesPda,
       systemProgram: SystemProgram.programId,
     } as any)
@@ -1056,7 +1065,7 @@ const endSession = async (ctx: SessionCtx): Promise<void> => {
       .accounts({
         gameSession: ctx.sessionPda,
         gameState: ctx.gameStatePda,
-        mapEnemies: ctx.mapEnemiesPda,
+  
         generatedMap: ctx.generatedMapPda,
         mapPois: ctx.mapPoisPda,
         sessionDiscovery: endSessionDiscoveryPda,
@@ -1931,7 +1940,7 @@ describe("POI E2E: Box<Account> Smoke Test — Campaign", function () {
     const [playerProfilePda] = getPlayerProfilePda(user.publicKey);
     const [sessionPda] = getSessionPda(user.publicKey, campaignLevel);
     const [gameStatePda] = getGameStatePda(sessionPda);
-    const [mapEnemiesPda] = getMapEnemiesPda(sessionPda);
+
     const [generatedMapPda] = getGeneratedMapPda(sessionPda);
     const [inventoryPda] = getInventoryPda(sessionPda);
     const [mapPoisPda] = getMapPoisPda(sessionPda);
@@ -1942,7 +1951,7 @@ describe("POI E2E: Box<Account> Smoke Test — Campaign", function () {
       playerProfilePda,
       sessionPda,
       gameStatePda,
-      mapEnemiesPda,
+
       generatedMapPda,
       inventoryPda,
       mapPoisPda,
@@ -2095,7 +2104,7 @@ describe("POI E2E: Box<Account> Smoke Test — Gauntlet", function () {
     const [playerProfilePda] = getPlayerProfilePda(user.publicKey);
     const [sessionPda] = getGauntletSessionPda(user.publicKey);
     const [gameStatePda] = getGameStatePda(sessionPda);
-    const [mapEnemiesPda] = getMapEnemiesPda(sessionPda);
+
     const [generatedMapPda] = getGeneratedMapPda(sessionPda);
     const [inventoryPda] = getInventoryPda(sessionPda);
     const [mapPoisPda] = getMapPoisPda(sessionPda);
@@ -2106,7 +2115,7 @@ describe("POI E2E: Box<Account> Smoke Test — Gauntlet", function () {
       playerProfilePda,
       sessionPda,
       gameStatePda,
-      mapEnemiesPda,
+
       generatedMapPda,
       inventoryPda,
       mapPoisPda,
@@ -2255,7 +2264,7 @@ describe("POI E2E: Campaign Mode", function () {
     const [playerProfilePda] = getPlayerProfilePda(user.publicKey);
     const [sessionPda] = getSessionPda(user.publicKey, campaignLevel);
     const [gameStatePda] = getGameStatePda(sessionPda);
-    const [mapEnemiesPda] = getMapEnemiesPda(sessionPda);
+
     const [generatedMapPda] = getGeneratedMapPda(sessionPda);
     const [inventoryPda] = getInventoryPda(sessionPda);
     const [mapPoisPda] = getMapPoisPda(sessionPda);
@@ -2266,7 +2275,7 @@ describe("POI E2E: Campaign Mode", function () {
       playerProfilePda,
       sessionPda,
       gameStatePda,
-      mapEnemiesPda,
+
       generatedMapPda,
       inventoryPda,
       mapPoisPda,
@@ -2308,7 +2317,7 @@ describe("POI E2E: Duel Mode", function () {
     const [playerProfilePda] = getPlayerProfilePda(user.publicKey);
     const [sessionPda] = getDuelSessionPda(user.publicKey);
     const [gameStatePda] = getGameStatePda(sessionPda);
-    const [mapEnemiesPda] = getMapEnemiesPda(sessionPda);
+
     const [generatedMapPda] = getGeneratedMapPda(sessionPda);
     const [inventoryPda] = getInventoryPda(sessionPda);
     const [mapPoisPda] = getMapPoisPda(sessionPda);
@@ -2319,7 +2328,7 @@ describe("POI E2E: Duel Mode", function () {
       playerProfilePda,
       sessionPda,
       gameStatePda,
-      mapEnemiesPda,
+
       generatedMapPda,
       inventoryPda,
       mapPoisPda,
@@ -2361,7 +2370,7 @@ describe("POI E2E: Gauntlet Mode", function () {
     const [playerProfilePda] = getPlayerProfilePda(user.publicKey);
     const [sessionPda] = getGauntletSessionPda(user.publicKey);
     const [gameStatePda] = getGameStatePda(sessionPda);
-    const [mapEnemiesPda] = getMapEnemiesPda(sessionPda);
+
     const [generatedMapPda] = getGeneratedMapPda(sessionPda);
     const [inventoryPda] = getInventoryPda(sessionPda);
     const [mapPoisPda] = getMapPoisPda(sessionPda);
@@ -2372,7 +2381,7 @@ describe("POI E2E: Gauntlet Mode", function () {
       playerProfilePda,
       sessionPda,
       gameStatePda,
-      mapEnemiesPda,
+
       generatedMapPda,
       inventoryPda,
       mapPoisPda,

@@ -91,6 +91,9 @@ pub const GAUNTLET_WEEK_POOL_SEED: &[u8] = b"gauntlet_week_pool";
 /// PDA seed prefix for gauntlet player score accounts
 pub const GAUNTLET_PLAYER_SCORE_SEED: &[u8] = b"gauntlet_player_score";
 
+/// PDA seed prefix for finalized gauntlet reward records
+pub const GAUNTLET_REWARD_RECORD_SEED: &[u8] = b"gauntlet_reward_record";
+
 /// PDA seed prefix for gauntlet epoch pool accounts
 pub const GAUNTLET_EPOCH_POOL_SEED: &[u8] = b"gauntlet_epoch_pool";
 
@@ -110,7 +113,7 @@ pub const PIT_DRAFT_WINNER_BPS: u64 = 9_500; // 95%
 pub const GAUNTLET_COMPANY_FEE_BPS: u64 = 300; // 3%
 pub const GAUNTLET_POOL_FEE_BPS: u64 = 9_700; // 97%
 
-pub const GAUNTLET_EPOCH_DURATION_SECONDS: i64 = 7 * 24 * 60 * 60;
+pub const GAUNTLET_EPOCH_DURATION_SECONDS: i64 = 15 * 24 * 60 * 60;
 pub const GAUNTLET_MAX_WEEKLY_ECHOES: usize = 50;
 pub const GAUNTLET_BOOTSTRAP_ECHOES_PER_WEEK: usize = 10;
 
@@ -119,3 +122,24 @@ pub const GAUNTLET_CAMPAIGN_LEVEL: u8 = 20;
 
 /// Company treasury address.
 pub const COMPANY_TREASURY_ADDRESS: &str = "5LvEA4tH5H5DtWCxa3FcauokxAycvafX9ruvcT2mEXt8";
+
+// =============================================================================
+// GameState Raw Byte Offsets (for cross-program reads without crate dependency)
+// Keep in sync with GameState struct in state.rs.
+// =============================================================================
+
+/// GameState.player byte offset (8-byte discriminator + 0)
+pub const GAME_STATE_PLAYER_OFFSET: usize = 8;
+
+/// GameState.session_signer byte offset (8 + 32 = 40)
+pub const GAME_STATE_SESSION_SIGNER_OFFSET: usize = 40;
+
+/// GameState.session byte offset (8 + 32 + 32 = 72)
+pub const GAME_STATE_SESSION_OFFSET: usize = 72;
+
+/// GameState.campaign_level byte offset
+/// Layout: 8 (disc) + 32 (player) + 32 (session_signer) + 32 (session) +
+/// 1 (position_x) + 1 (position_y) + 1 (map_width) + 1 (map_height) +
+/// 2 (hp) + 1 (gear_slots) + 1 (week) + 1 (phase) + 1 (moves_remaining) +
+/// 4 (total_moves) + 1 (boss_fight_ready) + 2 (gold) + 1 (bump) = 122
+pub const GAME_STATE_CAMPAIGN_LEVEL_OFFSET: usize = 122;

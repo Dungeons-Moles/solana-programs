@@ -9,7 +9,7 @@ use anchor_lang::system_program;
 use bitmask::STARTER_ITEMS_BITMASK;
 use constants::*;
 use errors::PlayerProfileError;
-use state::PlayerProfile;
+use state::{PlayerProfile, PlayerRelicPool, RelicEntry};
 
 declare_id!("GSLNDrNoHeZXVxB7Yu7tUe8417PpZ5XV7JPYupPw9WQy");
 
@@ -212,9 +212,11 @@ pub mod player_profile {
             PlayerProfileError::SessionDataTooShort
         );
 
-        // Read player pubkey from session account (offset 8 for discriminator)
-        let session_player = Pubkey::try_from(&session_data[8..40])
-            .map_err(|_| PlayerProfileError::InvalidSession)?;
+        // Read player pubkey from session account
+        let session_player = Pubkey::try_from(
+            &session_data[SESSION_PLAYER_OFFSET..SESSION_PLAYER_OFFSET + 32],
+        )
+        .map_err(|_| PlayerProfileError::InvalidSession)?;
 
         // Verify session's player matches profile's owner
         require!(
@@ -314,7 +316,7 @@ pub mod player_profile {
         // Transfer treasury split.
         system_program::transfer(
             CpiContext::new(
-                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.system_program.key(),
                 system_program::Transfer {
                     from: ctx.accounts.owner.to_account_info(),
                     to: ctx.accounts.treasury.to_account_info(),
@@ -326,7 +328,7 @@ pub mod player_profile {
         // Transfer gauntlet pool split.
         system_program::transfer(
             CpiContext::new(
-                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.system_program.key(),
                 system_program::Transfer {
                     from: ctx.accounts.owner.to_account_info(),
                     to: ctx.accounts.gauntlet_pool.to_account_info(),
@@ -363,16 +365,32 @@ pub mod player_profile {
             PlayerProfileError::InvalidSkinAsset
         );
 
-        // Read raw bytes to validate ownership
+        // Metaplex Core AssetV1 raw byte layout (mpl-core 0.11.x):
+        //   Byte 0:     Key discriminator (1 = AssetV1)
+        //   Bytes 1-32: Owner Pubkey (32 bytes)
+        //   Bytes 33+:  UpdateAuthority, Name, URI, etc.
+        // Minimum viable read: 33 bytes for discriminator + owner.
+        // If mpl-core changes this layout, the discriminator byte will change too,
+        // so the check below will reject accounts with an incompatible layout.
+        const MPL_CORE_ASSET_V1_DISCRIMINATOR: u8 = 1;
+        const MPL_CORE_OWNER_OFFSET: usize = 1;
+        const MPL_CORE_MIN_DATA_LEN: usize = MPL_CORE_OWNER_OFFSET + 32;
+
         let data = skin_asset.try_borrow_data()?;
-        require!(data.len() >= 33, PlayerProfileError::InvalidSkinAsset);
+        require!(
+            data.len() >= MPL_CORE_MIN_DATA_LEN,
+            PlayerProfileError::InvalidSkinAsset
+        );
 
-        // Byte 0: Key discriminator (1 = AssetV1)
-        require!(data[0] == 1, PlayerProfileError::InvalidSkinAsset);
+        // Validate AssetV1 discriminator
+        require!(
+            data[0] == MPL_CORE_ASSET_V1_DISCRIMINATOR,
+            PlayerProfileError::InvalidSkinAsset
+        );
 
-        // Bytes 1..33: Owner pubkey
+        // Extract and validate owner
         let mut owner_bytes = [0u8; 32];
-        owner_bytes.copy_from_slice(&data[1..33]);
+        owner_bytes.copy_from_slice(&data[MPL_CORE_OWNER_OFFSET..MPL_CORE_MIN_DATA_LEN]);
         let asset_owner = Pubkey::new_from_array(owner_bytes);
         require!(
             asset_owner == ctx.accounts.owner.key(),
@@ -390,6 +408,136 @@ pub mod player_profile {
     pub fn unequip_skin(ctx: Context<UnequipSkin>) -> Result<()> {
         let profile = &mut ctx.accounts.player_profile;
         profile.equipped_skin = None;
+        Ok(())
+    }
+
+    /// Toggles whether an owned relic type can appear in future session item offers.
+    pub fn set_relic_active(
+        ctx: Context<SetRelicActive>,
+        relic_item_id: [u8; 8],
+        active: bool,
+    ) -> Result<()> {
+        let relic_pool = &mut ctx.accounts.player_relic_pool;
+        let index = relic_pool
+            .find_index_by_item_id(relic_item_id)
+            .ok_or(PlayerProfileError::RelicNotFound)?;
+        require!(
+            relic_pool.relics[index].owned_count > 0,
+            PlayerProfileError::RelicNotOwned
+        );
+        relic_pool.relics[index].in_active_pool = active;
+        Ok(())
+    }
+
+    /// Marketplace-authorized ownership increment used during minting and purchases.
+    pub fn grant_relic_ownership(
+        ctx: Context<GrantRelicOwnership>,
+        relic_item_id: [u8; 8],
+    ) -> Result<()> {
+        let relic_pool = &mut ctx.accounts.player_relic_pool;
+        relic_pool.owner = ctx.accounts.owner.key();
+        relic_pool.bump = ctx.bumps.player_relic_pool;
+
+        if let Some(index) = relic_pool.find_index_by_item_id(relic_item_id) {
+            relic_pool.relics[index].owned_count = relic_pool.relics[index]
+                .owned_count
+                .checked_add(1)
+                .ok_or(PlayerProfileError::ArithmeticOverflow)?;
+        } else {
+            require!(
+                relic_pool.relics.len() < MAX_RELICS,
+                PlayerProfileError::RelicPoolFull
+            );
+            relic_pool.relics.push(RelicEntry {
+                item_id: relic_item_id,
+                owned_count: 1,
+                in_active_pool: false,
+            });
+        }
+        relic_pool.count = relic_pool.relics.len() as u8;
+
+        Ok(())
+    }
+
+    /// Marketplace-authorized ownership decrement used during item trades.
+    pub fn revoke_relic_ownership(
+        ctx: Context<RevokeRelicOwnership>,
+        relic_item_id: [u8; 8],
+    ) -> Result<()> {
+        let relic_pool = &mut ctx.accounts.player_relic_pool;
+        let index = relic_pool
+            .find_index_by_item_id(relic_item_id)
+            .ok_or(PlayerProfileError::RelicNotFound)?;
+
+        if relic_pool.relics[index].owned_count > 1 {
+            relic_pool.relics[index].owned_count -= 1;
+        } else {
+            relic_pool.relics[index].in_active_pool = false;
+            relic_pool.relics.swap_remove(index);
+            relic_pool.count = relic_pool.relics.len() as u8;
+        }
+
+        Ok(())
+    }
+
+    /// Reconciles owned relic counts from externally supplied ownership proofs.
+    /// Any relic whose proven count drops to zero is removed from the pool and
+    /// automatically deactivated.
+    pub fn sync_relic_ownership(
+        ctx: Context<SyncRelicOwnership>,
+        owned_relic_item_ids: Vec<[u8; 8]>,
+    ) -> Result<()> {
+        let relic_pool = &mut ctx.accounts.player_relic_pool;
+
+        let mut proven_counts: Vec<([u8; 8], u16)> = Vec::with_capacity(owned_relic_item_ids.len());
+        for item_id in owned_relic_item_ids {
+            if let Some((_, count)) = proven_counts
+                .iter_mut()
+                .find(|(existing_item_id, _)| *existing_item_id == item_id)
+            {
+                *count = count
+                    .checked_add(1)
+                    .ok_or(PlayerProfileError::ArithmeticOverflow)?;
+            } else {
+                proven_counts.push((item_id, 1));
+            }
+        }
+
+        let mut index = 0usize;
+        while index < relic_pool.relics.len() {
+            let item_id = relic_pool.relics[index].item_id;
+            if let Some((_, owned_count)) = proven_counts
+                .iter()
+                .find(|(existing_item_id, _)| *existing_item_id == item_id)
+            {
+                relic_pool.relics[index].owned_count = *owned_count;
+                index += 1;
+            } else if relic_pool.relics[index].in_active_pool {
+                relic_pool.relics[index].in_active_pool = false;
+                relic_pool.relics.swap_remove(index);
+            } else {
+                index += 1;
+            }
+        }
+
+        for (item_id, owned_count) in proven_counts {
+            if let Some(existing_index) = relic_pool.find_index_by_item_id(item_id) {
+                relic_pool.relics[existing_index].owned_count = owned_count;
+            } else {
+                require!(
+                    relic_pool.relics.len() < MAX_RELICS,
+                    PlayerProfileError::RelicPoolFull
+                );
+                relic_pool.relics.push(RelicEntry {
+                    item_id,
+                    owned_count,
+                    in_active_pool: false,
+                });
+            }
+        }
+
+        relic_pool.count = relic_pool.relics.len() as u8;
+
         Ok(())
     }
 }
@@ -457,7 +605,7 @@ pub struct UpdateActiveItemPool<'info> {
 
     /// CHECK: Validated via owner constraint + PDA/discriminator checks in handler.
     #[account(owner = GAMEPLAY_STATE_PROGRAM_PUBKEY @ PlayerProfileError::InvalidPitDraftQueue)]
-    pub pit_draft_queue: AccountInfo<'info>,
+    pub pit_draft_queue: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -486,7 +634,7 @@ pub struct RecordRunResultCpi<'info> {
     /// 3. session.campaign_level == level_completed input
     /// 4. session.session_signer == session_signer signer
     #[account(owner = SESSION_MANAGER_PROGRAM_PUBKEY @ PlayerProfileError::InvalidSessionOwner)]
-    pub session: AccountInfo<'info>,
+    pub session: UncheckedAccount<'info>,
 
     /// Session key signer signer - verified against session's stored session_signer field.
     pub session_signer: Signer<'info>,
@@ -524,7 +672,7 @@ pub struct PurchaseRuns<'info> {
     /// CHECK: Validated in instruction to be the canonical gameplay-state
     /// gauntlet pool vault PDA and owned by gameplay-state program.
     #[account(mut)]
-    pub gauntlet_pool: AccountInfo<'info>,
+    pub gauntlet_pool: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -558,7 +706,7 @@ pub struct EquipSkin<'info> {
     /// 1. Account owner == Metaplex Core program ID
     /// 2. Asset discriminator == 1 (AssetV1)
     /// 3. Asset owner field == player wallet
-    pub skin_asset: AccountInfo<'info>,
+    pub skin_asset: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -570,6 +718,81 @@ pub struct UnequipSkin<'info> {
         has_one = owner @ PlayerProfileError::Unauthorized
     )]
     pub player_profile: Account<'info, PlayerProfile>,
+
+    pub owner: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct SetRelicActive<'info> {
+    #[account(
+        mut,
+        seeds = [PlayerRelicPool::SEED_PREFIX, owner.key().as_ref()],
+        bump = player_relic_pool.bump,
+        has_one = owner @ PlayerProfileError::Unauthorized
+    )]
+    pub player_relic_pool: Account<'info, PlayerRelicPool>,
+
+    pub owner: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct GrantRelicOwnership<'info> {
+    #[account(
+        init_if_needed,
+        payer = payer,
+        space = 8 + PlayerRelicPool::INIT_SPACE,
+        seeds = [PlayerRelicPool::SEED_PREFIX, owner.key().as_ref()],
+        bump
+    )]
+    pub player_relic_pool: Account<'info, PlayerRelicPool>,
+
+    /// CHECK: Relic owner whose pool is being credited.
+    pub owner: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    #[account(
+        seeds = [b"mint_authority"],
+        bump,
+        seeds::program = NFT_MARKETPLACE_PROGRAM_PUBKEY,
+    )]
+    /// CHECK: Marketplace PDA signer authorizing the CPI.
+    pub marketplace_authority: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct RevokeRelicOwnership<'info> {
+    #[account(
+        mut,
+        seeds = [PlayerRelicPool::SEED_PREFIX, owner.key().as_ref()],
+        bump = player_relic_pool.bump,
+    )]
+    pub player_relic_pool: Account<'info, PlayerRelicPool>,
+
+    /// CHECK: Relic owner whose pool is being debited.
+    pub owner: UncheckedAccount<'info>,
+
+    #[account(
+        seeds = [b"mint_authority"],
+        bump,
+        seeds::program = NFT_MARKETPLACE_PROGRAM_PUBKEY,
+    )]
+    /// CHECK: Marketplace PDA signer authorizing the CPI.
+    pub marketplace_authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct SyncRelicOwnership<'info> {
+    #[account(
+        mut,
+        seeds = [PlayerRelicPool::SEED_PREFIX, owner.key().as_ref()],
+        bump = player_relic_pool.bump,
+        has_one = owner @ PlayerProfileError::Unauthorized
+    )]
+    pub player_relic_pool: Account<'info, PlayerRelicPool>,
 
     pub owner: Signer<'info>,
 }

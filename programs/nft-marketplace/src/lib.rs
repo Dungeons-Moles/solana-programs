@@ -1,20 +1,68 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
-use mpl_core::instructions::{
-    AddPluginV1CpiBuilder, ApprovePluginAuthorityV1CpiBuilder, CreateV1CpiBuilder,
-    RemovePluginV1CpiBuilder, TransferV1CpiBuilder,
-};
-use mpl_core::types::{Plugin, PluginAuthority, PluginType, TransferDelegate};
+use player_profile::program::PlayerProfile;
 
 pub mod constants;
 pub mod errors;
+pub mod mpl_core_cpi;
 pub mod state;
 
 use constants::*;
 use errors::MarketplaceError;
+use mpl_core_cpi::*;
 use state::*;
 
 declare_id!("GLKxBpZ8hc7qzvD9VHAVsJEjHSu2JVp1HaPrGH4fpTci");
+
+const SPL_NOOP_PROGRAM_ID: Pubkey = pubkey!("noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV");
+
+fn grant_relic_to_owner<'info>(
+    player_profile_program: &Program<'info, PlayerProfile>,
+    player_relic_pool: &AccountInfo<'info>,
+    owner: &AccountInfo<'info>,
+    payer: &Signer<'info>,
+    marketplace_authority: &AccountInfo<'info>,
+    system_program: &Program<'info, System>,
+    relic_item_id: [u8; 8],
+    signer_seeds: &[&[&[u8]]],
+) -> Result<()> {
+    player_profile::cpi::grant_relic_ownership(
+        CpiContext::new_with_signer(
+            player_profile_program.key(),
+            player_profile::cpi::accounts::GrantRelicOwnership {
+                player_relic_pool: player_relic_pool.clone(),
+                owner: owner.clone(),
+                payer: payer.to_account_info(),
+                marketplace_authority: marketplace_authority.clone(),
+                system_program: system_program.to_account_info(),
+            },
+            signer_seeds,
+        ),
+        relic_item_id,
+    )
+}
+
+fn revoke_relic_from_owner<'info>(
+    player_profile_program: &Program<'info, PlayerProfile>,
+    player_relic_pool: &AccountInfo<'info>,
+    owner: &AccountInfo<'info>,
+    marketplace_authority: &AccountInfo<'info>,
+    relic_item_id: [u8; 8],
+    signer_seeds: &[&[&[u8]]],
+) -> Result<()> {
+    player_profile::cpi::revoke_relic_ownership(
+        CpiContext::new_with_signer(
+            player_profile_program.key(),
+            player_profile::cpi::accounts::RevokeRelicOwnership {
+                player_relic_pool: player_relic_pool.clone(),
+                owner: owner.clone(),
+                marketplace_authority: marketplace_authority.clone(),
+            },
+            signer_seeds,
+        ),
+        relic_item_id,
+    )
+}
 
 #[program]
 pub mod nft_marketplace {
@@ -70,16 +118,22 @@ pub mod nft_marketplace {
         let bump = ctx.bumps.mint_authority;
         let signer_seeds: &[&[u8]] = &[b"mint_authority", &[bump]];
 
-        CreateV1CpiBuilder::new(&ctx.accounts.mpl_core_program)
-            .asset(&ctx.accounts.asset)
-            .collection(Some(&ctx.accounts.collection))
-            .payer(&ctx.accounts.payer)
-            .owner(Some(&ctx.accounts.owner))
-            .authority(Some(&ctx.accounts.mint_authority))
-            .system_program(&ctx.accounts.system_program.to_account_info())
-            .name(name)
-            .uri(uri)
-            .invoke_signed(&[signer_seeds])?;
+        create_v1(
+            CreateV1Accounts {
+                program: &ctx.accounts.mpl_core_program,
+                asset: &ctx.accounts.asset,
+                collection: Some(&ctx.accounts.collection),
+                authority: Some(&ctx.accounts.mint_authority),
+                payer: &ctx.accounts.payer,
+                owner: Some(&ctx.accounts.owner),
+                update_authority: None,
+                system_program: &ctx.accounts.system_program.to_account_info(),
+                log_wrapper: Some(&ctx.accounts.log_wrapper),
+            },
+            name,
+            uri,
+            &[signer_seeds],
+        )?;
 
         Ok(())
     }
@@ -89,21 +143,43 @@ pub mod nft_marketplace {
         ctx: Context<MintNftItem>,
         name: String,
         uri: String,
-        _nft_item_id: [u8; 8],
+        nft_item_id: [u8; 8],
     ) -> Result<()> {
         let bump = ctx.bumps.mint_authority;
         let signer_seeds: &[&[u8]] = &[b"mint_authority", &[bump]];
 
-        CreateV1CpiBuilder::new(&ctx.accounts.mpl_core_program)
-            .asset(&ctx.accounts.asset)
-            .collection(Some(&ctx.accounts.collection))
-            .payer(&ctx.accounts.payer)
-            .owner(Some(&ctx.accounts.owner))
-            .authority(Some(&ctx.accounts.mint_authority))
-            .system_program(&ctx.accounts.system_program.to_account_info())
-            .name(name)
-            .uri(uri)
-            .invoke_signed(&[signer_seeds])?;
+        create_v1(
+            CreateV1Accounts {
+                program: &ctx.accounts.mpl_core_program,
+                asset: &ctx.accounts.asset,
+                collection: Some(&ctx.accounts.collection),
+                authority: Some(&ctx.accounts.mint_authority),
+                payer: &ctx.accounts.payer,
+                owner: Some(&ctx.accounts.owner),
+                update_authority: None,
+                system_program: &ctx.accounts.system_program.to_account_info(),
+                log_wrapper: Some(&ctx.accounts.log_wrapper),
+            },
+            name,
+            uri,
+            &[signer_seeds],
+        )?;
+
+        let relic_asset = &mut ctx.accounts.relic_asset;
+        relic_asset.asset = ctx.accounts.asset.key();
+        relic_asset.item_id = nft_item_id;
+        relic_asset.bump = ctx.bumps.relic_asset;
+
+        grant_relic_to_owner(
+            &ctx.accounts.player_profile_program,
+            &ctx.accounts.player_relic_pool,
+            &ctx.accounts.owner,
+            &ctx.accounts.payer,
+            &ctx.accounts.mint_authority,
+            &ctx.accounts.system_program,
+            nft_item_id,
+            &[signer_seeds],
+        )?;
 
         Ok(())
     }
@@ -116,14 +192,20 @@ pub mod nft_marketplace {
             MarketplaceError::PriceTooLow
         );
 
-        // Validate asset is owned by seller by reading raw bytes.
-        // Metaplex Core asset: byte 0 = Key discriminator (1 = AssetV1), bytes 1..33 = owner.
+        // Metaplex Core AssetV1 raw byte layout (mpl-core 0.11.x):
+        //   Byte 0:     Key discriminator (1 = AssetV1)
+        //   Bytes 1-32: Owner Pubkey (32 bytes)
+        // If mpl-core changes this layout, the discriminator will change too.
+        const MPL_CORE_ASSET_V1_DISCRIMINATOR: u8 = 1;
+        const MPL_CORE_OWNER_OFFSET: usize = 1;
+        const MPL_CORE_MIN_DATA_LEN: usize = MPL_CORE_OWNER_OFFSET + 32;
+
         let asset_data = ctx.accounts.asset.try_borrow_data()?;
-        require!(asset_data.len() >= 33, MarketplaceError::InvalidAsset);
-        require!(asset_data[0] == 1, MarketplaceError::InvalidAsset); // AssetV1
+        require!(asset_data.len() >= MPL_CORE_MIN_DATA_LEN, MarketplaceError::InvalidAsset);
+        require!(asset_data[0] == MPL_CORE_ASSET_V1_DISCRIMINATOR, MarketplaceError::InvalidAsset);
 
         let mut owner_bytes = [0u8; 32];
-        owner_bytes.copy_from_slice(&asset_data[1..33]);
+        owner_bytes.copy_from_slice(&asset_data[MPL_CORE_OWNER_OFFSET..MPL_CORE_MIN_DATA_LEN]);
         let asset_owner = Pubkey::new_from_array(owner_bytes);
         require!(
             asset_owner == ctx.accounts.seller.key(),
@@ -179,27 +261,30 @@ pub mod nft_marketplace {
         listing.bump = ctx.bumps.listing;
 
         // Add Transfer Delegate plugin on the asset (seller as authority).
-        AddPluginV1CpiBuilder::new(&ctx.accounts.mpl_core_program)
-            .asset(&ctx.accounts.asset)
-            .collection(Some(&ctx.accounts.collection))
-            .payer(&ctx.accounts.seller)
-            .authority(Some(&ctx.accounts.seller))
-            .system_program(&ctx.accounts.system_program.to_account_info())
-            .plugin(Plugin::TransferDelegate(TransferDelegate {}))
-            .invoke()?;
+        add_transfer_delegate_plugin(AddPluginV1Accounts {
+            program: &ctx.accounts.mpl_core_program,
+            asset: &ctx.accounts.asset,
+            collection: Some(&ctx.accounts.collection),
+            payer: &ctx.accounts.seller,
+            authority: Some(&ctx.accounts.seller),
+            system_program: &ctx.accounts.system_program.to_account_info(),
+        })?;
 
         // Approve the mint_authority PDA as the delegate so it can transfer during buy_nft.
-        ApprovePluginAuthorityV1CpiBuilder::new(&ctx.accounts.mpl_core_program)
-            .asset(&ctx.accounts.asset)
-            .collection(Some(&ctx.accounts.collection))
-            .payer(&ctx.accounts.seller)
-            .authority(Some(&ctx.accounts.seller))
-            .system_program(&ctx.accounts.system_program.to_account_info())
-            .plugin_type(PluginType::TransferDelegate)
-            .new_authority(PluginAuthority::Address {
+        approve_plugin_authority(
+            ApprovePluginAuthorityV1Accounts {
+                program: &ctx.accounts.mpl_core_program,
+                asset: &ctx.accounts.asset,
+                collection: Some(&ctx.accounts.collection),
+                payer: &ctx.accounts.seller,
+                authority: Some(&ctx.accounts.seller),
+                system_program: &ctx.accounts.system_program.to_account_info(),
+            },
+            PluginType::TransferDelegate,
+            PluginAuthority::Address {
                 address: ctx.accounts.mint_authority.key(),
-            })
-            .invoke()?;
+            },
+        )?;
 
         Ok(())
     }
@@ -207,14 +292,17 @@ pub mod nft_marketplace {
     /// Cancel a listing. Removes Transfer Delegate and closes listing account.
     pub fn cancel_listing(ctx: Context<CancelListing>) -> Result<()> {
         // Remove Transfer Delegate plugin.
-        RemovePluginV1CpiBuilder::new(&ctx.accounts.mpl_core_program)
-            .asset(&ctx.accounts.asset)
-            .collection(Some(&ctx.accounts.collection))
-            .payer(&ctx.accounts.seller)
-            .authority(Some(&ctx.accounts.seller))
-            .system_program(&ctx.accounts.system_program.to_account_info())
-            .plugin_type(PluginType::TransferDelegate)
-            .invoke()?;
+        remove_plugin(
+            RemovePluginV1Accounts {
+                program: &ctx.accounts.mpl_core_program,
+                asset: &ctx.accounts.asset,
+                collection: Some(&ctx.accounts.collection),
+                payer: &ctx.accounts.seller,
+                authority: Some(&ctx.accounts.seller),
+                system_program: &ctx.accounts.system_program.to_account_info(),
+            },
+            PluginType::TransferDelegate,
+        )?;
 
         // Listing account is closed via the `close = seller` constraint.
 
@@ -255,7 +343,7 @@ pub mod nft_marketplace {
         // Transfer SOL to seller.
         system_program::transfer(
             CpiContext::new(
-                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.system_program.key(),
                 system_program::Transfer {
                     from: ctx.accounts.buyer.to_account_info(),
                     to: ctx.accounts.seller.to_account_info(),
@@ -268,7 +356,7 @@ pub mod nft_marketplace {
         if company_fee > 0 {
             system_program::transfer(
                 CpiContext::new(
-                    ctx.accounts.system_program.to_account_info(),
+                    ctx.accounts.system_program.key(),
                     system_program::Transfer {
                         from: ctx.accounts.buyer.to_account_info(),
                         to: ctx.accounts.company_treasury.to_account_info(),
@@ -282,7 +370,7 @@ pub mod nft_marketplace {
         if gauntlet_fee > 0 {
             system_program::transfer(
                 CpiContext::new(
-                    ctx.accounts.system_program.to_account_info(),
+                    ctx.accounts.system_program.key(),
                     system_program::Transfer {
                         from: ctx.accounts.buyer.to_account_info(),
                         to: ctx.accounts.gauntlet_pool.to_account_info(),
@@ -296,24 +384,66 @@ pub mod nft_marketplace {
         let bump = ctx.bumps.mint_authority;
         let signer_seeds: &[&[u8]] = &[b"mint_authority", &[bump]];
 
-        TransferV1CpiBuilder::new(&ctx.accounts.mpl_core_program)
-            .asset(&ctx.accounts.asset)
-            .collection(Some(&ctx.accounts.collection))
-            .payer(&ctx.accounts.buyer)
-            .authority(Some(&ctx.accounts.mint_authority))
-            .new_owner(&ctx.accounts.buyer.to_account_info())
-            .invoke_signed(&[signer_seeds])?;
+        transfer_v1(
+            TransferV1Accounts {
+                program: &ctx.accounts.mpl_core_program,
+                asset: &ctx.accounts.asset,
+                collection: Some(&ctx.accounts.collection),
+                payer: &ctx.accounts.buyer,
+                authority: Some(&ctx.accounts.mint_authority),
+                new_owner: &ctx.accounts.buyer.to_account_info(),
+            },
+            &[signer_seeds],
+        )?;
 
         // Clean up TransferDelegate plugin so the buyer can re-list later.
         // After transfer, buyer is the new owner and can remove plugins.
-        RemovePluginV1CpiBuilder::new(&ctx.accounts.mpl_core_program)
-            .asset(&ctx.accounts.asset)
-            .collection(Some(&ctx.accounts.collection))
-            .payer(&ctx.accounts.buyer)
-            .authority(Some(&ctx.accounts.buyer))
-            .system_program(&ctx.accounts.system_program.to_account_info())
-            .plugin_type(PluginType::TransferDelegate)
-            .invoke()?;
+        remove_plugin(
+            RemovePluginV1Accounts {
+                program: &ctx.accounts.mpl_core_program,
+                asset: &ctx.accounts.asset,
+                collection: Some(&ctx.accounts.collection),
+                payer: &ctx.accounts.buyer,
+                authority: Some(&ctx.accounts.buyer),
+                system_program: &ctx.accounts.system_program.to_account_info(),
+            },
+            PluginType::TransferDelegate,
+        )?;
+
+        if listing.collection == config.items_collection {
+            let relic_asset_record = ctx
+                .accounts
+                .relic_asset_record
+                .as_ref()
+                .ok_or(MarketplaceError::InvalidAsset)?;
+            require_keys_eq!(
+                relic_asset_record.asset,
+                ctx.accounts.asset.key(),
+                MarketplaceError::InvalidAsset
+            );
+
+            if let Some(seller_player_relic_pool) = ctx.accounts.seller_player_relic_pool.as_ref() {
+                revoke_relic_from_owner(
+                    &ctx.accounts.player_profile_program,
+                    seller_player_relic_pool,
+                    &ctx.accounts.seller,
+                    &ctx.accounts.mint_authority,
+                    relic_asset_record.item_id,
+                    &[signer_seeds],
+                )?;
+            }
+
+            grant_relic_to_owner(
+                &ctx.accounts.player_profile_program,
+                &ctx.accounts.buyer_player_relic_pool,
+                &ctx.accounts.buyer.to_account_info(),
+                &ctx.accounts.buyer,
+                &ctx.accounts.mint_authority,
+                &ctx.accounts.system_program,
+                relic_asset_record.item_id,
+                &[signer_seeds],
+            )?;
+        }
 
         // Listing account closed via `close = seller` constraint in BuyNft.
 
@@ -421,7 +551,7 @@ pub struct InitializeMarketplace<'info> {
     pub authority: Signer<'info>,
 
     /// CHECK: Validated in handler against gameplay-state gauntlet pool vault PDA.
-    pub gauntlet_pool: AccountInfo<'info>,
+    pub gauntlet_pool: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -437,7 +567,7 @@ pub struct MintSkin<'info> {
         mut,
         address = marketplace_config.skins_collection @ MarketplaceError::InvalidCollection
     )]
-    pub collection: AccountInfo<'info>,
+    pub collection: UncheckedAccount<'info>,
 
     #[account(
         seeds = [MarketplaceConfig::SEED_PREFIX],
@@ -451,7 +581,7 @@ pub struct MintSkin<'info> {
         seeds = [b"mint_authority"],
         bump,
     )]
-    pub mint_authority: AccountInfo<'info>,
+    pub mint_authority: UncheckedAccount<'info>,
 
     /// Admin who triggers the mint.
     #[account(
@@ -461,11 +591,15 @@ pub struct MintSkin<'info> {
     pub payer: Signer<'info>,
 
     /// CHECK: The wallet that will own the minted NFT.
-    pub owner: AccountInfo<'info>,
+    pub owner: UncheckedAccount<'info>,
 
     /// CHECK: Metaplex Core program.
     #[account(address = MPL_CORE_PROGRAM_ID)]
-    pub mpl_core_program: AccountInfo<'info>,
+    pub mpl_core_program: UncheckedAccount<'info>,
+
+    /// CHECK: SPL Noop program used by mpl-core create.
+    #[account(address = SPL_NOOP_PROGRAM_ID)]
+    pub log_wrapper: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -481,7 +615,7 @@ pub struct MintNftItem<'info> {
         mut,
         address = marketplace_config.items_collection @ MarketplaceError::InvalidCollection
     )]
-    pub collection: AccountInfo<'info>,
+    pub collection: UncheckedAccount<'info>,
 
     #[account(
         seeds = [MarketplaceConfig::SEED_PREFIX],
@@ -494,7 +628,7 @@ pub struct MintNftItem<'info> {
         seeds = [b"mint_authority"],
         bump,
     )]
-    pub mint_authority: AccountInfo<'info>,
+    pub mint_authority: UncheckedAccount<'info>,
 
     #[account(
         mut,
@@ -502,12 +636,31 @@ pub struct MintNftItem<'info> {
     )]
     pub payer: Signer<'info>,
 
+    #[account(
+        init,
+        payer = payer,
+        space = 8 + RelicAsset::INIT_SPACE,
+        seeds = [RelicAsset::SEED_PREFIX, asset.key().as_ref()],
+        bump
+    )]
+    pub relic_asset: Account<'info, RelicAsset>,
+
+    /// CHECK: Player relic pool PDA credited automatically on mint.
+    #[account(mut)]
+    pub player_relic_pool: UncheckedAccount<'info>,
+
     /// CHECK: The wallet that will own the minted NFT.
-    pub owner: AccountInfo<'info>,
+    pub owner: UncheckedAccount<'info>,
 
     /// CHECK: Metaplex Core program.
     #[account(address = MPL_CORE_PROGRAM_ID)]
-    pub mpl_core_program: AccountInfo<'info>,
+    pub mpl_core_program: UncheckedAccount<'info>,
+
+    pub player_profile_program: Program<'info, PlayerProfile>,
+
+    /// CHECK: SPL Noop program used by mpl-core create.
+    #[account(address = SPL_NOOP_PROGRAM_ID)]
+    pub log_wrapper: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -534,15 +687,15 @@ pub struct ListNft<'info> {
         seeds = [b"mint_authority"],
         bump,
     )]
-    pub mint_authority: AccountInfo<'info>,
+    pub mint_authority: UncheckedAccount<'info>,
 
     /// CHECK: Metaplex Core asset account. Validated in handler.
     #[account(mut)]
-    pub asset: AccountInfo<'info>,
+    pub asset: UncheckedAccount<'info>,
 
     /// CHECK: Collection the asset belongs to. Validated against config.
     #[account(mut)]
-    pub collection: AccountInfo<'info>,
+    pub collection: UncheckedAccount<'info>,
 
     #[account(mut)]
     pub seller: Signer<'info>,
@@ -553,11 +706,11 @@ pub struct ListNft<'info> {
         bump,
         seeds::program = PLAYER_PROFILE_PROGRAM_ID,
     )]
-    pub player_profile: AccountInfo<'info>,
+    pub player_profile: UncheckedAccount<'info>,
 
     /// CHECK: Metaplex Core program.
     #[account(address = MPL_CORE_PROGRAM_ID)]
-    pub mpl_core_program: AccountInfo<'info>,
+    pub mpl_core_program: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -576,18 +729,18 @@ pub struct CancelListing<'info> {
 
     /// CHECK: Metaplex Core asset account.
     #[account(mut)]
-    pub asset: AccountInfo<'info>,
+    pub asset: UncheckedAccount<'info>,
 
     /// CHECK: Collection for the asset.
     #[account(mut)]
-    pub collection: AccountInfo<'info>,
+    pub collection: UncheckedAccount<'info>,
 
     #[account(mut)]
     pub seller: Signer<'info>,
 
     /// CHECK: Metaplex Core program.
     #[account(address = MPL_CORE_PROGRAM_ID)]
-    pub mpl_core_program: AccountInfo<'info>,
+    pub mpl_core_program: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -615,34 +768,51 @@ pub struct BuyNft<'info> {
         seeds = [b"mint_authority"],
         bump,
     )]
-    pub mint_authority: AccountInfo<'info>,
+    pub mint_authority: UncheckedAccount<'info>,
 
     /// CHECK: Metaplex Core asset account.
     #[account(mut)]
-    pub asset: AccountInfo<'info>,
+    pub asset: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        seeds = [RelicAsset::SEED_PREFIX, asset.key().as_ref()],
+        bump,
+    )]
+    pub relic_asset_record: Option<Account<'info, RelicAsset>>,
 
     /// CHECK: Collection for the asset.
     #[account(mut)]
-    pub collection: AccountInfo<'info>,
+    pub collection: UncheckedAccount<'info>,
 
     #[account(mut)]
     pub buyer: Signer<'info>,
 
     /// CHECK: Seller wallet, receives payment.
     #[account(mut, address = listing.seller @ MarketplaceError::Unauthorized)]
-    pub seller: AccountInfo<'info>,
+    pub seller: UncheckedAccount<'info>,
+
+    /// CHECK: Seller relic pool PDA, present for relic trades.
+    #[account(mut)]
+    pub seller_player_relic_pool: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: Buyer relic pool PDA, created on demand when buying a relic.
+    #[account(mut)]
+    pub buyer_player_relic_pool: UncheckedAccount<'info>,
 
     /// CHECK: Company treasury, receives fee.
     #[account(mut, address = marketplace_config.company_treasury)]
-    pub company_treasury: AccountInfo<'info>,
+    pub company_treasury: UncheckedAccount<'info>,
 
     /// CHECK: Gauntlet pool, receives fee.
     #[account(mut, address = marketplace_config.gauntlet_pool)]
-    pub gauntlet_pool: AccountInfo<'info>,
+    pub gauntlet_pool: UncheckedAccount<'info>,
 
     /// CHECK: Metaplex Core program.
     #[account(address = MPL_CORE_PROGRAM_ID)]
-    pub mpl_core_program: AccountInfo<'info>,
+    pub mpl_core_program: UncheckedAccount<'info>,
+
+    pub player_profile_program: Program<'info, PlayerProfile>,
 
     pub system_program: Program<'info, System>,
 }
@@ -731,7 +901,7 @@ pub struct UpdateQuestProgress<'info> {
 
     /// CHECK: Player whose quest progress is being updated. Not a signer —
     /// only the authority can advance quest progress.
-    pub player: AccountInfo<'info>,
+    pub player: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]

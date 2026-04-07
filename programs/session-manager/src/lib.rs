@@ -1,7 +1,5 @@
 use anchor_lang::prelude::*;
-use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
-use ephemeral_rollups_sdk::cpi::DelegateConfig;
-use ephemeral_rollups_sdk::ephem::{commit_accounts, commit_and_undelegate_accounts};
+use er_compat::DelegateConfig;
 pub mod constants;
 pub mod errors;
 pub mod state;
@@ -13,7 +11,10 @@ use gameplay_state::state::{DuelEntry, GameState};
 use map_generator::program::MapGenerator;
 use map_generator::state::GeneratedMap;
 use player_inventory::program::PlayerInventory;
-use state::{GameSession, SessionCounter, SessionNonces, EMPTY_STATE_HASH};
+use state::{
+    GameSession, SessionCounter, SessionNonces, SessionRelicEntry, MAX_SESSION_RELICS,
+    EMPTY_STATE_HASH,
+};
 
 declare_id!("CrU4bUFreKy2XsoU2oksdJWKim11w2VpagKBQ2MTkyMz");
 
@@ -41,6 +42,12 @@ pub const MAP_GENERATOR_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     0x1b, 0x52, 0x47, 0x61, 0xfa, 0xb6, 0x73, 0x57, 0xc8, 0xa3, 0x1f, 0xbd, 0x67, 0xe8, 0x8d, 0xe5,
 ]);
 
+/// NFT marketplace program ID for validating relic metadata proofs.
+pub const NFT_MARKETPLACE_PROGRAM_ID: Pubkey = pubkey!("GLKxBpZ8hc7qzvD9VHAVsJEjHSu2JVp1HaPrGH4fpTci");
+
+/// Metaplex Core program ID for validating asset ownership proofs.
+pub const MPL_CORE_PROGRAM_ID: Pubkey = pubkey!("CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d");
+
 /// Discriminator for player_profile::consume_run instruction.
 /// Computed as sha256("global:consume_run")[..8].
 ///
@@ -48,6 +55,10 @@ pub const MAP_GENERATOR_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
 /// manual PlayerProfile struct (avoiding circular deps). If player-profile's
 /// consume_run instruction changes, this must be updated.
 pub const CONSUME_RUN_DISCRIMINATOR: [u8; 8] = [0x6b, 0x65, 0x36, 0x52, 0x84, 0x9c, 0x0f, 0x22];
+/// Discriminator for player_profile::sync_relic_ownership instruction.
+/// Computed as sha256("global:sync_relic_ownership")[..8].
+pub const SYNC_RELIC_OWNERSHIP_DISCRIMINATOR: [u8; 8] =
+    [35, 216, 49, 188, 212, 247, 12, 202];
 
 /// Discriminator for poi_system::initialize_map_pois instruction.
 /// Computed as sha256("global:initialize_map_pois")[..8].
@@ -59,12 +70,11 @@ pub const INITIALIZE_MAP_POIS_DISCRIMINATOR: [u8; 8] =
 pub const SESSION_MANAGER_AUTHORITY_SEED: &[u8] = b"session_manager_authority";
 fn local_delegate_config(validator: Option<Pubkey>) -> DelegateConfig {
     DelegateConfig {
-        validator,
+        validator: validator.map(|v| unsafe { std::mem::transmute(v) }),
         ..DelegateConfig::default()
     }
 }
 
-#[ephemeral]
 #[program]
 pub mod session_manager {
     use super::*;
@@ -126,6 +136,24 @@ pub mod session_manager {
         let clock = Clock::get()?;
         let session_player = ctx.accounts.player.key();
         let session_signer_key = ctx.accounts.session_signer.key();
+        if let Some(pool) = ctx.accounts.player_relic_pool.as_mut() {
+            let owned_item_ids =
+                collect_owned_relic_item_ids(ctx.accounts.player.key(), ctx.remaining_accounts)?;
+            sync_relic_ownership_cpi(
+                &ctx.accounts.player_profile_program.to_account_info(),
+                &pool.to_account_info(),
+                &ctx.accounts.player.to_account_info(),
+                owned_item_ids,
+            )?;
+            pool.reload()?;
+        } else {
+            require!(
+                ctx.remaining_accounts.is_empty(),
+                SessionManagerError::InvalidRelicOwnershipProofs
+            );
+        }
+        let (active_relic_count, active_relics) =
+            session_relic_snapshot(ctx.accounts.player_relic_pool.as_ref().map(|v| &**v));
 
         // Increment counter and get new session ID
         counter.count = counter
@@ -145,6 +173,8 @@ pub mod session_manager {
             session.bump = ctx.bumps.game_session;
             // Copy active_item_pool from profile to session
             session.active_item_pool = player_profile.active_item_pool;
+            session.active_relic_count = active_relic_count;
+            session.active_relics = active_relics;
             // Store session key signer pubkey
             session.session_signer = session_signer_key;
             session.settled = false;
@@ -155,7 +185,7 @@ pub mod session_manager {
         // 1. Allocate empty GeneratedMap (no maze generation — map is filled on ER via fill_map_with_seed)
         map_generator::cpi::init_map_account(
             CpiContext::new(
-                ctx.accounts.map_generator_program.to_account_info(),
+                ctx.accounts.map_generator_program.key(),
                 map_generator::cpi::accounts::InitMapAccount {
                     payer: ctx.accounts.session_signer.to_account_info(),
                     session: ctx.accounts.game_session.to_account_info(),
@@ -171,7 +201,7 @@ pub mod session_manager {
         if let Some(ref sd) = ctx.accounts.session_discovery {
             map_generator::cpi::init_session_discovery(
                 CpiContext::new(
-                    ctx.accounts.map_generator_program.to_account_info(),
+                    ctx.accounts.map_generator_program.key(),
                     map_generator::cpi::accounts::InitSessionDiscovery {
                         payer: ctx.accounts.session_signer.to_account_info(),
                         session: ctx.accounts.game_session.to_account_info(),
@@ -186,7 +216,7 @@ pub mod session_manager {
         // Map dimensions and spawn position will be synced after fill_map_with_seed on ER.
         gameplay_state::cpi::initialize_game_state(
             CpiContext::new(
-                ctx.accounts.gameplay_state_program.to_account_info(),
+                ctx.accounts.gameplay_state_program.key(),
                 gameplay_state::cpi::accounts::InitializeGameState {
                     game_state: ctx.accounts.game_state.to_account_info(),
                     game_session: ctx.accounts.game_session.to_account_info(),
@@ -210,7 +240,7 @@ pub mod session_manager {
         // IMPORTANT: Use session_signer as the inventory owner since all gameplay
         // transactions (equip, fuse, etc.) are signed by the session key signer.
         player_inventory::cpi::initialize_inventory(CpiContext::new(
-            ctx.accounts.player_inventory_program.to_account_info(),
+            ctx.accounts.player_inventory_program.key(),
             player_inventory::cpi::accounts::InitializeInventory {
                 inventory: ctx.accounts.inventory.to_account_info(),
                 session: ctx.accounts.game_session.to_account_info(),
@@ -271,6 +301,24 @@ pub mod session_manager {
         let clock = Clock::get()?;
         let session_player = ctx.accounts.player.key();
         let session_signer_key = ctx.accounts.session_signer.key();
+        if let Some(pool) = ctx.accounts.player_relic_pool.as_mut() {
+            let owned_item_ids =
+                collect_owned_relic_item_ids(ctx.accounts.player.key(), ctx.remaining_accounts)?;
+            sync_relic_ownership_cpi(
+                &ctx.accounts.player_profile_program.to_account_info(),
+                &pool.to_account_info(),
+                &ctx.accounts.player.to_account_info(),
+                owned_item_ids,
+            )?;
+            pool.reload()?;
+        } else {
+            require!(
+                ctx.remaining_accounts.is_empty(),
+                SessionManagerError::InvalidRelicOwnershipProofs
+            );
+        }
+        let (active_relic_count, active_relics) =
+            session_relic_snapshot(ctx.accounts.player_relic_pool.as_ref().map(|v| &**v));
 
         counter.count = counter
             .count
@@ -279,7 +327,7 @@ pub mod session_manager {
 
         // Derive session PDA key (duel uses fixed seed prefix + nonce)
         let duel_nonce_bytes = ctx.accounts.session_nonces.duel_nonce.to_le_bytes();
-        let (session_pda, _) = Pubkey::find_program_address(
+        let (_session_pda, _) = Pubkey::find_program_address(
             &[
                 GameSession::DUEL_SEED_PREFIX,
                 session_player.as_ref(),
@@ -304,6 +352,8 @@ pub mod session_manager {
             session.state_hash = EMPTY_STATE_HASH;
             session.bump = ctx.bumps.game_session;
             session.active_item_pool = player_profile.active_item_pool;
+            session.active_relic_count = active_relic_count;
+            session.active_relics = active_relics;
             session.session_signer = session_signer_key;
             session.settled = false;
             session.settled_victory = false;
@@ -313,7 +363,7 @@ pub mod session_manager {
         // Allocate empty GeneratedMap (filled on ER via generate_map_with_vrf after VRF fulfillment)
         map_generator::cpi::init_map_account(
             CpiContext::new(
-                ctx.accounts.map_generator_program.to_account_info(),
+                ctx.accounts.map_generator_program.key(),
                 map_generator::cpi::accounts::InitMapAccount {
                     payer: ctx.accounts.session_signer.to_account_info(),
                     session: ctx.accounts.game_session.to_account_info(),
@@ -329,7 +379,7 @@ pub mod session_manager {
         if let Some(ref sd) = ctx.accounts.session_discovery {
             map_generator::cpi::init_session_discovery(
                 CpiContext::new(
-                    ctx.accounts.map_generator_program.to_account_info(),
+                    ctx.accounts.map_generator_program.key(),
                     map_generator::cpi::accounts::InitSessionDiscovery {
                         payer: ctx.accounts.session_signer.to_account_info(),
                         session: ctx.accounts.game_session.to_account_info(),
@@ -343,7 +393,7 @@ pub mod session_manager {
         // Initialize Game State with placeholder dimensions; actual spawn set after map fill on ER.
         gameplay_state::cpi::initialize_game_state(
             CpiContext::new(
-                ctx.accounts.gameplay_state_program.to_account_info(),
+                ctx.accounts.gameplay_state_program.key(),
                 gameplay_state::cpi::accounts::InitializeGameState {
                     game_state: ctx.accounts.game_state.to_account_info(),
                     game_session: ctx.accounts.game_session.to_account_info(),
@@ -367,7 +417,7 @@ pub mod session_manager {
         ]];
         gameplay_state::cpi::configure_run_mode(
             CpiContext::new_with_signer(
-                ctx.accounts.gameplay_state_program.to_account_info(),
+                ctx.accounts.gameplay_state_program.key(),
                 gameplay_state::cpi::accounts::ConfigureRunMode {
                     game_state: ctx.accounts.game_state.to_account_info(),
                     session_manager_authority: ctx
@@ -382,7 +432,7 @@ pub mod session_manager {
         )?;
 
         player_inventory::cpi::initialize_inventory(CpiContext::new(
-            ctx.accounts.player_inventory_program.to_account_info(),
+            ctx.accounts.player_inventory_program.key(),
             player_inventory::cpi::accounts::InitializeInventory {
                 inventory: ctx.accounts.inventory.to_account_info(),
                 session: ctx.accounts.game_session.to_account_info(),
@@ -432,6 +482,24 @@ pub mod session_manager {
         let clock = Clock::get()?;
         let session_player = ctx.accounts.player.key();
         let session_signer_key = ctx.accounts.session_signer.key();
+        if let Some(pool) = ctx.accounts.player_relic_pool.as_mut() {
+            let owned_item_ids =
+                collect_owned_relic_item_ids(ctx.accounts.player.key(), ctx.remaining_accounts)?;
+            sync_relic_ownership_cpi(
+                &ctx.accounts.player_profile_program.to_account_info(),
+                &pool.to_account_info(),
+                &ctx.accounts.player.to_account_info(),
+                owned_item_ids,
+            )?;
+            pool.reload()?;
+        } else {
+            require!(
+                ctx.remaining_accounts.is_empty(),
+                SessionManagerError::InvalidRelicOwnershipProofs
+            );
+        }
+        let (active_relic_count, active_relics) =
+            session_relic_snapshot(ctx.accounts.player_relic_pool.as_ref().map(|v| &**v));
 
         counter.count = counter
             .count
@@ -440,7 +508,7 @@ pub mod session_manager {
 
         // Derive session PDA key (gauntlet uses prefix + nonce)
         let gauntlet_nonce_bytes = ctx.accounts.session_nonces.gauntlet_nonce.to_le_bytes();
-        let (session_pda, _) = Pubkey::find_program_address(
+        let (_session_pda, _) = Pubkey::find_program_address(
             &[
                 GameSession::GAUNTLET_SEED_PREFIX,
                 session_player.as_ref(),
@@ -465,6 +533,8 @@ pub mod session_manager {
             session.state_hash = EMPTY_STATE_HASH;
             session.bump = ctx.bumps.game_session;
             session.active_item_pool = player_profile.active_item_pool;
+            session.active_relic_count = active_relic_count;
+            session.active_relics = active_relics;
             session.session_signer = session_signer_key;
             session.settled = false;
             session.settled_victory = false;
@@ -474,7 +544,7 @@ pub mod session_manager {
         // Allocate empty GeneratedMap (filled on ER via generate_map_with_vrf after VRF fulfillment)
         map_generator::cpi::init_map_account(
             CpiContext::new(
-                ctx.accounts.map_generator_program.to_account_info(),
+                ctx.accounts.map_generator_program.key(),
                 map_generator::cpi::accounts::InitMapAccount {
                     payer: ctx.accounts.session_signer.to_account_info(),
                     session: ctx.accounts.game_session.to_account_info(),
@@ -490,7 +560,7 @@ pub mod session_manager {
         if let Some(ref sd) = ctx.accounts.session_discovery {
             map_generator::cpi::init_session_discovery(
                 CpiContext::new(
-                    ctx.accounts.map_generator_program.to_account_info(),
+                    ctx.accounts.map_generator_program.key(),
                     map_generator::cpi::accounts::InitSessionDiscovery {
                         payer: ctx.accounts.session_signer.to_account_info(),
                         session: ctx.accounts.game_session.to_account_info(),
@@ -504,7 +574,7 @@ pub mod session_manager {
         // Initialize Game State with placeholder dimensions; actual spawn set after map fill on ER.
         gameplay_state::cpi::initialize_game_state(
             CpiContext::new(
-                ctx.accounts.gameplay_state_program.to_account_info(),
+                ctx.accounts.gameplay_state_program.key(),
                 gameplay_state::cpi::accounts::InitializeGameState {
                     game_state: ctx.accounts.game_state.to_account_info(),
                     game_session: ctx.accounts.game_session.to_account_info(),
@@ -528,7 +598,7 @@ pub mod session_manager {
         ]];
         gameplay_state::cpi::configure_run_mode(
             CpiContext::new_with_signer(
-                ctx.accounts.gameplay_state_program.to_account_info(),
+                ctx.accounts.gameplay_state_program.key(),
                 gameplay_state::cpi::accounts::ConfigureRunMode {
                     game_state: ctx.accounts.game_state.to_account_info(),
                     session_manager_authority: ctx
@@ -543,7 +613,7 @@ pub mod session_manager {
         )?;
 
         player_inventory::cpi::initialize_inventory(CpiContext::new(
-            ctx.accounts.player_inventory_program.to_account_info(),
+            ctx.accounts.player_inventory_program.key(),
             player_inventory::cpi::accounts::InitializeInventory {
                 inventory: ctx.accounts.inventory.to_account_info(),
                 session: ctx.accounts.game_session.to_account_info(),
@@ -598,8 +668,15 @@ pub mod session_manager {
             SessionManagerError::Unauthorized
         );
         let game_state_seeds: &[&[u8]] = &[b"game_state", game_session_key.as_ref()];
-        ctx.accounts.delegate_game_state(
-            &ctx.accounts.player,
+        er_compat::delegate_account(
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.game_state,
+            &ctx.accounts.owner_program,
+            &ctx.accounts.buffer_game_state,
+            &ctx.accounts.delegation_record_game_state,
+            &ctx.accounts.delegation_metadata_game_state,
+            &ctx.accounts.delegation_program,
+            &ctx.accounts.system_program.to_account_info(),
             game_state_seeds,
             local_delegate_config(None),
         )?;
@@ -626,8 +703,15 @@ pub mod session_manager {
             SessionManagerError::Unauthorized
         );
         let generated_map_seeds: &[&[u8]] = &[GeneratedMap::SEED_PREFIX, game_session_key.as_ref()];
-        ctx.accounts.delegate_generated_map(
-            &ctx.accounts.player,
+        er_compat::delegate_account(
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.generated_map,
+            &ctx.accounts.owner_program,
+            &ctx.accounts.buffer_generated_map,
+            &ctx.accounts.delegation_record_generated_map,
+            &ctx.accounts.delegation_metadata_generated_map,
+            &ctx.accounts.delegation_program,
+            &ctx.accounts.system_program.to_account_info(),
             generated_map_seeds,
             local_delegate_config(None),
         )?;
@@ -651,8 +735,15 @@ pub mod session_manager {
             SessionManagerError::Unauthorized
         );
         let inventory_seeds: &[&[u8]] = &[b"inventory", game_session_key.as_ref()];
-        ctx.accounts.delegate_inventory(
-            &ctx.accounts.player,
+        er_compat::delegate_account(
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.inventory,
+            &ctx.accounts.owner_program,
+            &ctx.accounts.buffer_inventory,
+            &ctx.accounts.delegation_record_inventory,
+            &ctx.accounts.delegation_metadata_inventory,
+            &ctx.accounts.delegation_program,
+            &ctx.accounts.system_program.to_account_info(),
             inventory_seeds,
             local_delegate_config(None),
         )?;
@@ -676,8 +767,15 @@ pub mod session_manager {
             SessionManagerError::Unauthorized
         );
         let map_pois_seeds: &[&[u8]] = &[b"map_pois", game_session_key.as_ref()];
-        ctx.accounts.delegate_map_pois(
-            &ctx.accounts.player,
+        er_compat::delegate_account(
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.map_pois,
+            &ctx.accounts.owner_program,
+            &ctx.accounts.buffer_map_pois,
+            &ctx.accounts.delegation_record_map_pois,
+            &ctx.accounts.delegation_metadata_map_pois,
+            &ctx.accounts.delegation_program,
+            &ctx.accounts.system_program.to_account_info(),
             map_pois_seeds,
             local_delegate_config(None),
         )?;
@@ -701,8 +799,15 @@ pub mod session_manager {
             SessionManagerError::Unauthorized
         );
         let poi_vrf_seeds: &[&[u8]] = &[b"poi_vrf", session_key.as_ref()];
-        ctx.accounts.delegate_poi_vrf_state(
-            &ctx.accounts.player,
+        er_compat::delegate_account(
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.poi_vrf_state,
+            &ctx.accounts.owner_program,
+            &ctx.accounts.buffer_poi_vrf_state,
+            &ctx.accounts.delegation_record_poi_vrf_state,
+            &ctx.accounts.delegation_metadata_poi_vrf_state,
+            &ctx.accounts.delegation_program,
+            &ctx.accounts.system_program.to_account_info(),
             poi_vrf_seeds,
             local_delegate_config(validator),
         )?;
@@ -804,8 +909,15 @@ pub mod session_manager {
             session.try_serialize(&mut data_ref)?;
         }
 
-        ctx.accounts.delegate_game_session(
-            &ctx.accounts.session_signer,
+        er_compat::delegate_account(
+            &ctx.accounts.session_signer.to_account_info(),
+            &ctx.accounts.game_session,
+            &ctx.accounts.owner_program,
+            &ctx.accounts.buffer_game_session,
+            &ctx.accounts.delegation_record_game_session,
+            &ctx.accounts.delegation_metadata_game_session,
+            &ctx.accounts.delegation_program,
+            &ctx.accounts.system_program.to_account_info(),
             session_seeds,
             local_delegate_config(validator),
         )?;
@@ -869,20 +981,20 @@ pub mod session_manager {
             .as_ref()
             .map(|a| a.to_account_info());
         let mut accounts_to_commit = vec![
-            &game_session_info,
-            &game_state_info,
-            &generated_map_info,
-            &inventory_info,
-            &map_pois_info,
+            game_session_info,
+            game_state_info,
+            generated_map_info,
+            inventory_info,
+            map_pois_info,
         ];
-        if let Some(ref info) = poi_vrf_info {
+        if let Some(info) = poi_vrf_info {
             accounts_to_commit.push(info);
         }
-        commit_accounts(
-            &ctx.accounts.player.to_account_info(),
-            accounts_to_commit,
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program.to_account_info(),
+        er_compat::commit_accounts(
+            ctx.accounts.player.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+            &accounts_to_commit,
         )?;
 
         Ok(())
@@ -913,11 +1025,11 @@ pub mod session_manager {
             SessionManagerError::InvalidCampaignLevel
         );
 
-        commit_and_undelegate_accounts(
-            &ctx.accounts.session_signer.to_account_info(),
-            vec![&game_session_info],
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program.to_account_info(),
+        er_compat::commit_and_undelegate(
+            ctx.accounts.session_signer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+            &[game_session_info],
         )?;
 
         // NOTE: After scheduling commit+undelegate, this program may no longer own `game_session`
@@ -1143,7 +1255,7 @@ pub mod session_manager {
         // 5. Close inventory via CPI to ensure fresh inventory for next session
         // Use session_signer since it's the inventory owner (set during start_session)
         player_inventory::cpi::close_inventory(CpiContext::new(
-            ctx.accounts.player_inventory_program.to_account_info(),
+            ctx.accounts.player_inventory_program.key(),
             player_inventory::cpi::accounts::CloseInventory {
                 inventory: ctx.accounts.inventory.to_account_info(),
                 player: ctx.accounts.session_signer.to_account_info(),
@@ -1400,7 +1512,7 @@ pub mod session_manager {
 
         if *ctx.accounts.inventory.owner == player_inventory::ID {
             player_inventory::cpi::close_inventory(CpiContext::new(
-                ctx.accounts.player_inventory_program.to_account_info(),
+                ctx.accounts.player_inventory_program.key(),
                 player_inventory::cpi::accounts::CloseInventory {
                     inventory: ctx.accounts.inventory.to_account_info(),
                     player: ctx.accounts.session_signer.to_account_info(),
@@ -1456,7 +1568,7 @@ pub mod session_manager {
         // Close inventory if on base layer (owned by player-inventory)
         if *ctx.accounts.inventory.owner == player_inventory::ID {
             player_inventory::cpi::close_inventory(CpiContext::new(
-                ctx.accounts.player_inventory_program.to_account_info(),
+                ctx.accounts.player_inventory_program.key(),
                 player_inventory::cpi::accounts::CloseInventory {
                     inventory: ctx.accounts.inventory.to_account_info(),
                     player: ctx.accounts.session_signer.to_account_info(),
@@ -1661,7 +1773,7 @@ pub mod session_manager {
 
         // 5. Close inventory via CPI
         player_inventory::cpi::close_inventory(CpiContext::new(
-            ctx.accounts.player_inventory_program.to_account_info(),
+            ctx.accounts.player_inventory_program.key(),
             player_inventory::cpi::accounts::CloseInventory {
                 inventory: ctx.accounts.inventory.to_account_info(),
                 player: ctx.accounts.session_signer.to_account_info(),
@@ -1738,7 +1850,7 @@ pub mod session_manager {
 
         gameplay_state::cpi::rotate_game_state_session_key(
             CpiContext::new_with_signer(
-                ctx.accounts.gameplay_state_program.to_account_info(),
+                ctx.accounts.gameplay_state_program.key(),
                 gameplay_state::cpi::accounts::RotateGameStateSessionKey {
                     game_state: ctx.accounts.game_state.to_account_info(),
                     session_manager_authority: ctx
@@ -1754,7 +1866,7 @@ pub mod session_manager {
         // 3. CPI to player-inventory to update PlayerInventory.player
         player_inventory::cpi::rotate_inventory_owner(
             CpiContext::new_with_signer(
-                ctx.accounts.player_inventory_program.to_account_info(),
+                ctx.accounts.player_inventory_program.key(),
                 player_inventory::cpi::accounts::RotateInventoryOwner {
                     inventory: ctx.accounts.inventory.to_account_info(),
                     session_manager_authority: ctx
@@ -1775,6 +1887,33 @@ pub mod session_manager {
         });
         Ok(())
     }
+
+    /// Processes undelegation (replaces #[ephemeral] macro output).
+    pub fn process_undelegation(ctx: Context<InitializeAfterUndelegation>, account_seeds: Vec<Vec<u8>>) -> Result<()> {
+        er_compat::undelegate_account(
+            &ctx.accounts.base_account,
+            &crate::id(),
+            &ctx.accounts.buffer,
+            &ctx.accounts.payer,
+            &ctx.accounts.system_program,
+            account_seeds,
+        )
+    }
+}
+
+/// Context for undelegation processing (replaces #[ephemeral] macro output).
+#[derive(Accounts)]
+pub struct InitializeAfterUndelegation<'info> {
+    /// CHECK: Account being undelegated
+    #[account(mut)]
+    pub base_account: UncheckedAccount<'info>,
+    /// CHECK: Delegation buffer
+    pub buffer: UncheckedAccount<'info>,
+    /// CHECK: Payer
+    #[account(mut)]
+    pub payer: UncheckedAccount<'info>,
+    /// CHECK: System program
+    pub system_program: UncheckedAccount<'info>,
 }
 
 // ============================================================================
@@ -1856,6 +1995,165 @@ impl anchor_lang::Owner for PlayerProfile {
     }
 }
 
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, Default)]
+pub struct PlayerRelicEntry {
+    pub item_id: [u8; 8],
+    pub owned_count: u16,
+    pub in_active_pool: bool,
+}
+
+#[derive(Clone)]
+pub struct PlayerRelicPoolRef;
+
+impl anchor_lang::Id for PlayerRelicPoolRef {
+    fn id() -> Pubkey {
+        PLAYER_PROFILE_PROGRAM_ID
+    }
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct PlayerRelicPool {
+    pub owner: Pubkey,
+    pub count: u8,
+    pub relics: Vec<PlayerRelicEntry>,
+    pub bump: u8,
+}
+
+impl PlayerRelicPool {
+    pub const DISCRIMINATOR: [u8; 8] = [1, 105, 67, 203, 111, 254, 159, 128];
+}
+
+impl anchor_lang::AccountDeserialize for PlayerRelicPool {
+    fn try_deserialize_unchecked(buf: &mut &[u8]) -> anchor_lang::Result<Self> {
+        if buf.len() < 8 {
+            return Err(anchor_lang::error::ErrorCode::AccountDiscriminatorNotFound.into());
+        }
+        let discriminator = &buf[..8];
+        if discriminator != Self::DISCRIMINATOR {
+            return Err(anchor_lang::error::ErrorCode::AccountDiscriminatorMismatch.into());
+        }
+        *buf = &buf[8..];
+        Self::deserialize(buf)
+            .map_err(|_| anchor_lang::error::ErrorCode::AccountDidNotDeserialize.into())
+    }
+}
+
+impl anchor_lang::AccountSerialize for PlayerRelicPool {}
+
+impl anchor_lang::Owner for PlayerRelicPool {
+    fn owner() -> Pubkey {
+        PLAYER_PROFILE_PROGRAM_ID
+    }
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+struct RelicAssetAccount {
+    pub asset: Pubkey,
+    pub item_id: [u8; 8],
+    pub bump: u8,
+}
+
+impl RelicAssetAccount {
+    const DISCRIMINATOR: [u8; 8] = [222, 160, 151, 133, 226, 88, 154, 91];
+}
+
+impl anchor_lang::AccountDeserialize for RelicAssetAccount {
+    fn try_deserialize_unchecked(buf: &mut &[u8]) -> anchor_lang::Result<Self> {
+        if buf.len() < 8 {
+            return Err(anchor_lang::error::ErrorCode::AccountDiscriminatorNotFound.into());
+        }
+        let discriminator = &buf[..8];
+        if discriminator != Self::DISCRIMINATOR {
+            return Err(anchor_lang::error::ErrorCode::AccountDiscriminatorMismatch.into());
+        }
+        *buf = &buf[8..];
+        Self::deserialize(buf)
+            .map_err(|_| anchor_lang::error::ErrorCode::AccountDidNotDeserialize.into())
+    }
+}
+
+fn read_metaplex_asset_owner(asset_info: &AccountInfo<'_>) -> Result<Pubkey> {
+    require!(
+        *asset_info.owner == MPL_CORE_PROGRAM_ID,
+        SessionManagerError::InvalidRelicOwnershipProofs
+    );
+    let data = asset_info.try_borrow_data()?;
+    require!(
+        data.len() >= 33 && data[0] == 1,
+        SessionManagerError::InvalidRelicOwnershipProofs
+    );
+    let mut owner_bytes = [0u8; 32];
+    owner_bytes.copy_from_slice(&data[1..33]);
+    Ok(Pubkey::new_from_array(owner_bytes))
+}
+
+fn collect_owned_relic_item_ids(
+    owner: Pubkey,
+    remaining_accounts: &[AccountInfo<'_>],
+) -> Result<Vec<[u8; 8]>> {
+    require!(
+        remaining_accounts.len().is_multiple_of(2),
+        SessionManagerError::InvalidRelicOwnershipProofs
+    );
+
+    let mut owned_item_ids = Vec::with_capacity(remaining_accounts.len() / 2);
+    for proof_accounts in remaining_accounts.chunks_exact(2) {
+        let asset_info = &proof_accounts[0];
+        let relic_asset_info = &proof_accounts[1];
+
+        require!(
+            read_metaplex_asset_owner(asset_info)? == owner,
+            SessionManagerError::InvalidRelicOwnershipProofs
+        );
+        require!(
+            *relic_asset_info.owner == NFT_MARKETPLACE_PROGRAM_ID,
+            SessionManagerError::InvalidRelicOwnershipProofs
+        );
+
+        let expected_relic_asset = Pubkey::find_program_address(
+            &[b"relic_asset", asset_info.key.as_ref()],
+            &NFT_MARKETPLACE_PROGRAM_ID,
+        )
+        .0;
+        require!(
+            expected_relic_asset == *relic_asset_info.key,
+            SessionManagerError::InvalidRelicOwnershipProofs
+        );
+
+        let mut relic_asset_data: &[u8] = &relic_asset_info.try_borrow_data()?;
+        let relic_asset = RelicAssetAccount::try_deserialize_unchecked(&mut relic_asset_data)
+            .map_err(|_| SessionManagerError::InvalidRelicOwnershipProofs)?;
+        require!(
+            relic_asset.asset == *asset_info.key,
+            SessionManagerError::InvalidRelicOwnershipProofs
+        );
+
+        owned_item_ids.push(relic_asset.item_id);
+    }
+
+    Ok(owned_item_ids)
+}
+
+fn session_relic_snapshot(pool: Option<&Account<'_, PlayerRelicPool>>) -> (u8, [SessionRelicEntry; MAX_SESSION_RELICS]) {
+    let mut relics = [SessionRelicEntry::default(); MAX_SESSION_RELICS];
+    let mut count = 0usize;
+
+    if let Some(pool) = pool {
+        for entry in pool.relics.iter().filter(|entry| entry.in_active_pool) {
+            if count >= MAX_SESSION_RELICS {
+                break;
+            }
+            relics[count] = SessionRelicEntry {
+                asset: Pubkey::default(),
+                item_id: entry.item_id,
+            };
+            count += 1;
+        }
+    }
+
+    (count as u8, relics)
+}
+
 #[derive(Accounts)]
 #[instruction(campaign_level: u8)]
 pub struct StartSession<'info> {
@@ -1866,7 +2164,7 @@ pub struct StartSession<'info> {
         seeds = [SessionNonces::SEED_PREFIX, player.key().as_ref()],
         bump
     )]
-    pub session_nonces: Account<'info, SessionNonces>,
+    pub session_nonces: Box<Account<'info, SessionNonces>>,
 
     #[account(
         init,
@@ -1875,14 +2173,14 @@ pub struct StartSession<'info> {
         seeds = [GameSession::SEED_PREFIX, player.key().as_ref(), &[campaign_level], &session_nonces.campaign_nonce.to_le_bytes()],
         bump
     )]
-    pub game_session: Account<'info, GameSession>,
+    pub game_session: Box<Account<'info, GameSession>>,
 
     #[account(
         mut,
         seeds = [SessionCounter::SEED_PREFIX],
         bump = session_counter.bump
     )]
-    pub session_counter: Account<'info, SessionCounter>,
+    pub session_counter: Box<Account<'info, SessionCounter>>,
 
     /// Player profile for validation and run consumption (from player-profile program)
     #[account(
@@ -1891,7 +2189,15 @@ pub struct StartSession<'info> {
         bump,
         seeds::program = PlayerProfileRef::id()
     )]
-    pub player_profile: Account<'info, PlayerProfile>,
+    pub player_profile: Box<Account<'info, PlayerProfile>>,
+
+    #[account(
+        mut,
+        seeds = [b"player_relics", player.key().as_ref()],
+        bump,
+        seeds::program = PlayerRelicPoolRef::id()
+    )]
+    pub player_relic_pool: Option<Box<Account<'info, PlayerRelicPool>>>,
 
     #[account(mut)]
     pub player: Signer<'info>,
@@ -1943,7 +2249,7 @@ pub struct StartDuelSession<'info> {
         seeds = [SessionNonces::SEED_PREFIX, player.key().as_ref()],
         bump
     )]
-    pub session_nonces: Account<'info, SessionNonces>,
+    pub session_nonces: Box<Account<'info, SessionNonces>>,
 
     #[account(
         init,
@@ -1952,21 +2258,29 @@ pub struct StartDuelSession<'info> {
         seeds = [GameSession::DUEL_SEED_PREFIX, player.key().as_ref(), &session_nonces.duel_nonce.to_le_bytes()],
         bump
     )]
-    pub game_session: Account<'info, GameSession>,
+    pub game_session: Box<Account<'info, GameSession>>,
 
     #[account(
         mut,
         seeds = [SessionCounter::SEED_PREFIX],
         bump = session_counter.bump
     )]
-    pub session_counter: Account<'info, SessionCounter>,
+    pub session_counter: Box<Account<'info, SessionCounter>>,
 
     #[account(
         seeds = [b"player", player.key().as_ref()],
         bump,
         seeds::program = PlayerProfileRef::id()
     )]
-    pub player_profile: Account<'info, PlayerProfile>,
+    pub player_profile: Box<Account<'info, PlayerProfile>>,
+
+    #[account(
+        mut,
+        seeds = [b"player_relics", player.key().as_ref()],
+        bump,
+        seeds::program = PlayerRelicPoolRef::id()
+    )]
+    pub player_relic_pool: Option<Box<Account<'info, PlayerRelicPool>>>,
 
     #[account(mut)]
     pub player: Signer<'info>,
@@ -2012,6 +2326,9 @@ pub struct StartDuelSession<'info> {
     /// CHECK: POI system program for manual CPI, validated by address constraint
     pub poi_system_program: UncheckedAccount<'info>,
     pub player_inventory_program: Program<'info, PlayerInventory>,
+    #[account(address = PLAYER_PROFILE_PROGRAM_ID)]
+    /// CHECK: Player profile program for manual CPI, validated by address constraint
+    pub player_profile_program: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -2025,7 +2342,7 @@ pub struct StartGauntletSession<'info> {
         seeds = [SessionNonces::SEED_PREFIX, player.key().as_ref()],
         bump
     )]
-    pub session_nonces: Account<'info, SessionNonces>,
+    pub session_nonces: Box<Account<'info, SessionNonces>>,
 
     #[account(
         init,
@@ -2034,21 +2351,29 @@ pub struct StartGauntletSession<'info> {
         seeds = [GameSession::GAUNTLET_SEED_PREFIX, player.key().as_ref(), &session_nonces.gauntlet_nonce.to_le_bytes()],
         bump
     )]
-    pub game_session: Account<'info, GameSession>,
+    pub game_session: Box<Account<'info, GameSession>>,
 
     #[account(
         mut,
         seeds = [SessionCounter::SEED_PREFIX],
         bump = session_counter.bump
     )]
-    pub session_counter: Account<'info, SessionCounter>,
+    pub session_counter: Box<Account<'info, SessionCounter>>,
 
     #[account(
         seeds = [b"player", player.key().as_ref()],
         bump,
         seeds::program = PlayerProfileRef::id()
     )]
-    pub player_profile: Account<'info, PlayerProfile>,
+    pub player_profile: Box<Account<'info, PlayerProfile>>,
+
+    #[account(
+        mut,
+        seeds = [b"player_relics", player.key().as_ref()],
+        bump,
+        seeds::program = PlayerRelicPoolRef::id()
+    )]
+    pub player_relic_pool: Option<Box<Account<'info, PlayerRelicPool>>>,
 
     #[account(mut)]
     pub player: Signer<'info>,
@@ -2094,20 +2419,22 @@ pub struct StartGauntletSession<'info> {
     /// CHECK: POI system program for manual CPI, validated by address constraint
     pub poi_system_program: UncheckedAccount<'info>,
     pub player_inventory_program: Program<'info, PlayerInventory>,
+    #[account(address = PLAYER_PROFILE_PROGRAM_ID)]
+    /// CHECK: Player profile program for manual CPI, validated by address constraint
+    pub player_profile_program: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
 
-#[delegate]
 #[derive(Accounts)]
 #[instruction(campaign_level: u8)]
 pub struct DelegateSession<'info> {
-    #[account(mut, del)]
+    #[account(mut)]
     /// CHECK: Validated in handler (owner/player/level/delegation status and PDA seeds).
-    pub game_session: AccountInfo<'info>,
+    pub game_session: UncheckedAccount<'info>,
 
     /// CHECK: Must match game_session.player, but does not need to sign.
-    pub player: AccountInfo<'info>,
+    pub player: UncheckedAccount<'info>,
     pub session_signer: Signer<'info>,
 
     #[account(
@@ -2115,15 +2442,30 @@ pub struct DelegateSession<'info> {
         bump = session_nonces.bump
     )]
     pub session_nonces: Account<'info, SessionNonces>,
+    /// CHECK: Buffer for delegation
+    #[account(mut, seeds = [er_compat::DELEGATE_BUFFER_TAG, game_session.key().as_ref()], bump, seeds::program = crate::id())]
+    pub buffer_game_session: UncheckedAccount<'info>,
+    /// CHECK: Delegation record
+    #[account(mut, seeds = [er_compat::DELEGATION_RECORD_TAG, game_session.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_record_game_session: UncheckedAccount<'info>,
+    /// CHECK: Delegation metadata
+    #[account(mut, seeds = [er_compat::DELEGATION_METADATA_TAG, game_session.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_metadata_game_session: UncheckedAccount<'info>,
+    /// CHECK: Owner program
+    #[account(address = crate::id())]
+    pub owner_program: UncheckedAccount<'info>,
+    /// CHECK: Delegation program
+    #[account(address = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
-#[delegate]
 #[derive(Accounts)]
 #[instruction(campaign_level: u8)]
 pub struct DelegateGameState<'info> {
-    #[account(mut, del)]
+    #[account(mut)]
     /// CHECK: Validated in handler as gameplay-state PDA for the delegated session.
-    pub game_state: AccountInfo<'info>,
+    pub game_state: UncheckedAccount<'info>,
 
     pub player: Signer<'info>,
 
@@ -2132,15 +2474,30 @@ pub struct DelegateGameState<'info> {
         bump = session_nonces.bump
     )]
     pub session_nonces: Account<'info, SessionNonces>,
+    /// CHECK: Buffer for delegation
+    #[account(mut, seeds = [er_compat::DELEGATE_BUFFER_TAG, game_state.key().as_ref()], bump, seeds::program = crate::id())]
+    pub buffer_game_state: UncheckedAccount<'info>,
+    /// CHECK: Delegation record
+    #[account(mut, seeds = [er_compat::DELEGATION_RECORD_TAG, game_state.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_record_game_state: UncheckedAccount<'info>,
+    /// CHECK: Delegation metadata
+    #[account(mut, seeds = [er_compat::DELEGATION_METADATA_TAG, game_state.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_metadata_game_state: UncheckedAccount<'info>,
+    /// CHECK: Owner program
+    #[account(address = crate::id())]
+    pub owner_program: UncheckedAccount<'info>,
+    /// CHECK: Delegation program
+    #[account(address = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
-#[delegate]
 #[derive(Accounts)]
 #[instruction(campaign_level: u8)]
 pub struct DelegateGeneratedMap<'info> {
-    #[account(mut, del)]
+    #[account(mut)]
     /// CHECK: Validated in handler as generated-map PDA for the delegated session.
-    pub generated_map: AccountInfo<'info>,
+    pub generated_map: UncheckedAccount<'info>,
 
     pub player: Signer<'info>,
 
@@ -2149,15 +2506,30 @@ pub struct DelegateGeneratedMap<'info> {
         bump = session_nonces.bump
     )]
     pub session_nonces: Account<'info, SessionNonces>,
+    /// CHECK: Buffer for delegation
+    #[account(mut, seeds = [er_compat::DELEGATE_BUFFER_TAG, generated_map.key().as_ref()], bump, seeds::program = crate::id())]
+    pub buffer_generated_map: UncheckedAccount<'info>,
+    /// CHECK: Delegation record
+    #[account(mut, seeds = [er_compat::DELEGATION_RECORD_TAG, generated_map.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_record_generated_map: UncheckedAccount<'info>,
+    /// CHECK: Delegation metadata
+    #[account(mut, seeds = [er_compat::DELEGATION_METADATA_TAG, generated_map.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_metadata_generated_map: UncheckedAccount<'info>,
+    /// CHECK: Owner program
+    #[account(address = crate::id())]
+    pub owner_program: UncheckedAccount<'info>,
+    /// CHECK: Delegation program
+    #[account(address = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
-#[delegate]
 #[derive(Accounts)]
 #[instruction(campaign_level: u8)]
 pub struct DelegateInventory<'info> {
-    #[account(mut, del)]
+    #[account(mut)]
     /// CHECK: Validated in handler as inventory PDA for the delegated session.
-    pub inventory: AccountInfo<'info>,
+    pub inventory: UncheckedAccount<'info>,
 
     pub player: Signer<'info>,
 
@@ -2166,15 +2538,30 @@ pub struct DelegateInventory<'info> {
         bump = session_nonces.bump
     )]
     pub session_nonces: Account<'info, SessionNonces>,
+    /// CHECK: Buffer for delegation
+    #[account(mut, seeds = [er_compat::DELEGATE_BUFFER_TAG, inventory.key().as_ref()], bump, seeds::program = crate::id())]
+    pub buffer_inventory: UncheckedAccount<'info>,
+    /// CHECK: Delegation record
+    #[account(mut, seeds = [er_compat::DELEGATION_RECORD_TAG, inventory.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_record_inventory: UncheckedAccount<'info>,
+    /// CHECK: Delegation metadata
+    #[account(mut, seeds = [er_compat::DELEGATION_METADATA_TAG, inventory.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_metadata_inventory: UncheckedAccount<'info>,
+    /// CHECK: Owner program
+    #[account(address = crate::id())]
+    pub owner_program: UncheckedAccount<'info>,
+    /// CHECK: Delegation program
+    #[account(address = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
-#[delegate]
 #[derive(Accounts)]
 #[instruction(campaign_level: u8)]
 pub struct DelegateMapPois<'info> {
-    #[account(mut, del)]
+    #[account(mut)]
     /// CHECK: Validated in handler as map-pois PDA for the delegated session.
-    pub map_pois: AccountInfo<'info>,
+    pub map_pois: UncheckedAccount<'info>,
 
     pub player: Signer<'info>,
 
@@ -2183,19 +2570,49 @@ pub struct DelegateMapPois<'info> {
         bump = session_nonces.bump
     )]
     pub session_nonces: Account<'info, SessionNonces>,
+    /// CHECK: Buffer for delegation
+    #[account(mut, seeds = [er_compat::DELEGATE_BUFFER_TAG, map_pois.key().as_ref()], bump, seeds::program = crate::id())]
+    pub buffer_map_pois: UncheckedAccount<'info>,
+    /// CHECK: Delegation record
+    #[account(mut, seeds = [er_compat::DELEGATION_RECORD_TAG, map_pois.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_record_map_pois: UncheckedAccount<'info>,
+    /// CHECK: Delegation metadata
+    #[account(mut, seeds = [er_compat::DELEGATION_METADATA_TAG, map_pois.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_metadata_map_pois: UncheckedAccount<'info>,
+    /// CHECK: Owner program
+    #[account(address = crate::id())]
+    pub owner_program: UncheckedAccount<'info>,
+    /// CHECK: Delegation program
+    #[account(address = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
-#[delegate]
 #[derive(Accounts)]
 pub struct DelegatePoiVrfState<'info> {
-    #[account(mut, del)]
+    #[account(mut)]
     /// CHECK: Validated in handler as poi-vrf PDA for the delegated session.
-    pub poi_vrf_state: AccountInfo<'info>,
+    pub poi_vrf_state: UncheckedAccount<'info>,
 
     pub player: Signer<'info>,
+    /// CHECK: Buffer for delegation
+    #[account(mut, seeds = [er_compat::DELEGATE_BUFFER_TAG, poi_vrf_state.key().as_ref()], bump, seeds::program = crate::id())]
+    pub buffer_poi_vrf_state: UncheckedAccount<'info>,
+    /// CHECK: Delegation record
+    #[account(mut, seeds = [er_compat::DELEGATION_RECORD_TAG, poi_vrf_state.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_record_poi_vrf_state: UncheckedAccount<'info>,
+    /// CHECK: Delegation metadata
+    #[account(mut, seeds = [er_compat::DELEGATION_METADATA_TAG, poi_vrf_state.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_metadata_poi_vrf_state: UncheckedAccount<'info>,
+    /// CHECK: Owner program
+    #[account(address = crate::id())]
+    pub owner_program: UncheckedAccount<'info>,
+    /// CHECK: Delegation program
+    #[account(address = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
-#[commit]
 #[derive(Accounts)]
 #[instruction(campaign_level: u8)]
 pub struct CommitSession<'info> {
@@ -2223,9 +2640,14 @@ pub struct CommitSession<'info> {
     pub poi_vrf_state: Option<UncheckedAccount<'info>>,
 
     pub player: Signer<'info>,
+    /// CHECK: Magic program
+    #[account(address = er_compat::MAGIC_PROGRAM_ID)]
+    pub magic_program: UncheckedAccount<'info>,
+    /// CHECK: Magic context
+    #[account(mut, address = er_compat::MAGIC_CONTEXT_ID)]
+    pub magic_context: UncheckedAccount<'info>,
 }
 
-#[commit]
 #[derive(Accounts)]
 #[instruction(campaign_level: u8)]
 pub struct UndelegateSession<'info> {
@@ -2234,9 +2656,15 @@ pub struct UndelegateSession<'info> {
     pub game_session: UncheckedAccount<'info>,
 
     /// CHECK: Must match game_session.player, but does not need to sign.
-    pub player: AccountInfo<'info>,
+    pub player: UncheckedAccount<'info>,
     #[account(mut)]
     pub session_signer: Signer<'info>,
+    /// CHECK: Magic program
+    #[account(address = er_compat::MAGIC_PROGRAM_ID)]
+    pub magic_program: UncheckedAccount<'info>,
+    /// CHECK: Magic context
+    #[account(mut, address = er_compat::MAGIC_CONTEXT_ID)]
+    pub magic_context: UncheckedAccount<'info>,
 }
 
 fn validate_gameplay_runtime_accounts(
@@ -2341,7 +2769,7 @@ pub struct EndSession<'info> {
         has_one = session_signer @ SessionManagerError::Unauthorized,
         close = session_signer
     )]
-    pub game_session: Account<'info, GameSession>,
+    pub game_session: Box<Account<'info, GameSession>>,
 
     /// Game state account to validate death/completion status (closed via gameplay-state CPI)
     #[account(mut)]
@@ -2370,11 +2798,11 @@ pub struct EndSession<'info> {
         bump,
         seeds::program = PlayerProfileRef::id()
     )]
-    pub player_profile: Account<'info, PlayerProfile>,
+    pub player_profile: Box<Account<'info, PlayerProfile>>,
 
     /// Player wallet — validated by has_one constraint. Does NOT need to sign.
     /// CHECK: Validated by has_one constraint on game_session.
-    pub player: AccountInfo<'info>,
+    pub player: UncheckedAccount<'info>,
 
     /// Session key signer — signs to authorize session end, receives all rent refunds.
     #[account(mut)]
@@ -2398,7 +2826,7 @@ pub struct EndSession<'info> {
         bump,
         seeds::program = gameplay_state::ID
     )]
-    pub duel_entry: Option<Account<'info, DuelEntry>>,
+    pub duel_entry: Option<Box<Account<'info, DuelEntry>>>,
 
     /// Optional MapVrfState (only for PvP sessions using VRF)
     /// CHECK: Validated by map-generator close CPI
@@ -2464,7 +2892,7 @@ pub struct SettleSessionResult<'info> {
     /// Player wallet - validated by has_one constraint.
     /// CHECK: Has-one relation on game_session ensures this is the session owner.
     #[account(mut)]
-    pub player: AccountInfo<'info>,
+    pub player: UncheckedAccount<'info>,
 
     /// Session key signer - authorizes settlement without wallet popup
     #[account(mut)]
@@ -2509,7 +2937,7 @@ pub struct CloseSessionOnly<'info> {
 
     /// CHECK: Validated by has_one constraint on game_session.
     #[account(mut)]
-    pub player: AccountInfo<'info>,
+    pub player: UncheckedAccount<'info>,
 
     #[account(mut)]
     pub session_signer: Signer<'info>,
@@ -2575,7 +3003,7 @@ pub struct ForceCloseSession<'info> {
 
     /// CHECK: Validated by has_one constraint on game_session.
     #[account(mut)]
-    pub player: AccountInfo<'info>,
+    pub player: UncheckedAccount<'info>,
 
     pub session_signer: Signer<'info>,
 
@@ -2635,7 +3063,7 @@ pub struct CloseOrphanedAccounts<'info> {
     /// Player wallet receives rent refunds.
     /// CHECK: Validated by child program CPIs via game_state.player.
     #[account(mut)]
-    pub player: AccountInfo<'info>,
+    pub player: UncheckedAccount<'info>,
 
     /// Session key signer — validated by child program CPIs via game_state.session_signer.
     pub session_signer: Signer<'info>,
@@ -3047,6 +3475,24 @@ fn consume_run_cpi<'info>(
         &CONSUME_RUN_DISCRIMINATOR,
         &[],
         &[(player_profile, true, false), (owner, false, true)],
+    )
+}
+
+fn sync_relic_ownership_cpi<'info>(
+    program: &AccountInfo<'info>,
+    player_relic_pool: &AccountInfo<'info>,
+    owner: &AccountInfo<'info>,
+    owned_relic_item_ids: Vec<[u8; 8]>,
+) -> Result<()> {
+    let extra = borsh::to_vec(&owned_relic_item_ids)
+        .map_err(|_| anchor_lang::error::ErrorCode::InstructionDidNotSerialize)?;
+
+    invoke_manual_cpi(
+        program,
+        PLAYER_PROFILE_PROGRAM_ID,
+        &SYNC_RELIC_OWNERSHIP_DISCRIMINATOR,
+        &extra,
+        &[(player_relic_pool, true, false), (owner, false, true)],
     )
 }
 

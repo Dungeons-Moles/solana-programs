@@ -1,5 +1,5 @@
 /**
- * Mints a skin or NFT item to a specified wallet address.
+ * Mints a skin or relic item to a specified wallet address.
  *
  * Calls your nft-marketplace Anchor program which does the CPI to Metaplex Core on-chain.
  *
@@ -10,7 +10,7 @@
  *   # Mint a skin to a specific wallet
  *   MINT_TYPE=skin MINT_NAME="Golden Mole" OWNER=<pubkey> anchor run mint-nft
  *
- *   # Mint an NFT item
+ *   # Mint a relic item
  *   MINT_TYPE=item MINT_NAME="Infernal Pickaxe" NFT_ITEM_ID="S-XX-01" anchor run mint-nft
  *
  * Environment variables:
@@ -18,10 +18,10 @@
  *   MINT_NAME     - Name for the NFT (required)
  *   MINT_URI      - Metadata URI (default: placeholder)
  *   OWNER         - Wallet to receive the NFT (default: your wallet)
- *   NFT_ITEM_ID   - Item ID for NFT items, e.g. "S-XX-01" (required for items)
+ *   NFT_ITEM_ID   - Relic item ID, e.g. "S-XX-01" (required for items)
  */
 
-import * as anchor from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
 import * as fs from "fs";
 import * as os from "os";
 
@@ -29,9 +29,16 @@ import * as os from "os";
 const NFT_MARKETPLACE_PROGRAM_ID = new anchor.web3.PublicKey(
   "GLKxBpZ8hc7qzvD9VHAVsJEjHSu2JVp1HaPrGH4fpTci"
 );
+const PLAYER_PROFILE_PROGRAM_ID = new anchor.web3.PublicKey(
+  "GSLNDrNoHeZXVxB7Yu7tUe8417PpZ5XV7JPYupPw9WQy"
+);
 
 const MPL_CORE_PROGRAM_ID = new anchor.web3.PublicKey(
   "CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d"
+);
+
+const SPL_NOOP_PROGRAM_ID = new anchor.web3.PublicKey(
+  "noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV"
 );
 
 // Derive PDAs
@@ -44,6 +51,20 @@ const [mintAuthorityPda] = anchor.web3.PublicKey.findProgramAddressSync(
   [Buffer.from("mint_authority")],
   NFT_MARKETPLACE_PROGRAM_ID
 );
+
+function getRelicAssetPda(asset: anchor.web3.PublicKey): anchor.web3.PublicKey {
+  return anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("relic_asset"), asset.toBuffer()],
+    NFT_MARKETPLACE_PROGRAM_ID
+  )[0];
+}
+
+function getPlayerRelicPoolPda(owner: anchor.web3.PublicKey): anchor.web3.PublicKey {
+  return anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("player_relics"), owner.toBuffer()],
+    PLAYER_PROFILE_PROGRAM_ID
+  )[0];
+}
 
 async function main() {
   // ── Parse env ─────────────────────────────────────────────────────
@@ -78,7 +99,7 @@ async function main() {
     ? new anchor.web3.PublicKey(process.env.OWNER)
     : keypair.publicKey;
 
-  console.log(`=== Mint NFT (${mintType}) ===\n`);
+  console.log(`=== Mint Asset (${mintType}) ===\n`);
   console.log("RPC:", rpcUrl);
   console.log("Payer:", keypair.publicKey.toBase58());
   console.log("Owner:", ownerPubkey.toBase58());
@@ -120,6 +141,7 @@ async function main() {
         payer: keypair.publicKey,
         owner: ownerPubkey,
         mplCoreProgram: MPL_CORE_PROGRAM_ID,
+        logWrapper: SPL_NOOP_PROGRAM_ID,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
       .signers([assetKeypair])
@@ -131,7 +153,7 @@ async function main() {
     // item
     const nftItemId = process.env.NFT_ITEM_ID;
     if (!nftItemId) {
-      console.error("Error: NFT_ITEM_ID is required for item mints");
+      console.error("Error: NFT_ITEM_ID is required for relic mints");
       console.error("Valid IDs: S-XX-01, S-XX-02, S-XX-03, S-XX-04, S-XX-05, S-XX-06");
       process.exit(1);
     }
@@ -140,9 +162,14 @@ async function main() {
     const idBytes = Buffer.alloc(8, 0);
     idBytes.write(nftItemId, 0, "utf-8");
 
+    const relicAssetPda = getRelicAssetPda(assetKeypair.publicKey);
+    const playerRelicPoolPda = getPlayerRelicPoolPda(ownerPubkey);
+
     console.log("Collection:", config.itemsCollection.toBase58());
-    console.log("NFT Item ID:", nftItemId);
-    console.log("\nMinting NFT item...");
+    console.log("Relic Item ID:", nftItemId);
+    console.log("Relic Record:", relicAssetPda.toBase58());
+    console.log("Player Relic Pool:", playerRelicPoolPda.toBase58());
+    console.log("\nMinting relic item...");
 
     await program.methods
       .mintNftItem(mintName, mintUri, Array.from(idBytes))
@@ -152,18 +179,22 @@ async function main() {
         marketplaceConfig: marketplaceConfigPda,
         mintAuthority: mintAuthorityPda,
         payer: keypair.publicKey,
+        relicAsset: relicAssetPda,
+        playerRelicPool: playerRelicPoolPda,
         owner: ownerPubkey,
         mplCoreProgram: MPL_CORE_PROGRAM_ID,
+        playerProfileProgram: PLAYER_PROFILE_PROGRAM_ID,
+        logWrapper: SPL_NOOP_PROGRAM_ID,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
       .signers([assetKeypair])
       .rpc();
 
-    console.log("  NFT item minted!");
+    console.log("  Relic item minted!");
     console.log("  Asset:", assetKeypair.publicKey.toBase58());
   }
 
-  console.log("\nDone! The NFT is now owned by:", ownerPubkey.toBase58());
+  console.log("\nDone! The asset is now owned by:", ownerPubkey.toBase58());
 }
 
 main()

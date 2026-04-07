@@ -135,6 +135,10 @@ pub enum PlacementRule {
 pub struct ItemOffer {
     /// Item definition ID (e.g., "T-ST-01\0")
     pub item_id: [u8; 8],
+    /// Relic asset when this offer comes from the session relic pool.
+    pub relic_asset: Pubkey,
+    /// Whether this offer comes from the session relic pool.
+    pub is_relic: bool,
     /// Item tier (always Tier::I for fresh offers)
     pub tier: u8,
     /// Gold cost (0 for free POIs)
@@ -148,6 +152,10 @@ pub struct ItemOffer {
 pub struct OfferItem {
     /// Item definition ID (e.g., "G-ST-01\0")
     pub item_id: [u8; 8],
+    /// Relic asset when this offer comes from the session relic pool.
+    pub relic_asset: Pubkey,
+    /// Whether this offer comes from the session relic pool.
+    pub is_relic: bool,
     /// Item rarity (0=Common, 1=Rare, 2=Heroic, 3=Mythic)
     pub rarity: u8,
     /// Item tier (0=Tier I, 1=Tier II, 2=Tier III). Always 0 for fresh POI drops.

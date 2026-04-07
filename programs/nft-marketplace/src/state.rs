@@ -52,6 +52,20 @@ impl Listing {
     pub const INIT_SPACE: usize = 32 + 32 + 32 + 8 + 8 + 1;
 }
 
+/// Asset-backed relic metadata for gameplay registration.
+/// PDA: [b"relic_asset", asset.key()]
+#[account]
+pub struct RelicAsset {
+    pub asset: Pubkey,
+    pub item_id: [u8; 8],
+    pub bump: u8,
+}
+
+impl RelicAsset {
+    pub const SEED_PREFIX: &'static [u8] = b"relic_asset";
+    pub const INIT_SPACE: usize = 32 + 8 + 1;
+}
+
 // ============================================================================
 // Quest System State
 // ============================================================================

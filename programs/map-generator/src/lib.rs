@@ -1,7 +1,5 @@
 use anchor_lang::prelude::*;
-use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
-use ephemeral_rollups_sdk::cpi::DelegateConfig;
-use ephemeral_rollups_sdk::ephem::commit_and_undelegate_accounts;
+use er_compat::DelegateConfig;
 use ephemeral_vrf_sdk::instructions::{create_request_randomness_ix, RequestRandomnessParams};
 use ephemeral_vrf_sdk::types::SerializableAccountMeta;
 
@@ -31,12 +29,11 @@ pub const SESSION_MANAGER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
 ]);
 fn local_delegate_config(validator: Option<Pubkey>) -> DelegateConfig {
     DelegateConfig {
-        validator,
+        validator: validator.map(|v| unsafe { std::mem::transmute(v) }),
         ..DelegateConfig::default()
     }
 }
 
-#[ephemeral]
 #[program]
 pub mod map_generator {
     use super::*;
@@ -283,8 +280,6 @@ pub mod map_generator {
         center_y: u8,
         radius: u8,
     ) -> Result<()> {
-        const SESSION_SESSION_SIGNER_OFFSET: usize = 77;
-
         let session_data = ctx.accounts.session.try_borrow_data()?;
         require!(
             session_data.len() >= SESSION_SESSION_SIGNER_OFFSET + 32,
@@ -326,8 +321,6 @@ pub mod map_generator {
         center_y: u8,
         radius: u8,
     ) -> Result<()> {
-        const SESSION_SESSION_SIGNER_OFFSET: usize = 77;
-
         let session_data = ctx.accounts.session.try_borrow_data()?;
         require!(
             session_data.len() >= SESSION_SESSION_SIGNER_OFFSET + 32,
@@ -377,8 +370,6 @@ pub mod map_generator {
 
     /// Closes the SessionDiscovery account, returning rent to player.
     pub fn close_session_discovery(ctx: Context<CloseSessionDiscovery>) -> Result<()> {
-        const SESSION_PLAYER_OFFSET: usize = 8;
-        const SESSION_SESSION_SIGNER_OFFSET: usize = 77;
 
         let session_data = ctx.accounts.session.try_borrow_data()?;
         require!(
@@ -431,8 +422,15 @@ pub mod map_generator {
             MapGeneratorError::Unauthorized
         );
         let seeds: &[&[u8]] = &[SessionDiscovery::SEED_PREFIX, session_key.as_ref()];
-        ctx.accounts.delegate_session_discovery(
-            &ctx.accounts.player,
+        er_compat::delegate_account(
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.session_discovery,
+            &ctx.accounts.owner_program,
+            &ctx.accounts.buffer_session_discovery,
+            &ctx.accounts.delegation_record_session_discovery,
+            &ctx.accounts.delegation_metadata_session_discovery,
+            &ctx.accounts.delegation_program,
+            &ctx.accounts.system_program.to_account_info(),
             seeds,
             local_delegate_config(validator),
         )?;
@@ -453,11 +451,11 @@ pub mod map_generator {
         );
 
         let discovery_info = ctx.accounts.session_discovery.to_account_info();
-        commit_and_undelegate_accounts(
-            &ctx.accounts.session_signer.to_account_info(),
-            vec![&discovery_info],
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program.to_account_info(),
+        er_compat::commit_and_undelegate(
+            ctx.accounts.session_signer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+            &[discovery_info],
         )?;
         Ok(())
     }
@@ -529,42 +527,75 @@ pub mod map_generator {
                 // Clear offer — no data needed
             }
             1 => {
-                // Shop: 6 * (8 item_id + 1 tier + 2 price + 1 purchased) + 1 reroll + 1 active = 74 bytes
-                require!(data.len() >= 74, MapGeneratorError::InvalidOfferData);
-                for i in 0..6 {
-                    let offset = i * 12;
-                    require!(
-                        offset + 12 <= data.len(),
-                        MapGeneratorError::InvalidOfferData
-                    );
-                    let mut item_id = [0u8; 8];
-                    item_id.copy_from_slice(&data[offset..offset + 8]);
-                    discovery.shop_offers[i] = state::DiscoveryShopOffer {
-                        item_id,
-                        tier: data[offset + 8],
-                        price: u16::from_le_bytes([data[offset + 9], data[offset + 10]]),
-                        purchased: data[offset + 11],
-                    };
+                match data.len() {
+                    len if len >= 272 => {
+                        // Backward-compatible decode for the expanded relic-aware payload:
+                        // 6 * (8 item_id + 32 relic_asset + 1 is_relic + 1 tier + 2 price + 1 purchased)
+                        // + 1 reroll + 1 active = 272 bytes
+                        for i in 0..6 {
+                            let offset = i * 45;
+                            let mut item_id = [0u8; 8];
+                            item_id.copy_from_slice(&data[offset..offset + 8]);
+                            discovery.shop_offers[i] = state::DiscoveryShopOffer {
+                                item_id,
+                                tier: data[offset + 41],
+                                price: u16::from_le_bytes([data[offset + 42], data[offset + 43]]),
+                                purchased: data[offset + 44],
+                            };
+                        }
+                        discovery.shop_reroll_count = data[270];
+                        discovery.shop_active = data[271];
+                    }
+                    len if len >= 74 => {
+                        // Compact payload:
+                        // 6 * (8 item_id + 1 tier + 2 price + 1 purchased) + 1 reroll + 1 active = 74 bytes
+                        for i in 0..6 {
+                            let offset = i * 12;
+                            let mut item_id = [0u8; 8];
+                            item_id.copy_from_slice(&data[offset..offset + 8]);
+                            discovery.shop_offers[i] = state::DiscoveryShopOffer {
+                                item_id,
+                                tier: data[offset + 8],
+                                price: u16::from_le_bytes([data[offset + 9], data[offset + 10]]),
+                                purchased: data[offset + 11],
+                            };
+                        }
+                        discovery.shop_reroll_count = data[72];
+                        discovery.shop_active = data[73];
+                    }
+                    _ => return Err(MapGeneratorError::InvalidOfferData.into()),
                 }
-                discovery.shop_reroll_count = data[72];
-                discovery.shop_active = data[73];
             }
             2 => {
-                // Cache: 3 * (8 item_id + 1 rarity + 1 tier) = 30 bytes
-                require!(data.len() >= 30, MapGeneratorError::InvalidOfferData);
-                for i in 0..3 {
-                    let offset = i * 10;
-                    require!(
-                        offset + 10 <= data.len(),
-                        MapGeneratorError::InvalidOfferData
-                    );
-                    let mut item_id = [0u8; 8];
-                    item_id.copy_from_slice(&data[offset..offset + 8]);
-                    discovery.cache_offer_items[i] = state::DiscoveryOfferItem {
-                        item_id,
-                        rarity: data[offset + 8],
-                        tier: data[offset + 9],
-                    };
+                match data.len() {
+                    len if len >= 129 => {
+                        // Backward-compatible decode for the expanded relic-aware payload:
+                        // 3 * (8 item_id + 32 relic_asset + 1 is_relic + 1 rarity + 1 tier) = 129 bytes
+                        for i in 0..3 {
+                            let offset = i * 43;
+                            let mut item_id = [0u8; 8];
+                            item_id.copy_from_slice(&data[offset..offset + 8]);
+                            discovery.cache_offer_items[i] = state::DiscoveryOfferItem {
+                                item_id,
+                                rarity: data[offset + 41],
+                                tier: data[offset + 42],
+                            };
+                        }
+                    }
+                    len if len >= 30 => {
+                        // Compact payload: 3 * (8 item_id + 1 rarity + 1 tier) = 30 bytes
+                        for i in 0..3 {
+                            let offset = i * 10;
+                            let mut item_id = [0u8; 8];
+                            item_id.copy_from_slice(&data[offset..offset + 8]);
+                            discovery.cache_offer_items[i] = state::DiscoveryOfferItem {
+                                item_id,
+                                rarity: data[offset + 8],
+                                tier: data[offset + 9],
+                            };
+                        }
+                    }
+                    _ => return Err(MapGeneratorError::InvalidOfferData.into()),
                 }
             }
             3 => {
@@ -632,13 +663,8 @@ pub mod map_generator {
     /// Authorization: Reads session account to verify session_signer matches signer,
     /// then returns rent to session.player.
     pub fn close_generated_map(ctx: Context<CloseGeneratedMap>) -> Result<()> {
-        /// Byte offset of `player` in GameSession account data.
-        /// Must match session_manager::state::GameSession layout.
-        const SESSION_PLAYER_OFFSET: usize = 8;
-        /// Byte offset of `session_signer` in GameSession account data.
-        /// Keep in sync with session_manager::state::GameSession::SESSION_SIGNER_OFFSET.
-        const SESSION_SESSION_SIGNER_OFFSET: usize = 77;
-
+        // Byte offset of `session_signer` in GameSession account data.
+        // Keep in sync with session_manager::state::GameSession::SESSION_SIGNER_OFFSET.
         let session_data = ctx.accounts.session.try_borrow_data()?;
         require!(
             session_data.len() >= SESSION_SESSION_SIGNER_OFFSET + 32,
@@ -677,9 +703,7 @@ pub mod map_generator {
     /// Close GeneratedMap when the session PDA no longer exists (orphaned).
     /// Validates session_signer and player via the GameState account instead.
     pub fn close_generated_map_orphaned(ctx: Context<CloseGeneratedMapOrphaned>) -> Result<()> {
-        const GAME_STATE_PLAYER_OFFSET: usize = 8;
-        const GAME_STATE_SESSION_SIGNER_OFFSET: usize = 40;
-        const GAME_STATE_SESSION_OFFSET: usize = 72;
+
 
         let gs_data = ctx.accounts.game_state.try_borrow_data()?;
         require!(
@@ -732,9 +756,7 @@ pub mod map_generator {
     pub fn close_session_discovery_orphaned(
         ctx: Context<CloseSessionDiscoveryOrphaned>,
     ) -> Result<()> {
-        const GAME_STATE_PLAYER_OFFSET: usize = 8;
-        const GAME_STATE_SESSION_SIGNER_OFFSET: usize = 40;
-        const GAME_STATE_SESSION_OFFSET: usize = 72;
+
 
         let gs_data = ctx.accounts.game_state.try_borrow_data()?;
         require!(
@@ -747,10 +769,6 @@ pub mod map_generator {
                 &gs_data[GAME_STATE_SESSION_OFFSET..GAME_STATE_SESSION_OFFSET + 32],
             )
             .unwrap(),
-        );
-        require!(
-            stored_session == ctx.accounts.session_discovery.session,
-            MapGeneratorError::InvalidSession
         );
 
         let stored_session_signer = Pubkey::from(
@@ -775,8 +793,39 @@ pub mod map_generator {
 
         drop(gs_data);
 
+        let expected_session_discovery = Pubkey::find_program_address(
+            &[SessionDiscovery::SEED_PREFIX, stored_session.as_ref()],
+            &crate::ID,
+        )
+        .0;
+        require!(
+            expected_session_discovery == ctx.accounts.session_discovery.key(),
+            MapGeneratorError::InvalidSession
+        );
+
+        let discovery_info = ctx.accounts.session_discovery.to_account_info();
+        let discovery_data = discovery_info.try_borrow_data()?;
+        require!(
+            discovery_data.len() >= SESSION_DISCOVERY_SESSION_OFFSET + 32,
+            MapGeneratorError::InvalidSession
+        );
+        let discovery_session = Pubkey::from(
+            <[u8; 32]>::try_from(
+                &discovery_data
+                    [SESSION_DISCOVERY_SESSION_OFFSET..SESSION_DISCOVERY_SESSION_OFFSET + 32],
+            )
+            .unwrap(),
+        );
+        require!(
+            discovery_session == stored_session,
+            MapGeneratorError::InvalidSession
+        );
+        drop(discovery_data);
+
+        close_owned_account(&discovery_info, &ctx.accounts.player)?;
+
         emit!(SessionDiscoveryClosed {
-            session: ctx.accounts.session_discovery.session,
+            session: stored_session,
         });
 
         Ok(())
@@ -798,8 +847,15 @@ pub mod map_generator {
             MapGeneratorError::Unauthorized
         );
         let map_seeds: &[&[u8]] = &[GeneratedMap::SEED_PREFIX, session_key.as_ref()];
-        ctx.accounts.delegate_generated_map(
-            &ctx.accounts.player,
+        er_compat::delegate_account(
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.generated_map,
+            &ctx.accounts.owner_program,
+            &ctx.accounts.buffer_generated_map,
+            &ctx.accounts.delegation_record_generated_map,
+            &ctx.accounts.delegation_metadata_generated_map,
+            &ctx.accounts.delegation_program,
+            &ctx.accounts.system_program.to_account_info(),
             map_seeds,
             local_delegate_config(validator),
         )?;
@@ -839,8 +895,15 @@ pub mod map_generator {
             MapGeneratorError::Unauthorized
         );
         let vrf_seeds: &[&[u8]] = &[MapVrfState::SEED_PREFIX, session_key.as_ref()];
-        ctx.accounts.delegate_map_vrf_state(
-            &ctx.accounts.player,
+        er_compat::delegate_account(
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.map_vrf_state,
+            &ctx.accounts.owner_program,
+            &ctx.accounts.buffer_map_vrf_state,
+            &ctx.accounts.delegation_record_map_vrf_state,
+            &ctx.accounts.delegation_metadata_map_vrf_state,
+            &ctx.accounts.delegation_program,
+            &ctx.accounts.system_program.to_account_info(),
             vrf_seeds,
             local_delegate_config(validator),
         )?;
@@ -861,17 +924,18 @@ pub mod map_generator {
         );
 
         let map_vrf_state_info = ctx.accounts.map_vrf_state.to_account_info();
-        commit_and_undelegate_accounts(
-            &ctx.accounts.session_signer.to_account_info(),
-            vec![&map_vrf_state_info],
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program.to_account_info(),
+        er_compat::commit_and_undelegate(
+            ctx.accounts.session_signer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+            &[map_vrf_state_info],
         )?;
         Ok(())
     }
 
     /// Requests VRF randomness for map generation.
     /// Initializes a MapVrfState account with status=Requested.
+    #[allow(clippy::missing_transmute_annotations)]
     pub fn request_map_vrf(ctx: Context<RequestMapVrf>) -> Result<()> {
         let vrf_state = &mut ctx.accounts.vrf_state;
         require!(
@@ -888,24 +952,29 @@ pub mod map_generator {
         caller_seed.copy_from_slice(ctx.accounts.session.key().as_ref());
         caller_seed[..8].copy_from_slice(&vrf_state.nonce.to_le_bytes());
 
-        let ix = create_request_randomness_ix(RequestRandomnessParams {
-            payer: ctx.accounts.payer.key(),
-            oracle_queue: ctx.accounts.oracle_queue.key(),
-            callback_program_id: crate::ID,
-            callback_discriminator: instruction::FulfillMapVrf::DISCRIMINATOR.to_vec(),
-            accounts_metas: Some(vec![SerializableAccountMeta {
-                pubkey: ctx.accounts.vrf_state.key(),
-                is_signer: false,
-                is_writable: true,
-            }]),
-            caller_seed,
-            ..Default::default()
-        });
+        // SAFETY: Pubkey layout is identical between versions (32 bytes).
+        let ix = unsafe {
+            create_request_randomness_ix(RequestRandomnessParams {
+                payer: std::mem::transmute(ctx.accounts.payer.key()),
+                oracle_queue: std::mem::transmute(ctx.accounts.oracle_queue.key()),
+                callback_program_id: std::mem::transmute(crate::ID),
+                callback_discriminator: instruction::FulfillMapVrf::DISCRIMINATOR.to_vec(),
+                accounts_metas: Some(vec![SerializableAccountMeta {
+                    pubkey: std::mem::transmute(ctx.accounts.vrf_state.key()),
+                    is_signer: false,
+                    is_writable: true,
+                }]),
+                caller_seed,
+                ..Default::default()
+            })
+        };
 
         let (_, identity_bump) =
-            Pubkey::find_program_address(&[ephemeral_vrf_sdk::consts::IDENTITY], &crate::ID);
+            Pubkey::find_program_address(&[er_compat::VRF_IDENTITY_SEED], &crate::ID);
+        // SAFETY: Instruction layout is identical between versions.
+        let ix_new: anchor_lang::solana_program::instruction::Instruction = unsafe { std::mem::transmute(ix) };
         anchor_lang::solana_program::program::invoke_signed(
-            &ix,
+            &ix_new,
             &[
                 ctx.accounts.payer.to_account_info(),
                 ctx.accounts.program_identity.to_account_info(),
@@ -913,7 +982,7 @@ pub mod map_generator {
                 ctx.accounts.system_program.to_account_info(),
                 ctx.accounts.slot_hashes.to_account_info(),
             ],
-            &[&[ephemeral_vrf_sdk::consts::IDENTITY, &[identity_bump]]],
+            &[&[er_compat::VRF_IDENTITY_SEED, &[identity_bump]]],
         )?;
         Ok(())
     }
@@ -994,8 +1063,6 @@ pub mod map_generator {
     /// Closes MapVrfState account and returns rent to the player.
     /// Called via CPI from session-manager during end_session/abandon_session.
     pub fn close_map_vrf_state(ctx: Context<CloseMapVrfState>) -> Result<()> {
-        const SESSION_PLAYER_OFFSET: usize = 8;
-        const SESSION_SESSION_SIGNER_OFFSET: usize = 77;
 
         let session_data = ctx.accounts.session.try_borrow_data()?;
         require!(
@@ -1046,14 +1113,53 @@ pub mod map_generator {
         );
 
         let generated_map_info = ctx.accounts.generated_map.to_account_info();
-        commit_and_undelegate_accounts(
-            &ctx.accounts.session_signer.to_account_info(),
-            vec![&generated_map_info],
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program.to_account_info(),
+        er_compat::commit_and_undelegate(
+            ctx.accounts.session_signer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+            &[generated_map_info],
         )?;
         Ok(())
     }
+
+    /// Processes undelegation (replaces #[ephemeral] macro output).
+    pub fn process_undelegation(ctx: Context<InitializeAfterUndelegation>, account_seeds: Vec<Vec<u8>>) -> Result<()> {
+        er_compat::undelegate_account(
+            &ctx.accounts.base_account,
+            &crate::id(),
+            &ctx.accounts.buffer,
+            &ctx.accounts.payer,
+            &ctx.accounts.system_program,
+            account_seeds,
+        )
+    }
+}
+
+/// Context for undelegation processing (replaces #[ephemeral] macro output).
+#[derive(Accounts)]
+pub struct InitializeAfterUndelegation<'info> {
+    /// CHECK: Account being undelegated
+    #[account(mut)]
+    pub base_account: UncheckedAccount<'info>,
+    /// CHECK: Delegation buffer
+    pub buffer: UncheckedAccount<'info>,
+    /// CHECK: Payer
+    #[account(mut)]
+    pub payer: UncheckedAccount<'info>,
+    /// CHECK: System program
+    pub system_program: UncheckedAccount<'info>,
+}
+
+fn close_owned_account(account: &AccountInfo, destination: &AccountInfo) -> Result<()> {
+    let lamports = account.lamports();
+    **destination.try_borrow_mut_lamports()? = destination
+        .lamports()
+        .checked_add(lamports)
+        .ok_or(ProgramError::ArithmeticOverflow)?;
+    **account.try_borrow_mut_lamports()? = 0;
+    account.assign(&system_program::ID);
+    account.resize(0)?;
+    Ok(())
 }
 
 // ============================================================================
@@ -1110,29 +1216,47 @@ pub struct GenerateMap<'info> {
     pub system_program: Program<'info, System>,
 }
 
-#[delegate]
 #[derive(Accounts)]
 pub struct DelegateGeneratedMap<'info> {
-    #[account(mut, del)]
+    #[account(mut)]
     /// CHECK: PDA is validated via explicit seed check in handler.
-    pub generated_map: AccountInfo<'info>,
-    /// CHECK: Session PDA used only for seed derivation. Owner not checked because
-    /// the session may already be delegated (owned by delegation program) at this point.
+    pub generated_map: UncheckedAccount<'info>,
+    /// CHECK: Session PDA used only for seed derivation.
     pub session: UncheckedAccount<'info>,
     pub player: Signer<'info>,
+    /// CHECK: Buffer for delegation
+    #[account(mut, seeds = [er_compat::DELEGATE_BUFFER_TAG, generated_map.key().as_ref()], bump, seeds::program = crate::id())]
+    pub buffer_generated_map: UncheckedAccount<'info>,
+    /// CHECK: Delegation record
+    #[account(mut, seeds = [er_compat::DELEGATION_RECORD_TAG, generated_map.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_record_generated_map: UncheckedAccount<'info>,
+    /// CHECK: Delegation metadata
+    #[account(mut, seeds = [er_compat::DELEGATION_METADATA_TAG, generated_map.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_metadata_generated_map: UncheckedAccount<'info>,
+    /// CHECK: Owner program
+    #[account(address = crate::id())]
+    pub owner_program: UncheckedAccount<'info>,
+    /// CHECK: Delegation program
+    #[account(address = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
-#[commit]
 #[derive(Accounts)]
 pub struct UndelegateGeneratedMap<'info> {
     #[account(mut)]
     /// CHECK: PDA is validated and deserialized in handler.
-    pub generated_map: AccountInfo<'info>,
-    /// CHECK: Session PDA used only for seed derivation. Owner not checked because
-    /// the session may already be delegated (owned by delegation program) at this point.
+    pub generated_map: UncheckedAccount<'info>,
+    /// CHECK: Session PDA used only for seed derivation.
     pub session: UncheckedAccount<'info>,
     #[account(mut)]
     pub session_signer: Signer<'info>,
+    /// CHECK: Magic program
+    #[account(address = er_compat::MAGIC_PROGRAM_ID)]
+    pub magic_program: UncheckedAccount<'info>,
+    /// CHECK: Magic context
+    #[account(mut, address = er_compat::MAGIC_CONTEXT_ID)]
+    pub magic_context: UncheckedAccount<'info>,
 }
 
 fn read_generated_map(generated_map: &AccountInfo<'_>) -> Result<GeneratedMap> {
@@ -1290,7 +1414,7 @@ pub struct SetTileFloor<'info> {
         bump = generated_map.bump,
         has_one = session
     )]
-    pub generated_map: Account<'info, GeneratedMap>,
+    pub generated_map: Box<Account<'info, GeneratedMap>>,
 
     /// Game session PDA reference (validated by owner + has_one)
     /// CHECK: Session PDA owned by session-manager; validated via has_one constraint.
@@ -1320,7 +1444,7 @@ pub struct RevealRadius<'info> {
         bump = generated_map.bump,
         has_one = session,
     )]
-    pub generated_map: Account<'info, GeneratedMap>,
+    pub generated_map: Box<Account<'info, GeneratedMap>>,
 
     /// CHECK: Session PDA owned by session-manager; validated via raw-byte reads in handler.
     #[account(owner = SESSION_MANAGER_PROGRAM_ID)]
@@ -1351,7 +1475,7 @@ pub struct CloseGeneratedMap<'info> {
     pub session: UncheckedAccount<'info>,
 
     /// CHECK: Validated against session.player in instruction
-    pub player: AccountInfo<'info>,
+    pub player: UncheckedAccount<'info>,
 
     /// Session key signer must sign to authorize closure and receives rent refund
     #[account(mut)]
@@ -1381,19 +1505,24 @@ pub struct RequestMapVrf<'info> {
     pub vrf_state: Account<'info, MapVrfState>,
 
     /// CHECK: Program identity PDA used as callback signer.
-    #[account(seeds = [ephemeral_vrf_sdk::consts::IDENTITY], bump)]
+    #[account(seeds = [er_compat::VRF_IDENTITY_SEED], bump)]
     pub program_identity: UncheckedAccount<'info>,
 
     /// CHECK: Oracle queue account — must be owned by the VRF program.
-    #[account(mut, owner = ephemeral_vrf_sdk::consts::VRF_PROGRAM_ID)]
+    #[account(mut, owner = er_compat::VRF_PROGRAM_ID)]
     pub oracle_queue: UncheckedAccount<'info>,
 
     /// CHECK: Slot hashes sysvar for VRF request validation.
-    #[account(address = anchor_lang::solana_program::sysvar::slot_hashes::ID)]
+    /// CHECK: SlotHashes sysvar - SysvarS1otHashes111111111111111111111111111
+    #[account(address = Pubkey::new_from_array([
+        0x06, 0xa7, 0xd5, 0x17, 0x19, 0x2f, 0x0a, 0xaf, 0xc6, 0xf2, 0x65, 0xe3, 0xfb, 0x77,
+        0xcc, 0x7a, 0xda, 0x82, 0xc5, 0x29, 0xd0, 0xbe, 0x3b, 0x13, 0x6e, 0x2d, 0x00, 0x55,
+        0x20, 0x00, 0x00, 0x00,
+    ]))]
     pub slot_hashes: UncheckedAccount<'info>,
 
     /// CHECK: VRF program for CPI invocation.
-    #[account(address = ephemeral_vrf_sdk::consts::VRF_PROGRAM_ID)]
+    #[account(address = er_compat::VRF_PROGRAM_ID)]
     pub vrf_program: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
@@ -1404,7 +1533,7 @@ pub struct FulfillMapVrf<'info> {
     /// Oracle identity signer.
     #[cfg_attr(
         not(feature = "mock-vrf"),
-        account(address = ephemeral_vrf_sdk::consts::VRF_PROGRAM_IDENTITY)
+        account(address = er_compat::VRF_PROGRAM_IDENTITY)
     )]
     pub oracle: Signer<'info>,
 
@@ -1443,7 +1572,7 @@ pub struct CloseMapVrfState<'info> {
     pub session: UncheckedAccount<'info>,
 
     /// CHECK: Validated against session.player in instruction body.
-    pub player: AccountInfo<'info>,
+    pub player: UncheckedAccount<'info>,
 
     #[account(mut)]
     pub session_signer: Signer<'info>,
@@ -1500,28 +1629,47 @@ pub struct InitMapVrfState<'info> {
     pub system_program: Program<'info, System>,
 }
 
-#[delegate]
 #[derive(Accounts)]
 pub struct DelegateMapVrfState<'info> {
-    #[account(mut, del)]
+    #[account(mut)]
     /// CHECK: PDA is validated via explicit seed check in handler.
-    pub map_vrf_state: AccountInfo<'info>,
-    /// CHECK: Session PDA used only for seed derivation. Owner not checked because
-    /// the session may already be delegated (owned by delegation program) at this point.
+    pub map_vrf_state: UncheckedAccount<'info>,
+    /// CHECK: Session PDA used only for seed derivation.
     pub session: UncheckedAccount<'info>,
     pub player: Signer<'info>,
+    /// CHECK: Buffer for delegation
+    #[account(mut, seeds = [er_compat::DELEGATE_BUFFER_TAG, map_vrf_state.key().as_ref()], bump, seeds::program = crate::id())]
+    pub buffer_map_vrf_state: UncheckedAccount<'info>,
+    /// CHECK: Delegation record
+    #[account(mut, seeds = [er_compat::DELEGATION_RECORD_TAG, map_vrf_state.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_record_map_vrf_state: UncheckedAccount<'info>,
+    /// CHECK: Delegation metadata
+    #[account(mut, seeds = [er_compat::DELEGATION_METADATA_TAG, map_vrf_state.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_metadata_map_vrf_state: UncheckedAccount<'info>,
+    /// CHECK: Owner program
+    #[account(address = crate::id())]
+    pub owner_program: UncheckedAccount<'info>,
+    /// CHECK: Delegation program
+    #[account(address = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
-#[commit]
 #[derive(Accounts)]
 pub struct UndelegateMapVrfState<'info> {
     #[account(mut)]
     /// CHECK: PDA is validated in handler.
-    pub map_vrf_state: AccountInfo<'info>,
+    pub map_vrf_state: UncheckedAccount<'info>,
     /// CHECK: Session PDA used only for deterministic PDA validation.
     pub session: UncheckedAccount<'info>,
     #[account(mut)]
     pub session_signer: Signer<'info>,
+    /// CHECK: Magic program
+    #[account(address = er_compat::MAGIC_PROGRAM_ID)]
+    pub magic_program: UncheckedAccount<'info>,
+    /// CHECK: Magic context
+    #[account(mut, address = er_compat::MAGIC_CONTEXT_ID)]
+    pub magic_context: UncheckedAccount<'info>,
 }
 
 // ============================================================================
@@ -1574,35 +1722,53 @@ pub struct CloseSessionDiscovery<'info> {
     pub session: UncheckedAccount<'info>,
 
     /// CHECK: Validated against session.player in instruction body.
-    pub player: AccountInfo<'info>,
+    pub player: UncheckedAccount<'info>,
 
     #[account(mut)]
     pub session_signer: Signer<'info>,
 }
 
-#[delegate]
 #[derive(Accounts)]
 pub struct DelegateSessionDiscovery<'info> {
-    #[account(mut, del)]
+    #[account(mut)]
     /// CHECK: PDA is validated via explicit seed check in handler.
-    pub session_discovery: AccountInfo<'info>,
-    /// CHECK: Session PDA used only for seed derivation. Owner not checked because
-    /// the session may already be delegated (owned by delegation program) at this point.
+    pub session_discovery: UncheckedAccount<'info>,
+    /// CHECK: Session PDA used only for seed derivation.
     pub session: UncheckedAccount<'info>,
     pub player: Signer<'info>,
+    /// CHECK: Buffer for delegation
+    #[account(mut, seeds = [er_compat::DELEGATE_BUFFER_TAG, session_discovery.key().as_ref()], bump, seeds::program = crate::id())]
+    pub buffer_session_discovery: UncheckedAccount<'info>,
+    /// CHECK: Delegation record
+    #[account(mut, seeds = [er_compat::DELEGATION_RECORD_TAG, session_discovery.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_record_session_discovery: UncheckedAccount<'info>,
+    /// CHECK: Delegation metadata
+    #[account(mut, seeds = [er_compat::DELEGATION_METADATA_TAG, session_discovery.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_metadata_session_discovery: UncheckedAccount<'info>,
+    /// CHECK: Owner program
+    #[account(address = crate::id())]
+    pub owner_program: UncheckedAccount<'info>,
+    /// CHECK: Delegation program
+    #[account(address = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
-#[commit]
 #[derive(Accounts)]
 pub struct UndelegateSessionDiscovery<'info> {
     #[account(mut)]
     /// CHECK: PDA is validated in handler.
-    pub session_discovery: AccountInfo<'info>,
-    /// CHECK: Session PDA used only for seed derivation. Owner not checked because
-    /// the session may already be delegated (owned by delegation program) at this point.
+    pub session_discovery: UncheckedAccount<'info>,
+    /// CHECK: Session PDA used only for seed derivation.
     pub session: UncheckedAccount<'info>,
     #[account(mut)]
     pub session_signer: Signer<'info>,
+    /// CHECK: Magic program
+    #[account(address = er_compat::MAGIC_PROGRAM_ID)]
+    pub magic_program: UncheckedAccount<'info>,
+    /// CHECK: Magic context
+    #[account(mut, address = er_compat::MAGIC_CONTEXT_ID)]
+    pub magic_context: UncheckedAccount<'info>,
 }
 
 /// Context for recording a discovered POI into SessionDiscovery.
@@ -1736,7 +1902,7 @@ pub struct CloseGeneratedMapOrphaned<'info> {
     /// Player wallet receives the rent refund.
     /// CHECK: Validated against game_state.player in handler.
     #[account(mut)]
-    pub player: AccountInfo<'info>,
+    pub player: UncheckedAccount<'info>,
 
     /// Session key signer — validated against game_state.session_signer.
     pub session_signer: Signer<'info>,
@@ -1746,13 +1912,9 @@ pub struct CloseGeneratedMapOrphaned<'info> {
 /// Validates via GameState which stores session_signer and player.
 #[derive(Accounts)]
 pub struct CloseSessionDiscoveryOrphaned<'info> {
-    #[account(
-        mut,
-        seeds = [SessionDiscovery::SEED_PREFIX, session_discovery.session.as_ref()],
-        bump = session_discovery.bump,
-        close = player,
-    )]
-    pub session_discovery: Account<'info, SessionDiscovery>,
+    #[account(mut, owner = crate::ID)]
+    /// CHECK: PDA and stored session are validated in the handler. Closed manually.
+    pub session_discovery: UncheckedAccount<'info>,
 
     /// GameState for auth — must belong to the same session.
     /// CHECK: Owner checked (gameplay-state program). Fields validated via raw-byte reads.
@@ -1762,7 +1924,7 @@ pub struct CloseSessionDiscoveryOrphaned<'info> {
     /// Player wallet receives the rent refund.
     /// CHECK: Validated against game_state.player in handler.
     #[account(mut)]
-    pub player: AccountInfo<'info>,
+    pub player: UncheckedAccount<'info>,
 
     /// Session key signer — validated against game_state.session_signer.
     pub session_signer: Signer<'info>,

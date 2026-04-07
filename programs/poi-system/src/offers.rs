@@ -9,6 +9,7 @@
 //! - **RarityTable**: Act-based probability distributions
 //! - **TagWeights**: Boss weakness-weighted tag selection
 
+use anchor_lang::prelude::Pubkey;
 use vrf_rng::GameRng;
 
 /// Derive a unique seed for offer generation.
@@ -511,6 +512,8 @@ pub fn generate_supply_cache_offers(
                 used_ids[i] = item_id;
                 offers.push(ItemOffer {
                     item_id,
+                    relic_asset: Pubkey::default(),
+                    is_relic: false,
                     tier: 0,  // Tier::I (enum discriminant)
                     price: 0, // Free POI
                     purchased: false,
@@ -554,6 +557,8 @@ pub fn generate_tool_crate_offers(
                 used_ids[i] = item_id;
                 offers.push(ItemOffer {
                     item_id,
+                    relic_asset: Pubkey::default(),
+                    is_relic: false,
                     tier: 0, // Tier::I
                     price: 0,
                     purchased: false,
@@ -598,6 +603,8 @@ pub fn generate_geode_vault_offers(
                 used_ids[i] = item_id;
                 offers.push(ItemOffer {
                     item_id,
+                    relic_asset: Pubkey::default(),
+                    is_relic: false,
                     tier: 0, // Tier::I
                     price: 0,
                     purchased: false,
@@ -643,6 +650,8 @@ pub fn generate_counter_cache_offers(
                 used_ids[i] = item_id;
                 offers.push(ItemOffer {
                     item_id,
+                    relic_asset: Pubkey::default(),
+                    is_relic: false,
                     tier: 0, // Tier::I
                     price: 0,
                     purchased: false,
@@ -670,7 +679,11 @@ pub fn generate_smuggler_hatch_offers(
     weakness2: WeaknessTag,
     seed: u64,
     pool: &[u8; ITEM_POOL_SIZE],
+    relics: &[session_manager::state::SessionRelicEntry],
+    relic_count: u8,
 ) -> GeneratedOffers {
+    use player_inventory::state::ItemType as InventoryItemType;
+
     let tag_weights = calculate_tag_weights(weakness1, weakness2);
     let mut offers = Vec::with_capacity(6);
     let mut used_ids: [[u8; 8]; 6] = [[0; 8]; 6];
@@ -682,18 +695,26 @@ pub fn generate_smuggler_hatch_offers(
         let mut rng = GameRng::from_seed(attempt_seed);
         let item_seed = rng.next_val();
         let rarity = get_rarity_from_table(&SMUGGLER_TOOL_RARITY, act, item_seed);
-        let item_id = select_tool_by_rarity_weighted(rarity, &tag_weights, rng.next_val());
         let price = calculate_price(ItemType::Tool, rarity);
+        let selected = select_active_candidate_with_fallback(
+            InventoryItemType::Tool,
+            rarity,
+            &tag_weights,
+            rng.next_val(),
+            pool,
+            relics,
+            relic_count,
+            &used_ids[..count],
+            |_, _| true,
+        );
 
-        // Check pool membership and deduplication
-        let in_pool = item_id_to_pool_index(&item_id).is_some_and(|idx| is_item_in_pool(pool, idx));
-        let is_duplicate = used_ids[..count].contains(&item_id);
-
-        if in_pool && !is_duplicate {
-            used_ids[count] = item_id;
+        if let Some(selected) = selected {
+            used_ids[count] = selected.item_id;
             count += 1;
             offers.push(ItemOffer {
-                item_id,
+                item_id: selected.item_id,
+                relic_asset: selected.relic_asset,
+                is_relic: selected.is_relic,
                 tier: 0,
                 price,
                 purchased: false,
@@ -711,22 +732,57 @@ pub fn generate_smuggler_hatch_offers(
         let mut rng = GameRng::from_seed(attempt_seed);
         let item_seed = rng.next_val();
         let rarity = get_rarity_from_table(&SMUGGLER_GEAR_RARITY, act, item_seed);
-        let item_id = select_gear_by_rarity_weighted(rarity, &tag_weights, rng.next_val());
         let price = calculate_price(ItemType::Gear, rarity);
+        let selected = select_active_candidate_with_fallback(
+            InventoryItemType::Gear,
+            rarity,
+            &tag_weights,
+            rng.next_val(),
+            pool,
+            relics,
+            relic_count,
+            &used_ids[..count],
+            |_, _| true,
+        );
 
-        let in_pool = item_id_to_pool_index(&item_id).is_some_and(|idx| is_item_in_pool(pool, idx));
-        let is_duplicate = used_ids[..count].contains(&item_id);
-
-        if in_pool && !is_duplicate {
-            used_ids[count] = item_id;
+        if let Some(selected) = selected {
+            used_ids[count] = selected.item_id;
             count += 1;
             offers.push(ItemOffer {
-                item_id,
+                item_id: selected.item_id,
+                relic_asset: selected.relic_asset,
+                is_relic: selected.is_relic,
                 tier: 0,
                 price,
                 purchased: false,
             });
         }
+    }
+
+    // Fill any remaining slots from the session relic pool.
+    for relic in relics.iter().take(relic_count as usize) {
+        if count >= 6 {
+            break;
+        }
+        let is_tool = item_definition_by_id(&relic.item_id)
+            .is_some_and(|definition| definition.item_type == player_inventory::state::ItemType::Tool);
+        let expected_tool_slot = count == 0;
+        if is_tool != expected_tool_slot {
+            continue;
+        }
+        if used_ids[..count].contains(&relic.item_id) {
+            continue;
+        }
+        used_ids[count] = relic.item_id;
+        count += 1;
+        offers.push(ItemOffer {
+            item_id: relic.item_id,
+            relic_asset: relic.asset,
+            is_relic: true,
+            tier: 0,
+            price: calculate_price(if is_tool { ItemType::Tool } else { ItemType::Gear }, ItemRarity::Heroic),
+            purchased: false,
+        });
     }
 
     GeneratedOffers {
@@ -1178,6 +1234,8 @@ mod tests {
             WeaknessTag::Blast,
             12345,
             &full_pool,
+            &[],
+            0,
         );
 
         assert_eq!(
@@ -1217,6 +1275,8 @@ mod tests {
             WeaknessTag::Blast,
             12345,
             &empty_pool,
+            &[],
+            0,
         );
 
         assert_eq!(
@@ -1732,6 +1792,8 @@ mod tests {
                 WeaknessTag::Frost,
                 12345,
                 &full_pool,
+                &[],
+                0,
             );
             for (i, item) in items.iter().enumerate() {
                 assert_ne!(
@@ -1755,6 +1817,8 @@ mod tests {
                     WeaknessTag::Frost,
                     seed * 12345,
                     &full_pool,
+                    &[],
+                    0,
                 );
                 assert_ne!(
                     items[0].item_id, items[1].item_id,
@@ -1787,6 +1851,8 @@ mod tests {
                 WeaknessTag::Frost,
                 12345,
                 &pool,
+                &[],
+                0,
             );
             for item in &items {
                 if item.item_id == [0u8; 8] {
@@ -1824,6 +1890,8 @@ mod tests {
             WeaknessTag::Frost,
             12345,
             &pool,
+            &[],
+            0,
         );
 
         // Should still produce 3 items even without Heroic+ in pool
@@ -1864,6 +1932,8 @@ mod tests {
             WeaknessTag::Blast,
             12345,
             &pool,
+            &[],
+            0,
         );
 
         for (i, item) in items.iter().enumerate() {
@@ -1902,6 +1972,8 @@ mod tests {
             WeaknessTag::Frost,
             12345,
             &pool,
+            &[],
+            0,
         );
 
         // All 3 slots filled
@@ -1936,6 +2008,8 @@ mod tests {
                     WeaknessTag::Blood,
                     seed * 7919,
                     &pool,
+                    &[],
+                    0,
                 );
                 // All in pool
                 for item in &items {
@@ -1969,6 +2043,77 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_tool_crate_can_draw_active_tool_relic_on_main_heroic_roll() {
+        let pool = pool_with_items(&[pidx(b"T-ST-01\0"), pidx(b"T-SC-01\0"), pidx(b"T-GR-01\0")]);
+        let relics = [session_manager::state::SessionRelicEntry {
+            asset: Pubkey::new_from_array([7u8; 32]),
+            item_id: *b"S-XX-07\0",
+        }];
+
+        let mut saw_relic = false;
+        for seed in 0..250u64 {
+            let items = generate_pool_filtered_cache_offers(
+                3,
+                1,
+                WeaknessTag::Stone,
+                WeaknessTag::Frost,
+                seed * 7919,
+                &pool,
+                &relics,
+                1,
+            );
+            if items.iter().any(|item| item.is_relic && item.item_id == *b"S-XX-07\0") {
+                saw_relic = true;
+                break;
+            }
+        }
+
+        assert!(saw_relic, "Tool Crate should be able to draw an active heroic tool relic");
+    }
+
+    #[test]
+    fn test_smuggler_hatch_can_draw_active_tool_relic_in_tool_slot() {
+        let pool = pool_with_items(&[
+            pidx(b"T-ST-01\0"),
+            pidx(b"G-ST-01\0"),
+            pidx(b"G-SC-01\0"),
+            pidx(b"G-GR-01\0"),
+            pidx(b"G-BL-01\0"),
+            pidx(b"G-FR-01\0"),
+        ]);
+        let relics = [session_manager::state::SessionRelicEntry {
+            asset: Pubkey::new_from_array([9u8; 32]),
+            item_id: *b"S-XX-07\0",
+        }];
+
+        let mut saw_relic_tool = false;
+        for seed in 0..250u64 {
+            let offers = generate_smuggler_hatch_offers(
+                1,
+                WeaknessTag::Stone,
+                WeaknessTag::Frost,
+                seed * 12347,
+                &pool,
+                &relics,
+                1,
+            );
+            if offers
+                .offers
+                .first()
+                .is_some_and(|offer| offer.is_relic && offer.item_id == *b"S-XX-07\0")
+            {
+                saw_relic_tool = true;
+                break;
+            }
+        }
+
+        assert!(
+            saw_relic_tool,
+            "Smuggler Hatch should be able to draw an active heroic tool relic in the tool slot"
+        );
+    }
 }
 
 // =============================================================================
@@ -1982,9 +2127,10 @@ mod tests {
 /// Returns 0 (Common) for unrecognised or malformed IDs.
 pub fn rarity_from_item_id(item_id: &[u8; 8]) -> u8 {
     use player_inventory::items::get_item;
+    use player_inventory::relics::get_relic_item;
     use player_inventory::state::Rarity;
 
-    match get_item(item_id) {
+    match get_item(item_id).or_else(|| get_relic_item(item_id)) {
         Some(def) => match def.rarity {
             Rarity::Common => 0,
             Rarity::Rare => 1,
@@ -1995,12 +2141,222 @@ pub fn rarity_from_item_id(item_id: &[u8; 8]) -> u8 {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ActiveOfferCandidate {
+    item_id: [u8; 8],
+    relic_asset: Pubkey,
+    is_relic: bool,
+    tag_bucket: usize,
+}
+
+fn item_definition_by_id(
+    item_id: &[u8; 8],
+) -> Option<&'static player_inventory::items::ItemDefinition> {
+    use player_inventory::items::get_item;
+    use player_inventory::relics::get_relic_item;
+
+    get_item(item_id).or_else(|| get_relic_item(item_id))
+}
+
+fn item_tag_bucket(item_id: &[u8; 8]) -> Option<usize> {
+    use player_inventory::state::ItemTag;
+
+    let definition = item_definition_by_id(item_id)?;
+    Some(match definition.tag {
+        ItemTag::Stone => 0,
+        ItemTag::Scout => 1,
+        ItemTag::Greed => 2,
+        ItemTag::Blast => 3,
+        ItemTag::Frost => 4,
+        ItemTag::Rust => 5,
+        ItemTag::Blood => 6,
+        ItemTag::Tempo => 7,
+        ItemTag::None => 8,
+    })
+}
+
 // =============================================================================
 // Item Pool Filtering
 // =============================================================================
 
 /// Session item bitmask size (80 bits = 10 bytes)
 pub const ITEM_POOL_SIZE: usize = 10;
+
+fn item_matches_poi(item_id: &[u8; 8], poi_type: u8, w1: WeaknessTag, w2: WeaknessTag) -> bool {
+    use player_inventory::state::ItemType as InventoryItemType;
+
+    let Some(definition) = item_definition_by_id(item_id) else {
+        return false;
+    };
+    let is_tool = definition.item_type == InventoryItemType::Tool;
+    let is_gear = definition.item_type == InventoryItemType::Gear;
+    match poi_type {
+        2 => is_gear,
+        3 => is_tool,
+        12 => is_gear && rarity_from_item_id(item_id) >= 2,
+        13 => {
+            let tag_bucket = item_tag_bucket(item_id);
+            is_gear && (tag_bucket == Some(w1 as usize) || tag_bucket == Some(w2 as usize))
+        }
+        _ => true,
+    }
+}
+
+fn fallback_rarity_chain(rarity: ItemRarity) -> &'static [u8] {
+    match rarity {
+        ItemRarity::Mythic => &[3, 2, 1, 0],
+        ItemRarity::Heroic => &[2, 1, 0],
+        ItemRarity::Rare => &[1, 0],
+        ItemRarity::Common => &[0],
+    }
+}
+
+fn collect_active_candidates<F>(
+    pool: &[u8; ITEM_POOL_SIZE],
+    relics: &[session_manager::state::SessionRelicEntry],
+    relic_count: u8,
+    used_ids: &[[u8; 8]],
+    desired_type: player_inventory::state::ItemType,
+    rarity_index: u8,
+    extra_filter: F,
+) -> Vec<ActiveOfferCandidate>
+where
+    F: Fn(&player_inventory::items::ItemDefinition, &[u8; 8]) -> bool,
+{
+    let mut candidates = Vec::new();
+
+    for item in player_inventory::items::ITEMS.iter() {
+        let item_id = *item.id;
+        let Some(pool_index) = item_id_to_pool_index(&item_id) else {
+            continue;
+        };
+        if !is_item_in_pool(pool, pool_index) || used_ids.contains(&item_id) {
+            continue;
+        }
+        if item.item_type != desired_type || rarity_from_item_id(&item_id) != rarity_index {
+            continue;
+        }
+        if !extra_filter(item, &item_id) {
+            continue;
+        }
+        candidates.push(ActiveOfferCandidate {
+            item_id,
+            relic_asset: Pubkey::default(),
+            is_relic: false,
+            tag_bucket: item_tag_bucket(&item_id).unwrap_or(8),
+        });
+    }
+
+    for relic in relics.iter().take(relic_count as usize) {
+        if used_ids.contains(&relic.item_id) {
+            continue;
+        }
+        let Some(definition) = item_definition_by_id(&relic.item_id) else {
+            continue;
+        };
+        if definition.item_type != desired_type || rarity_from_item_id(&relic.item_id) != rarity_index {
+            continue;
+        }
+        if !extra_filter(definition, &relic.item_id) {
+            continue;
+        }
+        candidates.push(ActiveOfferCandidate {
+            item_id: relic.item_id,
+            relic_asset: relic.asset,
+            is_relic: true,
+            tag_bucket: item_tag_bucket(&relic.item_id).unwrap_or(8),
+        });
+    }
+
+    candidates
+}
+
+fn select_weighted_active_candidate(
+    candidates: &[ActiveOfferCandidate],
+    tag_weights: &[u32; 8],
+    seed: u64,
+) -> Option<ActiveOfferCandidate> {
+    if candidates.is_empty() {
+        return None;
+    }
+
+    let mut buckets: [Vec<ActiveOfferCandidate>; 9] = std::array::from_fn(|_| Vec::new());
+    for candidate in candidates {
+        buckets[candidate.tag_bucket.min(8)].push(*candidate);
+    }
+
+    let mut total_weight = 0u64;
+    for (bucket_index, bucket) in buckets.iter().enumerate() {
+        if bucket.is_empty() {
+            continue;
+        }
+        total_weight += if bucket_index < 8 {
+            tag_weights[bucket_index] as u64
+        } else {
+            100
+        };
+    }
+    if total_weight == 0 {
+        return None;
+    }
+
+    let roll = seed % total_weight;
+    let mut cumulative = 0u64;
+    let mut selected_bucket = 8usize;
+    for (bucket_index, bucket) in buckets.iter().enumerate() {
+        if bucket.is_empty() {
+            continue;
+        }
+        cumulative += if bucket_index < 8 {
+            tag_weights[bucket_index] as u64
+        } else {
+            100
+        };
+        if roll < cumulative {
+            selected_bucket = bucket_index;
+            break;
+        }
+    }
+
+    let bucket = &buckets[selected_bucket];
+    let item_roll = ((seed >> 8) as usize) % bucket.len();
+    bucket.get(item_roll).copied()
+}
+
+fn select_active_candidate_with_fallback<F>(
+    desired_type: player_inventory::state::ItemType,
+    desired_rarity: ItemRarity,
+    tag_weights: &[u32; 8],
+    seed: u64,
+    pool: &[u8; ITEM_POOL_SIZE],
+    relics: &[session_manager::state::SessionRelicEntry],
+    relic_count: u8,
+    used_ids: &[[u8; 8]],
+    extra_filter: F,
+) -> Option<ActiveOfferCandidate>
+where
+    F: Fn(&player_inventory::items::ItemDefinition, &[u8; 8]) -> bool + Copy,
+{
+    for (offset, rarity_index) in fallback_rarity_chain(desired_rarity).iter().enumerate() {
+        let rarity_seed = seed ^ ((offset as u64) << 56);
+        let candidates = collect_active_candidates(
+            pool,
+            relics,
+            relic_count,
+            used_ids,
+            desired_type,
+            *rarity_index,
+            extra_filter,
+        );
+        if let Some(candidate) =
+            select_weighted_active_candidate(&candidates, tag_weights, rarity_seed)
+        {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
 
 /// Check if an item index is in the active item pool bitmask.
 ///
@@ -2090,37 +2446,92 @@ pub fn generate_pool_filtered_cache_offers(
     w2: WeaknessTag,
     seed: u64,
     pool: &[u8; ITEM_POOL_SIZE],
+    relics: &[session_manager::state::SessionRelicEntry],
+    relic_count: u8,
 ) -> [crate::state::OfferItem; 3] {
+    use player_inventory::state::ItemType as InventoryItemType;
+
     let mut items = [crate::state::OfferItem::default(); 3];
     let mut count = 0usize;
     let mut used_ids = [[0u8; 8]; 3];
+    let tag_weights = calculate_tag_weights(w1, w2);
+    let mut mythic_used = false;
 
-    // Phase 1: generate via normal POI offer tables + pool filter
-    for attempt in 0..10u64 {
-        let attempt_seed = seed ^ attempt.wrapping_mul(0x9e3779b97f4a7c15);
-        let generated = match generate_poi_offers(poi_type, act, w1, w2, attempt_seed) {
-            Some(g) => g,
-            None => break, // not an item-giving POI
+    // Phase 1: select directly from the active standard pool + active relic pool.
+    while count < 3 {
+        let attempt_seed = seed ^ ((count as u64) << 48) ^ 0x9e3779b97f4a7c15;
+        let mut rng = GameRng::from_seed(attempt_seed);
+        let desired_rarity = match poi_type {
+            12 => sample_rarity_with_cap(&mut rng, &GEODE_VAULT_RARITY, act, &mut mythic_used),
+            2 => get_rarity_from_table(&SUPPLY_CACHE_RARITY, act, rng.next_val()),
+            3 => get_rarity_from_table(&TOOL_CRATE_RARITY, act, rng.next_val()),
+            13 => get_rarity_from_table(&COUNTER_CACHE_RARITY, act, rng.next_val()),
+            _ => break,
         };
 
-        for offer in &generated.offers {
-            if used_ids[..count].contains(&offer.item_id) {
-                continue;
-            }
-            if let Some(index) = item_id_to_pool_index(&offer.item_id) {
-                if is_item_in_pool(pool, index) {
-                    used_ids[count] = offer.item_id;
-                    items[count] = crate::state::OfferItem {
-                        item_id: offer.item_id,
-                        rarity: rarity_from_item_id(&offer.item_id),
-                        tier: offer.tier,
-                    };
-                    count += 1;
-                    if count >= 3 {
-                        return items;
-                    }
-                }
-            }
+        let selected = match poi_type {
+            2 => select_active_candidate_with_fallback(
+                InventoryItemType::Gear,
+                desired_rarity,
+                &tag_weights,
+                rng.next_val(),
+                pool,
+                relics,
+                relic_count,
+                &used_ids[..count],
+                |_, _| true,
+            ),
+            3 => select_active_candidate_with_fallback(
+                InventoryItemType::Tool,
+                desired_rarity,
+                &tag_weights,
+                rng.next_val(),
+                pool,
+                relics,
+                relic_count,
+                &used_ids[..count],
+                |_, _| true,
+            ),
+            12 => select_active_candidate_with_fallback(
+                InventoryItemType::Gear,
+                desired_rarity,
+                &tag_weights,
+                rng.next_val(),
+                pool,
+                relics,
+                relic_count,
+                &used_ids[..count],
+                |_, item_id| item_matches_poi(item_id, 12, w1, w2),
+            ),
+            13 => select_active_candidate_with_fallback(
+                InventoryItemType::Gear,
+                desired_rarity,
+                &tag_weights,
+                rng.next_val(),
+                pool,
+                relics,
+                relic_count,
+                &used_ids[..count],
+                |_, item_id| item_matches_poi(item_id, 13, w1, w2),
+            ),
+            _ => None,
+        };
+
+        let Some(selected) = selected else {
+            break;
+        };
+
+        used_ids[count] = selected.item_id;
+        items[count] = crate::state::OfferItem {
+            item_id: selected.item_id,
+            relic_asset: selected.relic_asset,
+            is_relic: selected.is_relic,
+            rarity: rarity_from_item_id(&selected.item_id),
+            tier: 0,
+        };
+        count += 1;
+        if count >= 3 {
+            return items;
         }
     }
 
@@ -2188,6 +2599,8 @@ pub fn generate_pool_filtered_cache_offers(
                     used_ids[count] = item_id;
                     items[count] = crate::state::OfferItem {
                         item_id,
+                        relic_asset: Pubkey::default(),
+                        is_relic: false,
                         rarity: rarity_from_item_id(&item_id),
                         tier: 0,
                     };
@@ -2196,6 +2609,29 @@ pub fn generate_pool_filtered_cache_offers(
                 cursor = (cursor + 1) % candidates.len();
                 scanned += 1;
             }
+        }
+    }
+
+    if count < 3 {
+        for relic in relics.iter().take(relic_count as usize) {
+            if count >= 3 {
+                break;
+            }
+            if used_ids[..count].contains(&relic.item_id) {
+                continue;
+            }
+            if !item_matches_poi(&relic.item_id, poi_type, w1, w2) {
+                continue;
+            }
+            used_ids[count] = relic.item_id;
+            items[count] = crate::state::OfferItem {
+                item_id: relic.item_id,
+                relic_asset: relic.asset,
+                is_relic: true,
+                rarity: rarity_from_item_id(&relic.item_id),
+                tier: 0,
+            };
+            count += 1;
         }
     }
 
@@ -2214,6 +2650,9 @@ pub fn filter_offers_by_pool(offers: &[ItemOffer], pool: &[u8; ITEM_POOL_SIZE]) 
     offers
         .iter()
         .filter(|offer| {
+            if offer.is_relic {
+                return true;
+            }
             if let Some(index) = item_id_to_pool_index(&offer.item_id) {
                 is_item_in_pool(pool, index)
             } else {

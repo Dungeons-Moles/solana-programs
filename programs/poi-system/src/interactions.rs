@@ -1055,18 +1055,24 @@ mod tests {
         vec![
             ItemOffer {
                 item_id: *b"G-ST-01\0",
+                relic_asset: anchor_lang::prelude::Pubkey::default(),
+                is_relic: false,
                 tier: 1,
                 price: 0,
                 purchased: false,
             },
             ItemOffer {
                 item_id: *b"G-ST-02\0",
+                relic_asset: anchor_lang::prelude::Pubkey::default(),
+                is_relic: false,
                 tier: 1,
                 price: 0,
                 purchased: false,
             },
             ItemOffer {
                 item_id: *b"G-ST-03\0",
+                relic_asset: anchor_lang::prelude::Pubkey::default(),
+                is_relic: false,
                 tier: 1,
                 price: 0,
                 purchased: false,
@@ -1261,6 +1267,8 @@ mod tests {
         // 1 Tool + 5 Gear
         offers[0] = ItemOffer {
             item_id: *b"T-ST-01\0",
+            relic_asset: anchor_lang::prelude::Pubkey::default(),
+            is_relic: false,
             tier: 1,
             price: 10,
             purchased: false,
@@ -1268,6 +1276,8 @@ mod tests {
         for i in 1..6 {
             offers[i] = ItemOffer {
                 item_id: *b"G-ST-01\0",
+                relic_asset: anchor_lang::prelude::Pubkey::default(),
+                is_relic: false,
                 tier: 1,
                 price: 8,
                 purchased: false,

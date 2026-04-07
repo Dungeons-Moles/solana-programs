@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-use crate::constants::ITEM_BITMASK_SIZE;
+use crate::constants::{ITEM_BITMASK_SIZE, MAX_RELICS};
 
 /// Player profile account storing identity and progression data.
 /// PDA Seeds: [b"player", owner.key()]
@@ -53,4 +53,29 @@ impl PlayerProfile {
     /// 1 (bump) + 10 (unlocked_items) + 10 (active_item_pool) +
     /// 1 + 32 (equipped_skin Option<Pubkey>) + 1 (gauntlet_boosters)
     pub const INIT_SPACE: usize = 32 + 4 + 32 + 4 + 1 + 4 + 8 + 1 + 10 + 10 + 1 + 32 + 1;
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, Default, InitSpace)]
+pub struct RelicEntry {
+    pub item_id: [u8; 8],
+    pub owned_count: u16,
+    pub in_active_pool: bool,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct PlayerRelicPool {
+    pub owner: Pubkey,
+    pub count: u8,
+    #[max_len(MAX_RELICS)]
+    pub relics: Vec<RelicEntry>,
+    pub bump: u8,
+}
+
+impl PlayerRelicPool {
+    pub const SEED_PREFIX: &'static [u8] = b"player_relics";
+
+    pub fn find_index_by_item_id(&self, item_id: [u8; 8]) -> Option<usize> {
+        self.relics.iter().position(|entry| entry.item_id == item_id)
+    }
 }

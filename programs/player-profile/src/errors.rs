@@ -94,4 +94,24 @@ pub enum PlayerProfileError {
     /// Session account data too short
     #[msg("Session account data too short")]
     SessionDataTooShort,
+
+    /// Invalid relic asset account or relic metadata account
+    #[msg("Invalid relic asset")]
+    InvalidRelicAsset,
+
+    /// Relic is not currently owned by the player
+    #[msg("Relic is not owned by the player")]
+    RelicNotOwned,
+
+    /// Relic is already registered in the player's relic pool
+    #[msg("Relic is already registered")]
+    RelicAlreadyRegistered,
+
+    /// Relic entry was not found in the player's relic pool
+    #[msg("Relic not found")]
+    RelicNotFound,
+
+    /// Player relic pool is full
+    #[msg("Player relic pool is full")]
+    RelicPoolFull,
 }

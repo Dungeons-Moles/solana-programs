@@ -53,3 +53,34 @@ pub const TOTAL_TILES: usize = (MAP_WIDTH as usize) * (MAP_HEIGHT as usize);
 
 /// Size of serialized GauntletEchoSnapshot in bytes
 pub const ECHO_DATA_SIZE: usize = 179;
+
+// =============================================================================
+// Cross-Program Raw Byte Offsets
+//
+// These offsets are used to read fields from accounts owned by other programs
+// without taking a crate dependency. Keep in sync with the canonical structs:
+//   - GameSession: session-manager/src/state.rs (PLAYER_OFFSET, SESSION_SIGNER_OFFSET)
+//   - GameState:   gameplay-state/src/state.rs
+//   - SessionDiscovery: this crate's state.rs
+// =============================================================================
+
+/// GameSession.player byte offset (8-byte discriminator + 0)
+pub const SESSION_PLAYER_OFFSET: usize = 8;
+
+/// GameSession.session_signer byte offset
+/// Layout: 8 (disc) + 32 (player) + 8 (session_id) + 1 (campaign_level) +
+/// 8 (started_at) + 8 (last_activity) + 1 (is_delegated) + 1 (bump) +
+/// 10 (active_item_pool) + 1 (active_relic_count) + 640 (active_relics) = 718
+pub const SESSION_SESSION_SIGNER_OFFSET: usize = 718;
+
+/// GameState.player byte offset (8-byte discriminator + 0)
+pub const GAME_STATE_PLAYER_OFFSET: usize = 8;
+
+/// GameState.session_signer byte offset (8 + 32 = 40)
+pub const GAME_STATE_SESSION_SIGNER_OFFSET: usize = 40;
+
+/// GameState.session byte offset (8 + 32 + 32 = 72)
+pub const GAME_STATE_SESSION_OFFSET: usize = 72;
+
+/// SessionDiscovery.session byte offset (8-byte discriminator + 0)
+pub const SESSION_DISCOVERY_SESSION_OFFSET: usize = 8;

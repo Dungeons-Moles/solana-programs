@@ -21,9 +21,10 @@ mock-vrf = ["vrf-rng/mock-vrf"]
 sha2 = "0.10"
 
 [dependencies]
-anchor-lang = { version = "0.32.0", features = ["init-if-needed"] }
-ephemeral-rollups-sdk = { version = "0.7.3", features = ["anchor", "disable-realloc"] }
+anchor-lang = { version = "1.0.0", features = ["init-if-needed"] }
+ephemeral-rollups-sdk = { version = "0.10.4", features = ["anchor", "disable-realloc"] }
 ephemeral-vrf-sdk = { version = "0.2.3", features = ["anchor"] }
+er-compat = { path = "../../crates/er-compat" }
 player-inventory = { path = "../player-inventory", features = ["cpi"] }
 boss-system = { path = "../../crates/boss-system" }
 gameplay-state = { path = "../gameplay-state", features = ["cpi"] }

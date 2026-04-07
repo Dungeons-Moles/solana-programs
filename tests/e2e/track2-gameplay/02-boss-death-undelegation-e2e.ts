@@ -23,7 +23,6 @@ import {
   getMapConfigPda,
   getGeneratedMapPda,
   getGameStatePda,
-  getMapEnemiesPda,
   getGameplayAuthorityPda,
   getDuelVaultPda,
   getDuelOpenQueuePda,
@@ -34,6 +33,7 @@ import {
   getGauntletWeekPoolPda,
   getGauntletEpochPoolPda,
   getGauntletPlayerScorePda,
+  getGauntletRewardRecordPda,
   getInventoryPda,
   getMapPoisPda,
   getDuelSessionPda,
@@ -197,12 +197,11 @@ const fetchGameState = async (
 };
 
 /**
- * Delegate all 6 accounts to ER for a session.
+ * Delegate all 5 accounts to ER for a session.
  */
 const delegateAllAccounts = async (
   sessionPda: PublicKey,
   gameStatePda: PublicKey,
-  mapEnemiesPda: PublicKey,
   generatedMapPda: PublicKey,
   inventoryPda: PublicKey,
   mapPoisPda: PublicKey,
@@ -212,9 +211,8 @@ const delegateAllAccounts = async (
   isDuel: boolean,
   isGauntlet: boolean,
 ): Promise<void> => {
-  // 1. Delegate gameplay accounts (gameState + mapEnemies)
+  // 1. Delegate gameplay accounts (gameState)
   const gsDelegate = deriveDelegateAccounts(gameStatePda, PROGRAM_IDS.gameplayState);
-  const meDelegate = deriveDelegateAccounts(mapEnemiesPda, PROGRAM_IDS.gameplayState);
   const delegateGameplayIx = await programs.gameplayState.methods
     .delegateGameplayAccounts(ER_VALIDATOR)
     .accountsStrict({
@@ -222,10 +220,6 @@ const delegateAllAccounts = async (
       delegationRecordGameState: gsDelegate.delegationRecord,
       delegationMetadataGameState: gsDelegate.delegationMetadata,
       gameState: gameStatePda,
-      bufferMapEnemies: meDelegate.buffer,
-      delegationRecordMapEnemies: meDelegate.delegationRecord,
-      delegationMetadataMapEnemies: meDelegate.delegationMetadata,
-      mapEnemies: mapEnemiesPda,
       gameSession: sessionPda,
       player: sessionSigner.publicKey,
       ownerProgram: PROGRAM_IDS.gameplayState,
@@ -313,7 +307,6 @@ const delegateAllAccounts = async (
 
   // Wait for ER to observe all delegated accounts before ER gameplay.
   await waitForErOwner(gameStatePda, DELEGATION_PROGRAM_ID, "game_state");
-  await waitForErOwner(mapEnemiesPda, DELEGATION_PROGRAM_ID, "map_enemies");
   await waitForErOwner(generatedMapPda, DELEGATION_PROGRAM_ID, "generated_map");
   await waitForErOwner(inventoryPda, DELEGATION_PROGRAM_ID, "inventory");
   await waitForErOwner(mapPoisPda, DELEGATION_PROGRAM_ID, "map_pois");
@@ -326,7 +319,6 @@ const delegateAllAccounts = async (
  */
 const moveUntilDeadOrBoss = async (
   gameStatePda: PublicKey,
-  mapEnemiesPda: PublicKey,
   generatedMapPda: PublicKey,
   inventoryPda: PublicKey,
   mapPoisPda: PublicKey,
@@ -356,7 +348,6 @@ const moveUntilDeadOrBoss = async (
         .accounts({
           gameState: gameStatePda,
           gameSession: sessionPda,
-          mapEnemies: mapEnemiesPda,
           generatedMap: generatedMapPda,
           inventory: inventoryPda,
           gameplayAuthority: gameplayAuthorityPda,
@@ -482,7 +473,6 @@ const moveUntilDeadOrBoss = async (
       .accounts({
         gameState: gameStatePda,
         gameSession: sessionPda,
-        mapEnemies: mapEnemiesPda,
         generatedMap: generatedMapPda,
         inventory: inventoryPda,
         gameplayAuthority: gameplayAuthorityPda,
@@ -503,7 +493,7 @@ const moveUntilDeadOrBoss = async (
 
 /**
  * Undelegate all accounts using per-program approach:
- * 1. gameplay-state undelegates game_state + map_enemies
+ * 1. gameplay-state undelegates game_state
  * 2. map-generator undelegates generated_map
  * 3. player-inventory undelegates inventory
  * 4. poi-system undelegates map_pois
@@ -512,7 +502,6 @@ const moveUntilDeadOrBoss = async (
 const undelegateAllPerProgram = async (
   sessionPda: PublicKey,
   gameStatePda: PublicKey,
-  mapEnemiesPda: PublicKey,
   generatedMapPda: PublicKey,
   inventoryPda: PublicKey,
   mapPoisPda: PublicKey,
@@ -525,14 +514,12 @@ const undelegateAllPerProgram = async (
     .undelegateGameplayAccounts()
     .accounts({
       gameState: gameStatePda,
-      mapEnemies: mapEnemiesPda,
       gameSession: sessionPda,
       sessionSigner: sessionSigner.publicKey,
     } as any)
     .instruction();
   await sendErTx("undelegate-gameplay", [undelegateGameplayIx], sessionSigner);
   await waitForBaseOwner(gameStatePda, PROGRAM_IDS.gameplayState, "game_state");
-  await waitForBaseOwner(mapEnemiesPda, PROGRAM_IDS.gameplayState, "map_enemies");
 
   // 2. Undelegate generated map
   const undelegateMapIx = await programs.mapGenerator.methods
@@ -590,7 +577,6 @@ const undelegateAllPerProgram = async (
 const endSessionOnBase = async (
   sessionPda: PublicKey,
   gameStatePda: PublicKey,
-  mapEnemiesPda: PublicKey,
   generatedMapPda: PublicKey,
   inventoryPda: PublicKey,
   mapPoisPda: PublicKey,
@@ -605,7 +591,6 @@ const endSessionOnBase = async (
     .accounts({
       gameSession: sessionPda,
       gameState: gameStatePda,
-      mapEnemies: mapEnemiesPda,
       generatedMap: generatedMapPda,
       mapPois: mapPoisPda,
       sessionDiscovery: sessionDiscoveryPda,
@@ -724,7 +709,6 @@ describe("Boss Death E2E: Campaign (level 1)", function () {
   let playerProfilePda: PublicKey;
   let sessionPda: PublicKey;
   let gameStatePda: PublicKey;
-  let mapEnemiesPda: PublicKey;
   let generatedMapPda: PublicKey;
   let inventoryPda: PublicKey;
   let mapPoisPda: PublicKey;
@@ -739,7 +723,6 @@ describe("Boss Death E2E: Campaign (level 1)", function () {
     [playerProfilePda] = getPlayerProfilePda(user.publicKey);
     [sessionPda] = getSessionPda(user.publicKey, campaignLevel);
     [gameStatePda] = getGameStatePda(sessionPda);
-    [mapEnemiesPda] = getMapEnemiesPda(sessionPda);
     [generatedMapPda] = getGeneratedMapPda(sessionPda);
     [inventoryPda] = getInventoryPda(sessionPda);
     [mapPoisPda] = getMapPoisPda(sessionPda);
@@ -758,10 +741,11 @@ describe("Boss Death E2E: Campaign (level 1)", function () {
         sessionNonces: sessionNoncesPda,
         gameSession: sessionPda, sessionCounter: sessionCounterPda, playerProfile: playerProfilePda,
         player: user.publicKey, sessionSigner: sessionSigner.publicKey, mapConfig: mapConfigPda,
-        generatedMap: generatedMapPda, sessionDiscovery: sessionDiscoveryPda, gameState: gameStatePda, mapEnemies: mapEnemiesPda,
+        generatedMap: generatedMapPda, sessionDiscovery: sessionDiscoveryPda, gameState: gameStatePda,
         mapPois: mapPoisPda, inventory: inventoryPda,
         mapGeneratorProgram: PROGRAM_IDS.mapGenerator, gameplayStateProgram: PROGRAM_IDS.gameplayState,
         poiSystemProgram: PROGRAM_IDS.poiSystem, playerInventoryProgram: PROGRAM_IDS.playerInventory,
+        playerRelicPool: null,
         systemProgram: SystemProgram.programId,
       } as any)
       .preInstructions([
@@ -773,7 +757,7 @@ describe("Boss Death E2E: Campaign (level 1)", function () {
 
   it("delegates all accounts to ER", async () => {
     await delegateAllAccounts(
-      sessionPda, gameStatePda, mapEnemiesPda, generatedMapPda,
+      sessionPda, gameStatePda, generatedMapPda,
       inventoryPda, mapPoisPda, sessionSigner, user, campaignLevel,
       false, false
     );
@@ -785,7 +769,7 @@ describe("Boss Death E2E: Campaign (level 1)", function () {
 
   it("moves player until dead or boss fight completes", async () => {
     const finalState = await moveUntilDeadOrBoss(
-      gameStatePda, mapEnemiesPda, generatedMapPda,
+      gameStatePda, generatedMapPda,
       inventoryPda, mapPoisPda, sessionPda, sessionSigner
     );
 
@@ -795,7 +779,7 @@ describe("Boss Death E2E: Campaign (level 1)", function () {
 
   it("undelegates all accounts (per-program)", async () => {
     await undelegateAllPerProgram(
-      sessionPda, gameStatePda, mapEnemiesPda, generatedMapPda,
+      sessionPda, gameStatePda, generatedMapPda,
       inventoryPda, mapPoisPda, sessionSigner, user, campaignLevel
     );
 
@@ -808,7 +792,7 @@ describe("Boss Death E2E: Campaign (level 1)", function () {
 
   it("ends session on base layer", async () => {
     await endSessionOnBase(
-      sessionPda, gameStatePda, mapEnemiesPda, generatedMapPda,
+      sessionPda, gameStatePda, generatedMapPda,
       inventoryPda, mapPoisPda, playerProfilePda, sessionSigner, user, campaignLevel
     );
   });
@@ -825,7 +809,6 @@ describe("Boss Death E2E: Duel", function () {
   let playerProfilePda: PublicKey;
   let sessionPda: PublicKey;
   let gameStatePda: PublicKey;
-  let mapEnemiesPda: PublicKey;
   let generatedMapPda: PublicKey;
   let inventoryPda: PublicKey;
   let mapPoisPda: PublicKey;
@@ -840,7 +823,6 @@ describe("Boss Death E2E: Duel", function () {
     [playerProfilePda] = getPlayerProfilePda(user.publicKey);
     [sessionPda] = getDuelSessionPda(user.publicKey);
     [gameStatePda] = getGameStatePda(sessionPda);
-    [mapEnemiesPda] = getMapEnemiesPda(sessionPda);
     [generatedMapPda] = getGeneratedMapPda(sessionPda);
     [inventoryPda] = getInventoryPda(sessionPda);
     [mapPoisPda] = getMapPoisPda(sessionPda);
@@ -860,13 +842,14 @@ describe("Boss Death E2E: Duel", function () {
         gameSession: sessionPda, sessionCounter: sessionCounterPda, playerProfile: playerProfilePda,
         player: user.publicKey, sessionSigner: sessionSigner.publicKey,
         sessionManagerAuthority: sessionManagerAuthorityPda, mapConfig: mapConfigPda,
-        generatedMap: generatedMapPda, sessionDiscovery: duelSessionDiscoveryPda, gameState: gameStatePda, mapEnemies: mapEnemiesPda,
+        generatedMap: generatedMapPda, sessionDiscovery: duelSessionDiscoveryPda, gameState: gameStatePda,
         mapPois: mapPoisPda, inventory: inventoryPda,
         mapVrfState: null,
         poiVrfState: null,
         gameplayVrfState: null,
         mapGeneratorProgram: PROGRAM_IDS.mapGenerator, gameplayStateProgram: PROGRAM_IDS.gameplayState,
         poiSystemProgram: PROGRAM_IDS.poiSystem, playerInventoryProgram: PROGRAM_IDS.playerInventory,
+        playerRelicPool: null,
         systemProgram: SystemProgram.programId,
       } as any)
       .preInstructions([
@@ -878,7 +861,7 @@ describe("Boss Death E2E: Duel", function () {
 
   it("delegates all accounts to ER", async () => {
     await delegateAllAccounts(
-      sessionPda, gameStatePda, mapEnemiesPda, generatedMapPda,
+      sessionPda, gameStatePda, generatedMapPda,
       inventoryPda, mapPoisPda, sessionSigner, user, campaignLevel,
       true, false
     );
@@ -886,7 +869,7 @@ describe("Boss Death E2E: Duel", function () {
 
   it("moves player until dead or boss fight completes", async () => {
     const finalState = await moveUntilDeadOrBoss(
-      gameStatePda, mapEnemiesPda, generatedMapPda,
+      gameStatePda, generatedMapPda,
       inventoryPda, mapPoisPda, sessionPda, sessionSigner
     );
     expect(finalState.isDead || finalState.completed).to.be.true;
@@ -894,14 +877,14 @@ describe("Boss Death E2E: Duel", function () {
 
   it("undelegates all accounts (per-program)", async () => {
     await undelegateAllPerProgram(
-      sessionPda, gameStatePda, mapEnemiesPda, generatedMapPda,
+      sessionPda, gameStatePda, generatedMapPda,
       inventoryPda, mapPoisPda, sessionSigner, user, campaignLevel
     );
   });
 
   it("ends session on base layer", async () => {
     await endSessionOnBase(
-      sessionPda, gameStatePda, mapEnemiesPda, generatedMapPda,
+      sessionPda, gameStatePda, generatedMapPda,
       inventoryPda, mapPoisPda, playerProfilePda, sessionSigner, user, campaignLevel
     );
   });
@@ -918,7 +901,6 @@ describe("Boss Death E2E: Gauntlet", function () {
   let playerProfilePda: PublicKey;
   let sessionPda: PublicKey;
   let gameStatePda: PublicKey;
-  let mapEnemiesPda: PublicKey;
   let generatedMapPda: PublicKey;
   let inventoryPda: PublicKey;
   let mapPoisPda: PublicKey;
@@ -933,7 +915,6 @@ describe("Boss Death E2E: Gauntlet", function () {
     [playerProfilePda] = getPlayerProfilePda(user.publicKey);
     [sessionPda] = getGauntletSessionPda(user.publicKey);
     [gameStatePda] = getGameStatePda(sessionPda);
-    [mapEnemiesPda] = getMapEnemiesPda(sessionPda);
     [generatedMapPda] = getGeneratedMapPda(sessionPda);
     [inventoryPda] = getInventoryPda(sessionPda);
     [mapPoisPda] = getMapPoisPda(sessionPda);
@@ -953,13 +934,14 @@ describe("Boss Death E2E: Gauntlet", function () {
         gameSession: sessionPda, sessionCounter: sessionCounterPda, playerProfile: playerProfilePda,
         player: user.publicKey, sessionSigner: sessionSigner.publicKey,
         mapConfig: mapConfigPda,
-        generatedMap: generatedMapPda, sessionDiscovery: gauntletSessionDiscoveryPda, gameState: gameStatePda, mapEnemies: mapEnemiesPda,
+        generatedMap: generatedMapPda, sessionDiscovery: gauntletSessionDiscoveryPda, gameState: gameStatePda,
         mapPois: mapPoisPda, inventory: inventoryPda,
         mapVrfState: null,
         poiVrfState: null,
         gameplayVrfState: null,
         mapGeneratorProgram: PROGRAM_IDS.mapGenerator, gameplayStateProgram: PROGRAM_IDS.gameplayState,
         poiSystemProgram: PROGRAM_IDS.poiSystem, playerInventoryProgram: PROGRAM_IDS.playerInventory,
+        playerRelicPool: null,
         systemProgram: SystemProgram.programId,
       } as any)
       .preInstructions([
@@ -986,6 +968,7 @@ describe("Boss Death E2E: Gauntlet", function () {
 
     const [epochPoolPda] = getGauntletEpochPoolPda(epochIdBigInt);
     const [playerScorePda] = getGauntletPlayerScorePda(epochIdBigInt, user.publicKey);
+    const [rewardRecordPda] = getGauntletRewardRecordPda(epochIdBigInt, user.publicKey);
 
     const enterIx = await (programs.gameplayState.methods as any)
       .enterGauntlet(epochId)
@@ -998,6 +981,7 @@ describe("Boss Death E2E: Gauntlet", function () {
         companyTreasury: new PublicKey("5LvEA4tH5H5DtWCxa3FcauokxAycvafX9ruvcT2mEXt8"),
         gauntletEpochPool: epochPoolPda,
         gauntletPlayerScore: playerScorePda,
+        gauntletRewardRecord: rewardRecordPda,
         systemProgram: SystemProgram.programId,
       } as any)
       .remainingAccounts([
@@ -1026,7 +1010,7 @@ describe("Boss Death E2E: Gauntlet", function () {
 
   it("delegates all accounts to ER", async () => {
     await delegateAllAccounts(
-      sessionPda, gameStatePda, mapEnemiesPda, generatedMapPda,
+      sessionPda, gameStatePda, generatedMapPda,
       inventoryPda, mapPoisPda, sessionSigner, user, campaignLevel,
       false, true
     );
@@ -1034,7 +1018,7 @@ describe("Boss Death E2E: Gauntlet", function () {
 
   it("moves player until dead or completed (echo combat auto-resolves)", async () => {
     const finalState = await moveUntilDeadOrBoss(
-      gameStatePda, mapEnemiesPda, generatedMapPda,
+      gameStatePda, generatedMapPda,
       inventoryPda, mapPoisPda, sessionPda, sessionSigner
     );
     // Gauntlet can remain active after long movement loops depending on
@@ -1044,7 +1028,7 @@ describe("Boss Death E2E: Gauntlet", function () {
 
   it("undelegates all accounts (per-program)", async () => {
     await undelegateAllPerProgram(
-      sessionPda, gameStatePda, mapEnemiesPda, generatedMapPda,
+      sessionPda, gameStatePda, generatedMapPda,
       inventoryPda, mapPoisPda, sessionSigner, user, campaignLevel
     );
   });
@@ -1108,7 +1092,7 @@ describe("Boss Death E2E: Gauntlet", function () {
 
   it("ends session on base layer", async () => {
     await endSessionOnBase(
-      sessionPda, gameStatePda, mapEnemiesPda, generatedMapPda,
+      sessionPda, gameStatePda, generatedMapPda,
       inventoryPda, mapPoisPda, playerProfilePda, sessionSigner, user, campaignLevel
     );
   });

@@ -86,12 +86,12 @@ pub const T_ST_02: ItemDefinition = ItemDefinition {
     tag: ItemTag::Stone,
     rarity: Rarity::Rare,
     effects: &[
-        // +2/3/4 ATK
+        // +1/2/3 ATK
         EffectDefinition::new(
             TriggerType::BattleStart,
             EffectType::GainAtk,
             false,
-            [2, 3, 4],
+            [1, 2, 3],
         ),
         // +3/5/7 ARM
         EffectDefinition::new(
@@ -1976,12 +1976,12 @@ pub const T_TE_02: ItemDefinition = ItemDefinition {
             false,
             [3, 4, 5],
         ),
-        // If you act first on Turn 1, gain +3/4/5 ATK (this battle)
+        // If you act first on Turn 1, gain +1/2/3 ATK (this battle)
         EffectDefinition::new(
             TriggerType::FirstTurnIfFaster,
             EffectType::GainAtk,
             false,
-            [3, 4, 5],
+            [1, 2, 3],
         ),
     ],
 };

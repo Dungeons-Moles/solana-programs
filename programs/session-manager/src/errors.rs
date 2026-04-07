@@ -70,4 +70,8 @@ pub enum SessionManagerError {
     /// Duel session must be settled before it can be closed
     #[msg("Duel session must be settled before closing")]
     DuelSettlementRequired,
+
+    /// Remaining accounts did not provide valid relic ownership proofs
+    #[msg("Invalid relic ownership proofs")]
+    InvalidRelicOwnershipProofs,
 }

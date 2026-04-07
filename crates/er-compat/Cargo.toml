@@ -1,0 +1,12 @@
+[package]
+name = "er-compat"
+version = "0.1.0"
+description = "Compatibility shim between anchor-lang 1.0 and ephemeral-rollups-sdk (anchor-lang 0.32)"
+edition = "2021"
+
+[lib]
+name = "er_compat"
+
+[dependencies]
+anchor-lang = "1.0.0"
+ephemeral-rollups-sdk = { version = "0.10.4", features = ["anchor", "disable-realloc"] }

@@ -334,7 +334,7 @@ Format: `ID — Name (Type) [Tag] {Rarity} — Image: <path> — Effect`
 #### TEMPO (10)
 
 - `T-TE-01` — Quickpick (Tool) [TEMPO] {Common} — Image: assets/icons/items/tempo/quickpick.png — `+1/2/3 ATK, +2/3/4 SPD`; every other turn: gain `+1/2/4` SPD (this battle)
-- `T-TE-02` — Chrono Rapier (Tool) [TEMPO] {Mythic} — Image: assets/icons/items/tempo/chrono_rapier.png — `+2/3/4 ATK, +3/4/5 SPD`; you always act first on Turn 1 regardless of enemy SPD; if you act first, gain `+3/4/5` ATK (this battle)
+- `T-TE-02` — Chrono Rapier (Tool) [TEMPO] {Mythic} — Image: assets/icons/items/tempo/chrono_rapier.png — `+2/3/4 ATK, +3/4/5 SPD`; you always act first on Turn 1 regardless of enemy SPD; if you act first, gain `+1/2/3` ATK (this battle)
 - `G-TE-01` — Wind-Up Spring (Gear) [TEMPO] {Common} — Image: assets/icons/items/tempo/wind-up_spring.png — Turn 1: gain `+1/2/4 SPD` and `+1/2/4` ATK (this battle)
 - `G-TE-02` — Ambush Charm (Gear) [TEMPO] {Rare} — Image: assets/icons/items/tempo/ambush_charm.png — `+1/2/4 SPD`; if you act first on Turn 1, your first strike deals `+4/8/16` damage and gain `+1/2/4 ATK` (this battle)
 - `G-TE-03` — Counterweight Buckle (Gear) [TEMPO] {Rare} — Image: assets/icons/items/tempo/counterweight_buckle.png — `+1/2/4 SPD`; if enemy acts first on Turn 1, gain `7/14/28` Armor and `2/4/8` Shrapnel before damage
@@ -343,6 +343,21 @@ Format: `ID — Name (Type) [Tag] {Rarity} — Image: <path> — Effect`
 - `G-TE-06` — Backstep Buckle (Gear) [TEMPO] {Rare} — Image: assets/icons/items/tempo/backstep_buckle.png — If enemy acts first on Turn 1, gain `4/8/16` Armor AND your first strike deals `+3/6/12` damage
 - `G-TE-07` — Tempo Battery (Gear) [TEMPO] {Heroic} — Image: assets/icons/items/tempo/tempo_battery.png — `+1/2/4 ATK, +3/6/12 ARM`; every other turn: gain `+2/4/8 SPD` (this battle)
 - `G-TE-08` — Second Wind Clock (Gear) [TEMPO] {Heroic} — Image: assets/icons/items/tempo/second_wind_clock.png — `+3/6/12 ARM`; Turn 5: heal `6/12/24` HP and gain `+2/4/8` SPD (this battle)
+
+### Relic Items
+
+Relic Items are asset-backed special items that exist outside the base 80-item catalog.
+
+- Relics are minted only by the game owner/admin, but can be minted to any player wallet.
+- Owning a relic makes it immediately valid for that player; there is no separate registration step.
+- Relics are extra and do not count toward the base `40`-item minimum required in the standard item pool.
+- Players can add or remove owned relics from their relic pool manually.
+- Duplicate NFTs of the same relic count as quantity for ownership only; gameplay can only include that relic once.
+- If a player no longer owns the last NFT for an active relic, session start silently prunes that relic from the relic pool before the run begins.
+
+#### Current Relics
+
+- `S-XX-07` — Pioneer's Mattock (Tool) [RELIC] {Heroic} — Image: assets/icons/items/relics/pioneers_mattock.webp — `+3/4/5 ATK`; On Hit (once/turn): apply a rotating debuff — Turn 1: 1 Chill, Turn 2: 1 Rust, Turn 3: 1 Bleed, then repeat
 
 ### On-Chain Item Bitmask
 
@@ -398,7 +413,7 @@ New accounts start with 40 items unlocked (5 per tag = 1 tool + 4 gear):
 
 - Players unlock new items by completing campaign levels for the first time with victory.
 - Each first-time victory unlocks one random item from the remaining locked items.
-- The `record_run_result` instruction handles unlocking via deterministic PRNG.
+- The `record_run_result` instruction handles unlocking via VRF-based random selection.
 
 ---
 
@@ -475,9 +490,9 @@ Some POIs are one-time, others are repeatable utilities.
 | ID  | Location        | Image                                 | Rarity   | Use                   | Active     | Interaction                                                                                         |
 | --- | --------------- | ------------------------------------- | -------- | --------------------- | ---------- | --------------------------------------------------------------------------------------------------- |
 | L1  | Mole Den        | assets/world/pois/mole-den.png        | Fixed    | Repeatable            | Night-only | Skip to Day; restore all HP                                                                         |
-| L2  | Supply Cache    | assets/world/pois/supply-cache.png    | Common   | One-time              | Anytime    | Pick 1 of 3 Common Gear (tag-weighted to current week boss weaknesses)                              |
+| L2  | Supply Cache    | assets/world/pois/supply-cache.png    | Common   | One-time              | Anytime    | Pick 1 of 3 Gear (rarity varies by act, tag-weighted to current week boss weaknesses)               |
 | L3  | Tool Crate      | assets/world/pois/tool-crate.png      | Uncommon | One-time              | Anytime    | Pick 1 of 3 Tools (tag-weighted)                                                                    |
-| L4  | Tool Oil Rack   | assets/world/pois/tool-oil-rack.png   | Common   | Repeatable (per tool) | Anytime    | Modify current tool: +1 ATK or +1 SPD or +1 DIG or +1 ARM (once per tool), no cost                  |
+| L4  | Tool Oil Rack   | assets/world/pois/tool-oil-rack.png   | Common   | One-time              | Anytime    | Apply an oil to current tool: +1 ATK or +1 SPD or +1 DIG or +1 ARM, no cost                         |
 | L5  | Rest Alcove     | assets/world/pois/rest-alcove.png     | Common   | One-time              | Night-only | Skip to Day; heal 10 HP                                                                             |
 | L6  | Survey Beacon   | assets/world/pois/survey-beacon.png   | Common   | One-time              | Anytime    | Reveal tiles in radius 13                                                                           |
 | L7  | Seismic Scanner | assets/world/pois/seismic-scanner.png | Uncommon | One-time              | Anytime    | Choose a POI category → reveal nearest instance                                                     |
@@ -737,7 +752,7 @@ Optional "final prep bias":
 ### Session Cost & Profile
 
 - **Profile Creation:** Players start with **20 free PvE runs** (Campaign).
-- **Top-up (current implementation):** 20 additional PvE runs cost **0.005 SOL**.
+- **Top-up (current implementation):** 20 additional PvE runs cost **0.05 SOL**.
 - **Run Debit (current implementation):** A run is debited at **session start**.
 
 ### Mode Fees & Splits (v1)
@@ -747,7 +762,7 @@ All splits below are expressed as % of the **SOL paid**.
 #### PvE — Campaign / Practice
 
 - New account: 20 free PvE runs.
-- After that: 0.005 SOL for 20 PvE runs.
+- After that: 0.05 SOL for 20 PvE runs.
 - Split: **50% company / 50% Gauntlet pool**.
 
 #### PvP — Gauntlet (Async)
@@ -843,9 +858,7 @@ Gold income is roughly flat across acts (~70–75 gold), but its purchasing powe
 
 - A run lasts **5 weeks**.
 - At the end of each week, the player fights an **Echo** (a snapshot of another player's validated build that survived to that same week).
-- Opponent visibility:
-  - Weeks 1–4: opponent build is visible **at end of the week**.
-  - Week 5: opponent build is visible **only during Week 5**.
+- Opponent visibility: the Echo opponent's build for the current week is always visible.
 
 ### PvP — Duels (Direct)
 
@@ -855,6 +868,6 @@ Gold income is roughly flat across acts (~70–75 gold), but its purchasing powe
 
 ### PvP — Pit Draft (Instant)
 
-- Two players are matched, then each draws **1 Tool + 7 Gear** from their active pool.
-- A **random oil** is applied to the Tool.
+- Two players are matched, then each is assigned a fully random loadout: **1 Tool + 7 Gear** drawn randomly from their active pool.
+- A **random oil** is applied to the Tool. Players do not choose or modify their loadout.
 - Immediate deterministic combat; winner takes the pot (net of fees).

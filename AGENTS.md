@@ -6,7 +6,7 @@
 - Solana SDK/CLI 2.3+ and `solana-program` account/PDA patterns
 - TypeScript integration tests via `ts-mocha` + `@coral-xyz/anchor` 0.32.0
 - Shared gameplay crates: `combat-system`, `field-enemies`, `boss-system`
-- MagicBlock integration is stubbed (SDK pending toolchain update)
+- MagicBlock Ephemeral Rollups integration is active across the gameplay/session stack, including delegation, commit/undelegate, VRF, and scheduled crank support
 
 ## Commands
 

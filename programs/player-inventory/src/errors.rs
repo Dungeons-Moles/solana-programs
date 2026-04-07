@@ -55,4 +55,8 @@ pub enum InventoryError {
     /// Invalid session or inventory account data
     #[msg("Invalid session account")]
     InvalidSession,
+
+    /// Relic equipment cannot be modified by this interaction
+    #[msg("Relic modification is not supported for this interaction")]
+    RelicModificationNotSupported,
 }

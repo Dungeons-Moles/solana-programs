@@ -5,60 +5,63 @@ import { PROGRAM_IDS } from "./setup";
 export function getSessionCounterPda(): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("session_counter")],
-    PROGRAM_IDS.sessionManager
+    PROGRAM_IDS.sessionManager,
   );
 }
 
-export function getSessionNoncesPda(
-  player: PublicKey
-): [PublicKey, number] {
+export function getSessionNoncesPda(player: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("session_nonces"), player.toBuffer()],
-    PROGRAM_IDS.sessionManager
+    PROGRAM_IDS.sessionManager,
   );
 }
 
 export function getSessionPda(
   player: PublicKey,
   campaignLevel: number,
-  nonce: bigint | number = 0
+  nonce: bigint | number = 0,
 ): [PublicKey, number] {
   const nonceBuf = Buffer.alloc(8);
   nonceBuf.writeBigUInt64LE(BigInt(nonce));
   return PublicKey.findProgramAddressSync(
-    [Buffer.from("session"), player.toBuffer(), Buffer.from([campaignLevel]), nonceBuf],
-    PROGRAM_IDS.sessionManager
+    [
+      Buffer.from("session"),
+      player.toBuffer(),
+      Buffer.from([campaignLevel]),
+      nonceBuf,
+    ],
+    PROGRAM_IDS.sessionManager,
   );
 }
 
 export function getDuelSessionPda(
   player: PublicKey,
-  nonce: bigint | number = 0
+  nonce: bigint | number = 0,
 ): [PublicKey, number] {
   const nonceBuf = Buffer.alloc(8);
   nonceBuf.writeBigUInt64LE(BigInt(nonce));
   return PublicKey.findProgramAddressSync(
     [Buffer.from("duel_session"), player.toBuffer(), nonceBuf],
-    PROGRAM_IDS.sessionManager
+    PROGRAM_IDS.sessionManager,
   );
 }
 
 export function getGauntletSessionPda(
   player: PublicKey,
-  nonce: bigint | number = 0
+  nonce: bigint | number = 0,
 ): [PublicKey, number] {
   const nonceBuf = Buffer.alloc(8);
   nonceBuf.writeBigUInt64LE(BigInt(nonce));
   return PublicKey.findProgramAddressSync(
     [Buffer.from("gauntlet_session"), player.toBuffer(), nonceBuf],
-    PROGRAM_IDS.sessionManager
+    PROGRAM_IDS.sessionManager,
   );
 }
 
 export function getSessionManagerAuthorityPda(): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("session_manager_authority")],
-    PROGRAM_IDS.sessionManager
+    PROGRAM_IDS.sessionManager,
   );
 }
 
@@ -66,7 +69,14 @@ export function getSessionManagerAuthorityPda(): [PublicKey, number] {
 export function getPlayerProfilePda(owner: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("player"), owner.toBuffer()],
-    PROGRAM_IDS.playerProfile
+    PROGRAM_IDS.playerProfile,
+  );
+}
+
+export function getPlayerRelicPoolPda(owner: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("player_relics"), owner.toBuffer()],
+    PROGRAM_IDS.playerProfile,
   );
 }
 
@@ -74,34 +84,30 @@ export function getPlayerProfilePda(owner: PublicKey): [PublicKey, number] {
 export function getMapConfigPda(): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("map_config")],
-    PROGRAM_IDS.mapGenerator
+    PROGRAM_IDS.mapGenerator,
   );
 }
 
-export function getGeneratedMapPda(
-  sessionPda: PublicKey
-): [PublicKey, number] {
+export function getGeneratedMapPda(sessionPda: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("generated_map"), sessionPda.toBuffer()],
-    PROGRAM_IDS.mapGenerator
+    PROGRAM_IDS.mapGenerator,
   );
 }
 
-export function getMapVrfStatePda(
-  sessionPda: PublicKey
-): [PublicKey, number] {
+export function getMapVrfStatePda(sessionPda: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("map_vrf"), sessionPda.toBuffer()],
-    PROGRAM_IDS.mapGenerator
+    PROGRAM_IDS.mapGenerator,
   );
 }
 
 export function getSessionDiscoveryPda(
-  sessionPda: PublicKey
+  sessionPda: PublicKey,
 ): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("session_discovery"), sessionPda.toBuffer()],
-    PROGRAM_IDS.mapGenerator
+    PROGRAM_IDS.mapGenerator,
   );
 }
 
@@ -109,86 +115,86 @@ export function getSessionDiscoveryPda(
 export function getGameStatePda(sessionPda: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("game_state"), sessionPda.toBuffer()],
-    PROGRAM_IDS.gameplayState
+    PROGRAM_IDS.gameplayState,
   );
 }
 
 export function getMapEnemiesPda(sessionPda: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("map_enemies"), sessionPda.toBuffer()],
-    PROGRAM_IDS.gameplayState
+    PROGRAM_IDS.gameplayState,
   );
 }
 
 export function getGameplayAuthorityPda(): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("gameplay_authority")],
-    PROGRAM_IDS.gameplayState
+    PROGRAM_IDS.gameplayState,
   );
 }
 
 export function getGameplayVrfStatePda(
-  sessionPda: PublicKey
+  sessionPda: PublicKey,
 ): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("gameplay_vrf"), sessionPda.toBuffer()],
-    PROGRAM_IDS.gameplayState
+    PROGRAM_IDS.gameplayState,
   );
 }
 
 export function getDuelVaultPda(): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("duel_vault")],
-    PROGRAM_IDS.gameplayState
+    PROGRAM_IDS.gameplayState,
   );
 }
 
 export function getDuelOpenQueuePda(): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("duel_open_queue")],
-    PROGRAM_IDS.gameplayState
+    PROGRAM_IDS.gameplayState,
   );
 }
 
 export function getDuelEntryPda(sessionPda: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("duel_entry"), sessionPda.toBuffer()],
-    PROGRAM_IDS.gameplayState
+    PROGRAM_IDS.gameplayState,
   );
 }
 
 export function getPitDraftQueuePda(): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("pit_draft_queue")],
-    PROGRAM_IDS.gameplayState
+    PROGRAM_IDS.gameplayState,
   );
 }
 
 export function getPitDraftVaultPda(): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("pit_draft_vault")],
-    PROGRAM_IDS.gameplayState
+    PROGRAM_IDS.gameplayState,
   );
 }
 
 export function getGauntletConfigPda(): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("gauntlet_config")],
-    PROGRAM_IDS.gameplayState
+    PROGRAM_IDS.gameplayState,
   );
 }
 
 export function getGauntletPoolVaultPda(): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("gauntlet_pool_vault")],
-    PROGRAM_IDS.gameplayState
+    PROGRAM_IDS.gameplayState,
   );
 }
 
 export function getGauntletWeekPoolPda(week: number): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("gauntlet_week_pool"), Buffer.from([week])],
-    PROGRAM_IDS.gameplayState
+    PROGRAM_IDS.gameplayState,
   );
 }
 
@@ -197,28 +203,40 @@ export function getGauntletEpochPoolPda(epochId: bigint): [PublicKey, number] {
   buf.writeBigUInt64LE(epochId);
   return PublicKey.findProgramAddressSync(
     [Buffer.from("gauntlet_epoch_pool"), buf],
-    PROGRAM_IDS.gameplayState
+    PROGRAM_IDS.gameplayState,
   );
 }
 
 export function getGauntletEchoesPda(
-  sessionPda: PublicKey
+  sessionPda: PublicKey,
 ): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("gauntlet_echoes"), sessionPda.toBuffer()],
-    PROGRAM_IDS.gameplayState
+    PROGRAM_IDS.gameplayState,
   );
 }
 
 export function getGauntletPlayerScorePda(
   epochId: bigint,
-  player: PublicKey
+  player: PublicKey,
 ): [PublicKey, number] {
   const buf = Buffer.alloc(8);
   buf.writeBigUInt64LE(epochId);
   return PublicKey.findProgramAddressSync(
     [Buffer.from("gauntlet_player_score"), buf, player.toBuffer()],
-    PROGRAM_IDS.gameplayState
+    PROGRAM_IDS.gameplayState,
+  );
+}
+
+export function getGauntletRewardRecordPda(
+  epochId: bigint,
+  player: PublicKey,
+): [PublicKey, number] {
+  const buf = Buffer.alloc(8);
+  buf.writeBigUInt64LE(epochId);
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("gauntlet_reward_record"), buf, player.toBuffer()],
+    PROGRAM_IDS.gameplayState,
   );
 }
 
@@ -226,7 +244,15 @@ export function getGauntletPlayerScorePda(
 export function getInventoryPda(sessionPda: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("inventory"), sessionPda.toBuffer()],
-    PROGRAM_IDS.playerInventory
+    PROGRAM_IDS.playerInventory,
+  );
+}
+
+// ── NFT Marketplace PDAs ───────────────────────────────────────────────────
+export function getRelicAssetPda(asset: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("relic_asset"), asset.toBuffer()],
+    PROGRAM_IDS.nftMarketplace,
   );
 }
 
@@ -234,23 +260,21 @@ export function getInventoryPda(sessionPda: PublicKey): [PublicKey, number] {
 export function getMapPoisPda(sessionPda: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("map_pois"), sessionPda.toBuffer()],
-    PROGRAM_IDS.poiSystem
+    PROGRAM_IDS.poiSystem,
   );
 }
 
-export function getPoiVrfStatePda(
-  sessionPda: PublicKey
-): [PublicKey, number] {
+export function getPoiVrfStatePda(sessionPda: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("poi_vrf"), sessionPda.toBuffer()],
-    PROGRAM_IDS.poiSystem
+    PROGRAM_IDS.poiSystem,
   );
 }
 
 export function getPoiAuthorityPda(): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("poi_authority")],
-    PROGRAM_IDS.poiSystem
+    PROGRAM_IDS.poiSystem,
   );
 }
 
@@ -258,7 +282,7 @@ export function getPoiAuthorityPda(): [PublicKey, number] {
 export function getInventoryAuthorityPda(): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("inventory_authority")],
-    PROGRAM_IDS.playerInventory
+    PROGRAM_IDS.playerInventory,
   );
 }
 
@@ -266,21 +290,21 @@ export function getInventoryAuthorityPda(): [PublicKey, number] {
 export function getMarketplaceConfigPda(): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("marketplace_config")],
-    PROGRAM_IDS.nftMarketplace
+    PROGRAM_IDS.nftMarketplace,
   );
 }
 
 export function getMintAuthorityPda(): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("mint_authority")],
-    PROGRAM_IDS.nftMarketplace
+    PROGRAM_IDS.nftMarketplace,
   );
 }
 
 export function getListingPda(assetPubkey: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("listing"), assetPubkey.toBuffer()],
-    PROGRAM_IDS.nftMarketplace
+    PROGRAM_IDS.nftMarketplace,
   );
 }
 
@@ -289,26 +313,26 @@ export function getQuestDefinitionPda(questId: number): [PublicKey, number] {
   buf.writeUInt16LE(questId);
   return PublicKey.findProgramAddressSync(
     [Buffer.from("quest_def"), buf],
-    PROGRAM_IDS.nftMarketplace
+    PROGRAM_IDS.nftMarketplace,
   );
 }
 
 export function getQuestProgressPda(
   player: PublicKey,
-  questId: number
+  questId: number,
 ): [PublicKey, number] {
   const buf = Buffer.alloc(2);
   buf.writeUInt16LE(questId);
   return PublicKey.findProgramAddressSync(
     [Buffer.from("quest_progress"), player.toBuffer(), buf],
-    PROGRAM_IDS.nftMarketplace
+    PROGRAM_IDS.nftMarketplace,
   );
 }
 
 // ── Delegation PDAs ─────────────────────────────────────────────────────────
 export function deriveDelegateAccounts(
   target: PublicKey,
-  ownerProgram: PublicKey
+  ownerProgram: PublicKey,
 ): {
   buffer: PublicKey;
   delegationRecord: PublicKey;
@@ -316,15 +340,15 @@ export function deriveDelegateAccounts(
 } {
   const [buffer] = PublicKey.findProgramAddressSync(
     [Buffer.from("buffer"), target.toBuffer()],
-    ownerProgram
+    ownerProgram,
   );
   const [delegationRecord] = PublicKey.findProgramAddressSync(
     [Buffer.from("delegation"), target.toBuffer()],
-    PROGRAM_IDS.delegation
+    PROGRAM_IDS.delegation,
   );
   const [delegationMetadata] = PublicKey.findProgramAddressSync(
     [Buffer.from("delegation-metadata"), target.toBuffer()],
-    PROGRAM_IDS.delegation
+    PROGRAM_IDS.delegation,
   );
   return { buffer, delegationRecord, delegationMetadata };
 }

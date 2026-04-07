@@ -1,5 +1,5 @@
-import * as anchor from "@coral-xyz/anchor";
-import { Program } from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
+import { Program } from "@anchor-lang/core";
 import { PoiSystem } from "../../target/types/poi_system";
 import { expect } from "chai";
 import { Keypair, SystemProgram } from "@solana/web3.js";

@@ -9,8 +9,8 @@
  */
 
 import { expect } from "chai";
-import * as anchor from "@coral-xyz/anchor";
-import { Program } from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
+import { Program } from "@anchor-lang/core";
 import {
   Keypair,
   LAMPORTS_PER_SOL,
@@ -47,9 +47,11 @@ import {
   getQuestDefinitionPda,
   getQuestProgressPda,
   getPlayerProfilePda,
+  getPlayerRelicPoolPda,
   getGauntletConfigPda,
   getGauntletPoolVaultPda,
   getGauntletWeekPoolPda,
+  getRelicAssetPda,
 } from "../shared/pda-helpers";
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -255,20 +257,32 @@ describe("Initialize infrastructure", function () {
   });
 
   it("initializes marketplace config", async () => {
-    await nftMarketplace.methods
-      .initializeMarketplace(skinsCollectionPubkey, itemsCollectionPubkey)
-      .accounts({
-        marketplaceConfig: marketplaceConfigPda,
-        authority: admin.publicKey,
-        gauntletPool: gauntletPoolVaultPda,
-        systemProgram: SystemProgram.programId,
-      } as any)
-      .rpc();
+    try {
+      await nftMarketplace.methods
+        .initializeMarketplace(skinsCollectionPubkey, itemsCollectionPubkey)
+        .accounts({
+          marketplaceConfig: marketplaceConfigPda,
+          authority: admin.publicKey,
+          gauntletPool: gauntletPoolVaultPda,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .rpc();
+    } catch (error: any) {
+      const msg = String(error);
+      if (!msg.includes("already in use")) {
+        throw error;
+      }
+    }
 
     // Verify marketplace config account fields
     const config = await (
       nftMarketplace.account as any
     ).marketplaceConfig.fetch(marketplaceConfigPda);
+
+    // On a Surfpool devnet fork, the marketplace config PDA may already exist.
+    // In that case, reuse the configured collections for the mint/list flows below.
+    skinsCollectionPubkey = new PublicKey(config.skinsCollection.toString());
+    itemsCollectionPubkey = new PublicKey(config.itemsCollection.toString());
 
     expect(config.authority.toString()).to.equal(admin.publicKey.toString());
     expect(config.skinsCollection.toString()).to.equal(
@@ -391,10 +405,10 @@ describe("Mint skins", function () {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 4. Mint NFT items
+// 4. Mint relic items
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe("Mint NFT items", function () {
+describe("Mint relic items", function () {
   this.timeout(120_000);
 
   const NFT_ITEM_IDS = [
@@ -416,8 +430,9 @@ describe("Mint NFT items", function () {
   ];
 
   for (let i = 0; i < NFT_ITEM_IDS.length; i++) {
-    it(`mints NFT item ${NFT_ITEM_IDS[i]}`, async () => {
+    it(`mints relic item ${NFT_ITEM_IDS[i]}`, async () => {
       const assetKeypair = Keypair.generate();
+      const [relicAssetPda] = getRelicAssetPda(assetKeypair.publicKey);
 
       // Pad ID to 8 bytes
       const idBytes = Buffer.alloc(8, 0);
@@ -435,8 +450,11 @@ describe("Mint NFT items", function () {
           marketplaceConfig: marketplaceConfigPda,
           mintAuthority: mintAuthorityPda,
           payer: admin.publicKey,
+          relicAsset: relicAssetPda,
+          playerRelicPool: getPlayerRelicPoolPda(admin.publicKey)[0],
           owner: admin.publicKey,
           mplCoreProgram: PROGRAM_IDS.mplCore,
+          playerProfileProgram: PROGRAM_IDS.playerProfile,
           systemProgram: SystemProgram.programId,
         } as any)
         .signers([assetKeypair])
@@ -451,9 +469,113 @@ describe("Mint NFT items", function () {
         PROGRAM_IDS.mplCore.toString()
       );
 
+      const relicRecord = await (nftMarketplace.account as any).relicAsset.fetch(
+        relicAssetPda
+      );
+      expect(relicRecord.asset.toString()).to.equal(assetKeypair.publicKey.toString());
+      expect(Buffer.from(relicRecord.itemId).equals(idBytes)).to.equal(true);
+
       mintedNftItemAssets.push(assetKeypair.publicKey);
     });
   }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 4b. Minted relic ownership and activation
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Minted relic ownership and activation", function () {
+  this.timeout(120_000);
+
+  let relicUser: Keypair;
+  let relicUserProfilePda: PublicKey;
+  let relicUserRelicPoolPda: PublicKey;
+  let relicAsset: PublicKey;
+  let relicAssetRecordPda: PublicKey;
+
+  before(async () => {
+    relicUser = Keypair.generate();
+    await fundKeypair(relicUser, 5);
+
+    relicUserProfilePda = await createProfileForUser(relicUser, "RelicUser");
+    [relicUserRelicPoolPda] = getPlayerRelicPoolPda(relicUser.publicKey);
+
+    const assetKeypair = Keypair.generate();
+    relicAsset = assetKeypair.publicKey;
+    [relicAssetRecordPda] = getRelicAssetPda(relicAsset);
+
+    const idBytes = Buffer.alloc(8, 0);
+    idBytes.write("S-XX-01", 0, "utf-8");
+
+    await nftMarketplace.methods
+      .mintNftItem(
+        "Relic Pickaxe",
+        "https://arweave.net/relic-pickaxe",
+        Array.from(idBytes)
+      )
+      .accounts({
+        asset: relicAsset,
+        collection: itemsCollectionPubkey,
+        marketplaceConfig: marketplaceConfigPda,
+        mintAuthority: mintAuthorityPda,
+        payer: admin.publicKey,
+        relicAsset: relicAssetRecordPda,
+        playerRelicPool: relicUserRelicPoolPda,
+        owner: relicUser.publicKey,
+        mplCoreProgram: PROGRAM_IDS.mplCore,
+        playerProfileProgram: PROGRAM_IDS.playerProfile,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .signers([assetKeypair])
+      .rpc();
+  });
+
+  it("auto-credits relic ownership without changing the base item pool minimum", async () => {
+    const userProvider = createProvider(
+      RPC_URL,
+      walletFromKeypair(relicUser)
+    );
+    const pp = loadProgram("player_profile", userProvider);
+
+    const relicPool = await (pp.account as any).playerRelicPool.fetch(
+      relicUserRelicPoolPda
+    );
+    expect(relicPool.owner.toString()).to.equal(relicUser.publicKey.toString());
+    expect(relicPool.count).to.equal(1);
+    expect(relicPool.relics).to.have.length(1);
+    expect(Buffer.from(relicPool.relics[0].itemId).toString("utf8").replace(/\0/g, "")).to.equal("S-XX-01");
+    expect(relicPool.relics[0].ownedCount).to.equal(1);
+    expect(relicPool.relics[0].inActivePool).to.equal(false);
+
+    const profile = await (pp.account as any).playerProfile.fetch(relicUserProfilePda);
+    const activePoolCount = Uint8Array.from(profile.activeItemPool as number[])
+      .reduce((sum, byte) => sum + byte.toString(2).split("0").join("").length, 0);
+    expect(activePoolCount).to.be.at.least(40);
+  });
+
+  it("lets the owner activate an owned relic", async () => {
+    const userProvider = createProvider(
+      RPC_URL,
+      walletFromKeypair(relicUser)
+    );
+    const pp = loadProgram("player_profile", userProvider);
+
+    const idBytes = Buffer.alloc(8, 0);
+    idBytes.write("S-XX-01", 0, "utf-8");
+
+    await pp.methods
+      .setRelicActive(Array.from(idBytes), true)
+      .accounts({
+        playerRelicPool: relicUserRelicPoolPda,
+        owner: relicUser.publicKey,
+      } as any)
+      .rpc();
+
+    const relicPool = await (pp.account as any).playerRelicPool.fetch(
+      relicUserRelicPoolPda
+    );
+    expect(relicPool.relics[0].inActivePool).to.equal(true);
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -659,6 +781,78 @@ describe("List/buy/cancel", function () {
     expect(listingInfo).to.be.null;
   });
 
+  it("rejects unauthorized cancel attempts from a non-seller", async () => {
+    const sellerProvider = createProvider(
+      RPC_URL,
+      walletFromKeypair(seller)
+    );
+    const sellerMarketplace = loadProgram("nft_marketplace", sellerProvider);
+
+    const attacker = Keypair.generate();
+    await fundKeypair(attacker, 2);
+    await createProfileForUser(attacker, "market-attacker");
+
+    const protectedSkin = await mintSkinToOwner(
+      seller.publicKey,
+      "Protected Listing Skin",
+      23
+    );
+    const [listingPda] = getListingPda(protectedSkin);
+
+    await sellerMarketplace.methods
+      .listNft(listPrice)
+      .accounts({
+        listing: listingPda,
+        marketplaceConfig: marketplaceConfigPda,
+        mintAuthority: mintAuthorityPda,
+        asset: protectedSkin,
+        collection: skinsCollectionPubkey,
+        seller: seller.publicKey,
+        playerProfile: sellerProfilePda,
+        mplCoreProgram: PROGRAM_IDS.mplCore,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .rpc();
+
+    const attackerProvider = createProvider(
+      RPC_URL,
+      walletFromKeypair(attacker)
+    );
+    const attackerMarketplace = loadProgram("nft_marketplace", attackerProvider);
+
+    try {
+      await attackerMarketplace.methods
+        .cancelListing()
+        .accounts({
+          listing: listingPda,
+          asset: protectedSkin,
+          collection: skinsCollectionPubkey,
+          seller: attacker.publicKey,
+          mplCoreProgram: PROGRAM_IDS.mplCore,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .rpc();
+      expect.fail("Should have thrown Unauthorized");
+    } catch (error: any) {
+      expect(String(error)).to.include("Unauthorized");
+    }
+
+    const listingInfo = await connection.getAccountInfo(listingPda);
+    expect(listingInfo).to.not.be.null;
+
+    await sellerMarketplace.methods
+      .cancelListing()
+      .accounts({
+        listing: listingPda,
+        asset: protectedSkin,
+        collection: skinsCollectionPubkey,
+        seller: seller.publicKey,
+        mplCoreProgram: PROGRAM_IDS.mplCore,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .rpc();
+  });
+
   it("re-lists and buyer purchases with fee split", async () => {
     // Re-list
     const sellerProvider = createProvider(
@@ -703,12 +897,16 @@ describe("List/buy/cancel", function () {
         marketplaceConfig: marketplaceConfigPda,
         mintAuthority: mintAuthorityPda,
         asset: sellerSkinAsset,
+        relicAssetRecord: null,
         collection: skinsCollectionPubkey,
         buyer: buyer.publicKey,
         seller: seller.publicKey,
+        sellerPlayerRelicPool: null,
+        buyerPlayerRelicPool: getPlayerRelicPoolPda(buyer.publicKey)[0],
         companyTreasury: COMPANY_TREASURY,
         gauntletPool: gauntletPoolVaultPda,
         mplCoreProgram: PROGRAM_IDS.mplCore,
+        playerProfileProgram: PROGRAM_IDS.playerProfile,
         systemProgram: SystemProgram.programId,
       } as any)
       .rpc();
@@ -779,12 +977,16 @@ describe("List/buy/cancel", function () {
           marketplaceConfig: marketplaceConfigPda,
           mintAuthority: mintAuthorityPda,
           asset: newSkin,
+          relicAssetRecord: null,
           collection: skinsCollectionPubkey,
           buyer: seller.publicKey,
           seller: seller.publicKey,
+          sellerPlayerRelicPool: null,
+          buyerPlayerRelicPool: getPlayerRelicPoolPda(seller.publicKey)[0],
           companyTreasury: COMPANY_TREASURY,
           gauntletPool: gauntletPoolVaultPda,
           mplCoreProgram: PROGRAM_IDS.mplCore,
+          playerProfileProgram: PROGRAM_IDS.playerProfile,
           systemProgram: SystemProgram.programId,
         } as any)
         .rpc();
@@ -910,7 +1112,8 @@ describe("List/buy/cancel", function () {
 describe("Quests", function () {
   this.timeout(60_000);
 
-  const questId = 1;
+  const questId = 30_000 + (Math.floor(Date.now() / 1000) % 10_000);
+  const incompleteQuestId = questId + 1;
   const objectiveCount = 5; // Need to win 5 battles
   let questPlayer: Keypair;
 
@@ -1044,7 +1247,6 @@ describe("Quests", function () {
 
   it("rejects claiming incomplete quest", async () => {
     // Create a second quest that has not been completed
-    const incompleteQuestId = 2;
     const [incQuestDefPda] = getQuestDefinitionPda(incompleteQuestId);
 
     const rewardData = Array(32).fill(0);

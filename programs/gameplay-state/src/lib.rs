@@ -1,10 +1,9 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
+use anchor_lang::solana_program::program::invoke_signed;
 use anchor_lang::system_program;
 use core::str::FromStr;
-use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
-use ephemeral_rollups_sdk::cpi::DelegateConfig;
-use ephemeral_rollups_sdk::ephem::commit_and_undelegate_accounts;
+use er_compat::DelegateConfig;
 use ephemeral_vrf_sdk::instructions::{create_request_randomness_ix, RequestRandomnessParams};
 use ephemeral_vrf_sdk::types::SerializableAccountMeta;
 
@@ -29,19 +28,22 @@ use constants::{
     GAUNTLET_CONFIG_SEED, GAUNTLET_ECHOES_SEED, GAUNTLET_ENTRY_LAMPORTS,
     GAUNTLET_EPOCH_DURATION_SECONDS, GAUNTLET_EPOCH_POOL_SEED, GAUNTLET_MAX_WEEKLY_ECHOES,
     GAUNTLET_PLAYER_SCORE_SEED, GAUNTLET_POOL_FEE_BPS, GAUNTLET_POOL_VAULT_SEED,
-    GAUNTLET_WEEK_POOL_SEED, INITIAL_GEAR_SLOTS, MAX_GEAR_SLOTS, PIT_DRAFT_BPS_DENOMINATOR,
-    PIT_DRAFT_COMPANY_FEE_BPS, PIT_DRAFT_ENTRY_LAMPORTS, PIT_DRAFT_GAUNTLET_FEE_BPS,
-    PIT_DRAFT_QUEUE_SEED, PIT_DRAFT_VAULT_SEED, PIT_DRAFT_WINNER_BPS, PVP_BASE_HP,
+    GAUNTLET_REWARD_RECORD_SEED, GAUNTLET_WEEK_POOL_SEED, INITIAL_GEAR_SLOTS, MAX_GEAR_SLOTS,
+    PIT_DRAFT_BPS_DENOMINATOR, PIT_DRAFT_COMPANY_FEE_BPS, PIT_DRAFT_ENTRY_LAMPORTS,
+    PIT_DRAFT_GAUNTLET_FEE_BPS, PIT_DRAFT_QUEUE_SEED, PIT_DRAFT_VAULT_SEED, PIT_DRAFT_WINNER_BPS,
+    PVP_BASE_HP,
 };
 use errors::GameplayStateError;
 
 /// Seed for gameplay_authority PDA used for CPI calls to other programs
 pub const GAMEPLAY_AUTHORITY_SEED: &[u8] = b"gameplay_authority";
 pub const SESSION_MANAGER_RUNMODE_AUTHORITY_SEED: &[u8] = b"session_manager_authority";
+pub const GAUNTLET_GLOBAL_CRANK_TASK_ID_SEED: &[u8] = b"gauntlet_global_crank_task";
+pub const GAUNTLET_PLAYER_CRANK_TASK_ID_SEED: &[u8] = b"gauntlet_player_crank_task";
 use movement::{
     calculate_move_cost, chebyshev_distance, compute_visible_enemies, get_boss_for_combat,
-    get_boss_id, get_duel_boss_for_combat_from_seed, get_duel_boss_for_combat_vrf,
-    get_duel_boss_id_from_seed, get_duel_boss_id_vrf, is_adjacent, is_within_bounds,
+    get_boss_id, get_duel_boss_for_combat_from_seed, get_duel_boss_id_from_seed, is_adjacent,
+    is_within_bounds,
     should_process_night_enemy_movement, should_process_target_enemy_combat,
 };
 use player_inventory::effects::{generate_annotated_combat_effects, generate_combat_effects};
@@ -53,10 +55,17 @@ use state::{
     DuelRunOutcome, DuelVault, GameState, GameplayVrfState, GauntletConfig, GauntletDefenderCredit,
     GauntletEchoSnapshot, GauntletEchoSource, GauntletEchoes, GauntletEpochPool,
     GauntletLoadoutSnapshot, GauntletPendingPoints, GauntletPlayerScore, GauntletPoolVault,
-    GauntletWeekPool, Phase, PitDraftQueue, PitDraftVault, RunMode,
+    GauntletRewardRecord, GauntletWeekPool, Phase, PitDraftQueue, PitDraftVault, RunMode,
 };
 use stats::{calculate_stats, PlayerStats};
 use vrf_rng::VrfStatus;
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScheduleCrankArgs {
+    pub task_id: u64,
+    pub execution_interval_millis: u64,
+    pub iterations: u64,
+}
 
 fn compute_gold_gain_multiplier(effects: &[ItemEffect]) -> i16 {
     effects
@@ -188,12 +197,11 @@ pub const PLAYER_INVENTORY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
 
 fn local_delegate_config(validator: Option<Pubkey>) -> DelegateConfig {
     DelegateConfig {
-        validator,
+        validator: validator.map(|v| unsafe { std::mem::transmute(v) }),
         ..DelegateConfig::default()
     }
 }
 
-#[ephemeral]
 #[program]
 pub mod gameplay_state {
     use super::*;
@@ -367,7 +375,7 @@ pub mod gameplay_state {
                 if let Some((mole_den_index, mole_den_type, mole_den_x, mole_den_y)) = mole_den {
                     map_generator::cpi::record_discovered_poi(
                         CpiContext::new(
-                            mgp_info.clone(),
+                            mgp_info.key(),
                             map_generator::cpi::accounts::RecordDiscoveredPoi {
                                 session_discovery: sd_info.clone(),
                                 session: session_info.clone(),
@@ -408,7 +416,7 @@ pub mod gameplay_state {
                     .as_ref()
                     .and_then(|ge| ge.echoes[0].as_ref());
                 if let Some(echo) = ge_echo {
-                    let echo_bytes = echo.try_to_vec().unwrap_or_default();
+                    let echo_bytes = borsh::to_vec(&echo).unwrap_or_default();
                     let mut echo_data = [0u8; 179];
                     let copy_len = echo_bytes.len().min(179);
                     echo_data[..copy_len].copy_from_slice(&echo_bytes[..copy_len]);
@@ -523,8 +531,15 @@ pub mod gameplay_state {
         );
 
         let game_state_seeds: &[&[u8]] = &[b"game_state", session_key.as_ref()];
-        ctx.accounts.delegate_game_state(
-            &ctx.accounts.player,
+        er_compat::delegate_account(
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.game_state,
+            &ctx.accounts.owner_program,
+            &ctx.accounts.buffer_game_state,
+            &ctx.accounts.delegation_record_game_state,
+            &ctx.accounts.delegation_metadata_game_state,
+            &ctx.accounts.delegation_program,
+            &ctx.accounts.system_program.to_account_info(),
             game_state_seeds,
             local_delegate_config(validator),
         )?;
@@ -547,11 +562,271 @@ pub mod gameplay_state {
             GameplayStateError::Unauthorized
         );
         let ge_seeds: &[&[u8]] = &[GauntletEchoes::SEED_PREFIX, session_key.as_ref()];
-        ctx.accounts.delegate_gauntlet_echoes(
-            &ctx.accounts.player,
+        er_compat::delegate_account(
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.gauntlet_echoes,
+            &ctx.accounts.owner_program,
+            &ctx.accounts.buffer_gauntlet_echoes,
+            &ctx.accounts.delegation_record_gauntlet_echoes,
+            &ctx.accounts.delegation_metadata_gauntlet_echoes,
+            &ctx.accounts.delegation_program,
+            &ctx.accounts.system_program.to_account_info(),
             ge_seeds,
             local_delegate_config(validator),
         )?;
+        Ok(())
+    }
+
+    /// Delegates global gauntlet accounts used by automatic epoch finalization.
+    pub fn delegate_gauntlet_global_accounts(
+        ctx: Context<DelegateGauntletGlobalAccounts>,
+        epoch_id: u64,
+        validator: Option<Pubkey>,
+    ) -> Result<()> {
+        let epoch_bytes = epoch_id.to_le_bytes();
+        let (expected_config, _) = Pubkey::find_program_address(&[GAUNTLET_CONFIG_SEED], &crate::ID);
+        require_keys_eq!(
+            ctx.accounts.gauntlet_config.key(),
+            expected_config,
+            GameplayStateError::Unauthorized
+        );
+        let (expected_vault, _) =
+            Pubkey::find_program_address(&[GAUNTLET_POOL_VAULT_SEED], &crate::ID);
+        require_keys_eq!(
+            ctx.accounts.gauntlet_pool_vault.key(),
+            expected_vault,
+            GameplayStateError::Unauthorized
+        );
+        let (expected_epoch_pool, _) =
+            Pubkey::find_program_address(&[GAUNTLET_EPOCH_POOL_SEED, &epoch_bytes], &crate::ID);
+        require_keys_eq!(
+            ctx.accounts.gauntlet_epoch_pool.key(),
+            expected_epoch_pool,
+            GameplayStateError::Unauthorized
+        );
+
+        er_compat::delegate_account(
+            &ctx.accounts.payer.to_account_info(),
+            &ctx.accounts.gauntlet_config,
+            &ctx.accounts.owner_program,
+            &ctx.accounts.buffer_gauntlet_config,
+            &ctx.accounts.delegation_record_gauntlet_config,
+            &ctx.accounts.delegation_metadata_gauntlet_config,
+            &ctx.accounts.delegation_program,
+            &ctx.accounts.system_program.to_account_info(),
+            &[GAUNTLET_CONFIG_SEED],
+            local_delegate_config(validator),
+        )?;
+        er_compat::delegate_account(
+            &ctx.accounts.payer.to_account_info(),
+            &ctx.accounts.gauntlet_pool_vault,
+            &ctx.accounts.owner_program,
+            &ctx.accounts.buffer_gauntlet_pool_vault,
+            &ctx.accounts.delegation_record_gauntlet_pool_vault,
+            &ctx.accounts.delegation_metadata_gauntlet_pool_vault,
+            &ctx.accounts.delegation_program,
+            &ctx.accounts.system_program.to_account_info(),
+            &[GAUNTLET_POOL_VAULT_SEED],
+            local_delegate_config(validator),
+        )?;
+        er_compat::delegate_account(
+            &ctx.accounts.payer.to_account_info(),
+            &ctx.accounts.gauntlet_epoch_pool,
+            &ctx.accounts.owner_program,
+            &ctx.accounts.buffer_gauntlet_epoch_pool,
+            &ctx.accounts.delegation_record_gauntlet_epoch_pool,
+            &ctx.accounts.delegation_metadata_gauntlet_epoch_pool,
+            &ctx.accounts.delegation_program,
+            &ctx.accounts.system_program.to_account_info(),
+            &[GAUNTLET_EPOCH_POOL_SEED, &epoch_bytes],
+            local_delegate_config(validator),
+        )?;
+        Ok(())
+    }
+
+    /// Delegates per-player gauntlet reward accounts used by automatic settlement and payout.
+    pub fn delegate_gauntlet_reward_accounts(
+        ctx: Context<DelegateGauntletRewardAccounts>,
+        epoch_id: u64,
+        validator: Option<Pubkey>,
+    ) -> Result<()> {
+        let epoch_bytes = epoch_id.to_le_bytes();
+        let player_key = ctx.accounts.player_wallet.key();
+        let (expected_player_score, _) = Pubkey::find_program_address(
+            &[GAUNTLET_PLAYER_SCORE_SEED, &epoch_bytes, player_key.as_ref()],
+            &crate::ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.gauntlet_player_score.key(),
+            expected_player_score,
+            GameplayStateError::Unauthorized
+        );
+        let (expected_reward_record, _) = Pubkey::find_program_address(
+            &[GAUNTLET_REWARD_RECORD_SEED, &epoch_bytes, player_key.as_ref()],
+            &crate::ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.gauntlet_reward_record.key(),
+            expected_reward_record,
+            GameplayStateError::Unauthorized
+        );
+
+        er_compat::delegate_account(
+            &ctx.accounts.payer.to_account_info(),
+            &ctx.accounts.gauntlet_player_score,
+            &ctx.accounts.owner_program,
+            &ctx.accounts.buffer_gauntlet_player_score,
+            &ctx.accounts.delegation_record_gauntlet_player_score,
+            &ctx.accounts.delegation_metadata_gauntlet_player_score,
+            &ctx.accounts.delegation_program,
+            &ctx.accounts.system_program.to_account_info(),
+            &[GAUNTLET_PLAYER_SCORE_SEED, &epoch_bytes, player_key.as_ref()],
+            local_delegate_config(validator),
+        )?;
+        er_compat::delegate_account(
+            &ctx.accounts.payer.to_account_info(),
+            &ctx.accounts.gauntlet_reward_record,
+            &ctx.accounts.owner_program,
+            &ctx.accounts.buffer_gauntlet_reward_record,
+            &ctx.accounts.delegation_record_gauntlet_reward_record,
+            &ctx.accounts.delegation_metadata_gauntlet_reward_record,
+            &ctx.accounts.delegation_program,
+            &ctx.accounts.system_program.to_account_info(),
+            &[GAUNTLET_REWARD_RECORD_SEED, &epoch_bytes, player_key.as_ref()],
+            local_delegate_config(validator),
+        )?;
+        Ok(())
+    }
+
+    /// Schedule automatic epoch finalization on ER.
+    #[allow(clippy::missing_transmute_annotations)]
+    pub fn schedule_gauntlet_epoch_crank(
+        ctx: Context<ScheduleGauntletEpochCrank>,
+        epoch_id: u64,
+        args: ScheduleCrankArgs,
+    ) -> Result<()> {
+        let finalize_ix = Instruction {
+            program_id: crate::ID,
+            accounts: vec![
+                AccountMeta::new(ctx.accounts.gauntlet_config.key(), false),
+                AccountMeta::new(ctx.accounts.gauntlet_pool_vault.key(), false),
+                AccountMeta::new(ctx.accounts.gauntlet_epoch_pool.key(), false),
+            ],
+            data: anchor_lang::InstructionData::data(
+                &crate::instruction::CrankFinalizeGauntletEpoch { epoch_id },
+            ),
+        };
+        // SAFETY: Instruction layout is identical between solana-instruction versions
+        let old_finalize_ix = unsafe { std::mem::transmute(finalize_ix) };
+        schedule_magicblock_task(
+            &ctx.accounts.payer.to_account_info(),
+            &ctx.accounts.gauntlet_config,
+            vec![ctx.accounts.gauntlet_pool_vault.to_account_info(), ctx.accounts.gauntlet_epoch_pool.to_account_info()],
+            magicblock_magic_program_api::args::ScheduleTaskArgs {
+                task_id: args.task_id as i64,
+                execution_interval_millis: args.execution_interval_millis as i64,
+                iterations: args.iterations as i64,
+                instructions: vec![old_finalize_ix],
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Schedule automatic per-player reward settlement on ER.
+    #[allow(clippy::missing_transmute_annotations)]
+    pub fn schedule_gauntlet_player_reward_crank(
+        ctx: Context<ScheduleGauntletPlayerRewardCrank>,
+        epoch_id: u64,
+        args: ScheduleCrankArgs,
+    ) -> Result<()> {
+        let reward_ix = Instruction {
+            program_id: crate::ID,
+            accounts: vec![
+                AccountMeta::new(ctx.accounts.gauntlet_epoch_pool.key(), false),
+                AccountMeta::new(ctx.accounts.gauntlet_player_score.key(), false),
+                AccountMeta::new(ctx.accounts.gauntlet_reward_record.key(), false),
+            ],
+            data: anchor_lang::InstructionData::data(
+                &crate::instruction::CrankProcessGauntletPlayerRewards { epoch_id },
+            ),
+        };
+        let old_reward_ix = unsafe { std::mem::transmute(reward_ix) };
+        schedule_magicblock_task(
+            &ctx.accounts.payer.to_account_info(),
+            &ctx.accounts.gauntlet_reward_record,
+            vec![
+                ctx.accounts.gauntlet_epoch_pool.to_account_info(),
+                ctx.accounts.gauntlet_player_score.to_account_info(),
+            ],
+            magicblock_magic_program_api::args::ScheduleTaskArgs {
+                task_id: args.task_id as i64,
+                execution_interval_millis: args.execution_interval_millis as i64,
+                iterations: args.iterations as i64,
+                instructions: vec![old_reward_ix],
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Crank-only epoch finalization path. Accounts must already exist and be delegated on ER.
+    pub fn crank_finalize_gauntlet_epoch(
+        ctx: Context<CrankFinalizeGauntletEpoch>,
+        epoch_id: u64,
+    ) -> Result<()> {
+        finalize_gauntlet_epoch_core(
+            &mut ctx.accounts.gauntlet_config,
+            &mut ctx.accounts.gauntlet_epoch_pool,
+            &ctx.accounts.gauntlet_pool_vault.to_account_info(),
+            epoch_id,
+        )
+    }
+
+    /// Crank-only path that materializes defender points and settles the reward record on ER.
+    pub fn crank_process_gauntlet_player_rewards(
+        ctx: Context<CrankProcessGauntletPlayerRewards>,
+        epoch_id: u64,
+    ) -> Result<()> {
+        require!(
+            ctx.accounts.gauntlet_epoch_pool.epoch_id == epoch_id,
+            GameplayStateError::GauntletScoreMismatch
+        );
+        require!(
+            ctx.accounts.gauntlet_player_score.epoch_id == epoch_id,
+            GameplayStateError::GauntletScoreMismatch
+        );
+        require!(
+            ctx.accounts.gauntlet_reward_record.epoch_id == epoch_id,
+            GameplayStateError::GauntletScoreMismatch
+        );
+        require!(
+            ctx.accounts.gauntlet_reward_record.player == ctx.accounts.gauntlet_player_score.player,
+            GameplayStateError::GauntletScoreMismatch
+        );
+
+        if !ctx.accounts.gauntlet_reward_record.settled {
+            let score_bump = ctx.accounts.gauntlet_player_score.bump;
+            let player = ctx.accounts.gauntlet_player_score.player;
+            apply_pending_defender_points_to_score(
+                &mut ctx.accounts.gauntlet_epoch_pool,
+                &mut ctx.accounts.gauntlet_player_score,
+                player,
+                epoch_id,
+                score_bump,
+            )?;
+
+            if !ctx.accounts.gauntlet_epoch_pool.finalized {
+                return Ok(());
+            }
+
+            let final_points = ctx.accounts.gauntlet_player_score.points;
+            let payout_lamports =
+                compute_gauntlet_payout(&ctx.accounts.gauntlet_epoch_pool, final_points)?;
+            ctx.accounts.gauntlet_reward_record.final_points = final_points;
+            ctx.accounts.gauntlet_reward_record.payout_lamports = payout_lamports;
+            ctx.accounts.gauntlet_reward_record.settled = true;
+            ctx.accounts.gauntlet_reward_record.paid = false;
+        }
+
         Ok(())
     }
 
@@ -577,11 +852,11 @@ pub mod gameplay_state {
         );
 
         let game_state_info = ctx.accounts.game_state.to_account_info();
-        commit_and_undelegate_accounts(
-            &ctx.accounts.session_signer.to_account_info(),
-            vec![&game_state_info],
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program.to_account_info(),
+        er_compat::commit_and_undelegate(
+            ctx.accounts.session_signer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+            &[game_state_info],
         )?;
         Ok(())
     }
@@ -599,11 +874,87 @@ pub mod gameplay_state {
             GameplayStateError::Unauthorized
         );
         let ge_info = ctx.accounts.gauntlet_echoes.to_account_info();
-        commit_and_undelegate_accounts(
-            &ctx.accounts.session_signer.to_account_info(),
-            vec![&ge_info],
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program.to_account_info(),
+        er_compat::commit_and_undelegate(
+            ctx.accounts.session_signer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+            &[ge_info],
+        )?;
+        Ok(())
+    }
+
+    /// Commits and undelegates gauntlet global accounts from ER back to base layer.
+    pub fn undelegate_gauntlet_global_accounts(
+        ctx: Context<UndelegateGauntletGlobalAccounts>,
+        epoch_id: u64,
+    ) -> Result<()> {
+        let epoch_bytes = epoch_id.to_le_bytes();
+        let (expected_config, _) = Pubkey::find_program_address(&[GAUNTLET_CONFIG_SEED], &crate::ID);
+        require_keys_eq!(
+            ctx.accounts.gauntlet_config.key(),
+            expected_config,
+            GameplayStateError::Unauthorized
+        );
+        let (expected_vault, _) =
+            Pubkey::find_program_address(&[GAUNTLET_POOL_VAULT_SEED], &crate::ID);
+        require_keys_eq!(
+            ctx.accounts.gauntlet_pool_vault.key(),
+            expected_vault,
+            GameplayStateError::Unauthorized
+        );
+        let (expected_epoch_pool, _) =
+            Pubkey::find_program_address(&[GAUNTLET_EPOCH_POOL_SEED, &epoch_bytes], &crate::ID);
+        require_keys_eq!(
+            ctx.accounts.gauntlet_epoch_pool.key(),
+            expected_epoch_pool,
+            GameplayStateError::Unauthorized
+        );
+
+        let config_info = ctx.accounts.gauntlet_config.to_account_info();
+        let vault_info = ctx.accounts.gauntlet_pool_vault.to_account_info();
+        let epoch_info = ctx.accounts.gauntlet_epoch_pool.to_account_info();
+        er_compat::commit_and_undelegate(
+            ctx.accounts.payer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+            &[config_info, vault_info, epoch_info],
+        )?;
+        Ok(())
+    }
+
+    /// Commits and undelegates per-player gauntlet reward accounts from ER back to base layer.
+    pub fn undelegate_gauntlet_reward_accounts(
+        ctx: Context<UndelegateGauntletRewardAccounts>,
+        epoch_id: u64,
+    ) -> Result<()> {
+        let epoch_bytes = epoch_id.to_le_bytes();
+        let player_key = ctx.accounts.player_wallet.key();
+        let (expected_player_score, _) = Pubkey::find_program_address(
+            &[GAUNTLET_PLAYER_SCORE_SEED, &epoch_bytes, player_key.as_ref()],
+            &crate::ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.gauntlet_player_score.key(),
+            expected_player_score,
+            GameplayStateError::Unauthorized
+        );
+        let (expected_reward_record, _) = Pubkey::find_program_address(
+            &[GAUNTLET_REWARD_RECORD_SEED, &epoch_bytes, player_key.as_ref()],
+            &crate::ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.gauntlet_reward_record.key(),
+            expected_reward_record,
+            GameplayStateError::Unauthorized
+        );
+
+        let player_score_info = ctx.accounts.gauntlet_player_score.to_account_info();
+        let reward_record_info = ctx.accounts.gauntlet_reward_record.to_account_info();
+        er_compat::commit_and_undelegate(
+            ctx.accounts.payer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+            &[player_score_info, reward_record_info],
         )?;
         Ok(())
     }
@@ -630,11 +981,11 @@ pub mod gameplay_state {
         );
 
         let game_state_info = ctx.accounts.game_state.to_account_info();
-        commit_and_undelegate_accounts(
-            &ctx.accounts.session_signer.to_account_info(),
-            vec![&game_state_info],
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program.to_account_info(),
+        er_compat::commit_and_undelegate(
+            ctx.accounts.session_signer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+            &[game_state_info],
         )?;
         Ok(())
     }
@@ -693,10 +1044,17 @@ pub mod gameplay_state {
             GameplayStateError::Unauthorized
         );
         let seeds: &[&[u8]] = &[DUEL_ENTRY_SEED, session_pda.as_ref()];
-        ctx.accounts.delegate_duel_entry(
-            &ctx.accounts.player,
+        er_compat::delegate_account(
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.duel_entry,
+            &ctx.accounts.owner_program,
+            &ctx.accounts.buffer_duel_entry,
+            &ctx.accounts.delegation_record_duel_entry,
+            &ctx.accounts.delegation_metadata_duel_entry,
+            &ctx.accounts.delegation_program,
+            &ctx.accounts.system_program.to_account_info(),
             seeds,
-            ephemeral_rollups_sdk::cpi::DelegateConfig::default(),
+            DelegateConfig::default(),
         )?;
         Ok(())
     }
@@ -711,10 +1069,17 @@ pub mod gameplay_state {
             GameplayStateError::Unauthorized
         );
         let seeds: &[&[u8]] = &[DUEL_ER_QUEUE_SEED];
-        ctx.accounts.delegate_duel_er_queue(
-            &ctx.accounts.admin,
+        er_compat::delegate_account(
+            &ctx.accounts.admin.to_account_info(),
+            &ctx.accounts.duel_er_queue,
+            &ctx.accounts.owner_program,
+            &ctx.accounts.buffer_duel_er_queue,
+            &ctx.accounts.delegation_record_duel_er_queue,
+            &ctx.accounts.delegation_metadata_duel_er_queue,
+            &ctx.accounts.delegation_program,
+            &ctx.accounts.system_program.to_account_info(),
             seeds,
-            ephemeral_rollups_sdk::cpi::DelegateConfig::default(),
+            DelegateConfig::default(),
         )?;
         Ok(())
     }
@@ -877,7 +1242,7 @@ pub mod gameplay_state {
 
         system_program::transfer(
             CpiContext::new(
-                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.system_program.key(),
                 system_program::Transfer {
                     from: ctx.accounts.player.to_account_info(),
                     to: ctx.accounts.company_treasury.to_account_info(),
@@ -888,7 +1253,7 @@ pub mod gameplay_state {
 
         system_program::transfer(
             CpiContext::new(
-                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.system_program.key(),
                 system_program::Transfer {
                     from: ctx.accounts.player.to_account_info(),
                     to: ctx.accounts.gauntlet_pool_vault.to_account_info(),
@@ -919,6 +1284,12 @@ pub mod gameplay_state {
             player_score.claimed = false;
             player_score.bump = ctx.bumps.gauntlet_player_score;
         }
+        initialize_reward_record_if_needed(
+            &mut ctx.accounts.gauntlet_reward_record,
+            epoch_id,
+            ctx.accounts.player.key(),
+            ctx.bumps.gauntlet_reward_record,
+        )?;
 
         let gauntlet_echoes = &mut ctx.accounts.gauntlet_echoes;
         gauntlet_echoes.session = game_state.session;
@@ -966,120 +1337,184 @@ pub mod gameplay_state {
         ctx: Context<FinalizeGauntletEpoch>,
         epoch_id: u64,
     ) -> Result<()> {
-        let clock = Clock::get()?;
-        let config = &mut ctx.accounts.gauntlet_config;
-        require!(
-            config.current_epoch_id == epoch_id,
-            GameplayStateError::GauntletScoreMismatch
-        );
-        require!(
-            ctx.accounts.gauntlet_epoch_pool.epoch_id == epoch_id,
-            GameplayStateError::GauntletScoreMismatch
-        );
-        if clock.unix_timestamp
-            < config
-                .current_epoch_start_ts
-                .checked_add(config.epoch_duration_seconds)
-                .ok_or(GameplayStateError::ArithmeticOverflow)?
-        {
-            return Ok(());
-        }
-
-        let current_epoch_id = epoch_id;
         let epoch_pool = &mut ctx.accounts.gauntlet_epoch_pool;
-        epoch_pool.epoch_id = current_epoch_id;
-        epoch_pool.total_pool_lamports = ctx
-            .accounts
-            .gauntlet_pool_vault
-            .to_account_info()
-            .lamports();
-        if epoch_pool.pending_defender_points.is_empty() {
+        if !epoch_pool.initialized {
+            epoch_pool.epoch_id = epoch_id;
+            epoch_pool.total_pool_lamports = 0;
+            epoch_pool.total_points = 0;
             epoch_pool.pending_defender_points = Vec::new();
+            epoch_pool.initialized = true;
+            epoch_pool.finalized = false;
+            epoch_pool.bump = ctx.bumps.gauntlet_epoch_pool;
         }
-        epoch_pool.finalized = true;
-        config.current_epoch_id = config
-            .current_epoch_id
-            .checked_add(1)
-            .ok_or(GameplayStateError::ArithmeticOverflow)?;
-        config.current_epoch_start_ts = clock.unix_timestamp;
+        finalize_gauntlet_epoch_core(
+            &mut ctx.accounts.gauntlet_config,
+            epoch_pool,
+            &ctx.accounts.gauntlet_pool_vault.to_account_info(),
+            epoch_id,
+        )
+    }
 
-        emit!(GauntletEpochFinalized {
-            epoch_id: current_epoch_id,
-            total_pool_lamports: epoch_pool.total_pool_lamports,
-            total_points: epoch_pool.total_points,
-        });
+    /// Materializes pending defender points into a player's visible score.
+    pub fn settle_gauntlet_defender_points(
+        ctx: Context<SettleGauntletDefenderPoints>,
+        epoch_id: u64,
+    ) -> Result<()> {
+        apply_pending_defender_points_to_score(
+            &mut ctx.accounts.gauntlet_epoch_pool,
+            &mut ctx.accounts.gauntlet_player_score,
+            ctx.accounts.player.key(),
+            epoch_id,
+            ctx.bumps.gauntlet_player_score,
+        )?;
         Ok(())
     }
 
-    /// Claims rewards for a finalized epoch.
-    pub fn claim_gauntlet_rewards(ctx: Context<ClaimGauntletRewards>, epoch_id: u64) -> Result<()> {
+    /// Finalizes a player's payout record for an already-finalized epoch.
+    pub fn settle_gauntlet_reward_for_player(
+        ctx: Context<SettleGauntletRewardForPlayer>,
+        epoch_id: u64,
+    ) -> Result<()> {
         require!(
             ctx.accounts.gauntlet_epoch_pool.epoch_id == epoch_id,
-            GameplayStateError::GauntletScoreMismatch
-        );
-        require!(
-            ctx.accounts.gauntlet_player_score.epoch_id == epoch_id,
-            GameplayStateError::GauntletScoreMismatch
-        );
-        if ctx.accounts.gauntlet_player_score.player == Pubkey::default() {
-            ctx.accounts.gauntlet_player_score.epoch_id = epoch_id;
-            ctx.accounts.gauntlet_player_score.player = ctx.accounts.player.key();
-            ctx.accounts.gauntlet_player_score.points = 0;
-            ctx.accounts.gauntlet_player_score.claimed = false;
-            ctx.accounts.gauntlet_player_score.bump = ctx.bumps.gauntlet_player_score;
-        }
-        require!(
-            ctx.accounts.gauntlet_player_score.player == ctx.accounts.player.key(),
             GameplayStateError::GauntletScoreMismatch
         );
         require!(
             ctx.accounts.gauntlet_epoch_pool.finalized,
             GameplayStateError::GauntletEpochNotFinalized
         );
-        require!(
-            !ctx.accounts.gauntlet_player_score.claimed,
-            GameplayStateError::GauntletAlreadyClaimed
-        );
 
-        let pending_defender_points = take_pending_defender_points(
-            &mut ctx.accounts.gauntlet_epoch_pool,
-            ctx.accounts.player.key(),
-        );
-        if pending_defender_points > 0 {
-            ctx.accounts.gauntlet_player_score.points = ctx
-                .accounts
-                .gauntlet_player_score
-                .points
-                .checked_add(pending_defender_points)
-                .ok_or(GameplayStateError::ArithmeticOverflow)?;
-        }
-
-        let total_points = ctx.accounts.gauntlet_epoch_pool.total_points;
-        if total_points == 0 || ctx.accounts.gauntlet_player_score.points == 0 {
-            ctx.accounts.gauntlet_player_score.claimed = true;
+        let reward_record = &mut ctx.accounts.gauntlet_reward_record;
+        if reward_record.settled {
             return Ok(());
         }
 
-        let payout = ctx
-            .accounts
-            .gauntlet_epoch_pool
-            .total_pool_lamports
-            .checked_mul(ctx.accounts.gauntlet_player_score.points)
-            .and_then(|v| v.checked_div(total_points))
-            .ok_or(GameplayStateError::ArithmeticOverflow)?;
+        initialize_reward_record_if_needed(
+            reward_record,
+            epoch_id,
+            ctx.accounts.player.key(),
+            ctx.bumps.gauntlet_reward_record,
+        )?;
+
+        apply_pending_defender_points_to_score(
+            &mut ctx.accounts.gauntlet_epoch_pool,
+            &mut ctx.accounts.gauntlet_player_score,
+            ctx.accounts.player.key(),
+            epoch_id,
+            ctx.bumps.gauntlet_player_score,
+        )?;
+
+        let final_points = ctx.accounts.gauntlet_player_score.points;
+        let payout_lamports =
+            compute_gauntlet_payout(&ctx.accounts.gauntlet_epoch_pool, final_points)?;
+
+        reward_record.final_points = final_points;
+        reward_record.payout_lamports = payout_lamports;
+        reward_record.settled = true;
+        reward_record.paid = false;
+        ctx.accounts.gauntlet_player_score.claimed = false;
+
+        emit!(GauntletRewardSettled {
+            epoch_id,
+            player: ctx.accounts.player.key(),
+            points: final_points,
+            payout_lamports,
+        });
+        Ok(())
+    }
+
+    /// Permissionless payout to the canonical player wallet.
+    pub fn payout_gauntlet_reward(ctx: Context<PayoutGauntletReward>, epoch_id: u64) -> Result<()> {
+        require!(
+            ctx.accounts.gauntlet_reward_record.epoch_id == epoch_id,
+            GameplayStateError::GauntletScoreMismatch
+        );
+        require!(
+            ctx.accounts.gauntlet_player_score.epoch_id == epoch_id,
+            GameplayStateError::GauntletScoreMismatch
+        );
+        require!(
+            ctx.accounts.gauntlet_reward_record.player == ctx.accounts.player_wallet.key(),
+            GameplayStateError::GauntletScoreMismatch
+        );
+
+        if ctx.accounts.gauntlet_reward_record.paid {
+            return Ok(());
+        }
+        require!(
+            ctx.accounts.gauntlet_reward_record.settled,
+            GameplayStateError::GauntletRewardNotSettled
+        );
 
         transfer_lamports_from_vault(
             &ctx.accounts.gauntlet_pool_vault.to_account_info(),
             &ctx.accounts.player_wallet.to_account_info(),
-            payout,
+            ctx.accounts.gauntlet_reward_record.payout_lamports,
         )?;
+        ctx.accounts.gauntlet_reward_record.paid = true;
+        ctx.accounts.gauntlet_player_score.claimed = true;
+
+        emit!(GauntletRewardsClaimed {
+            epoch_id,
+            player: ctx.accounts.player_wallet.key(),
+            points: ctx.accounts.gauntlet_reward_record.final_points,
+            payout_lamports: ctx.accounts.gauntlet_reward_record.payout_lamports,
+        });
+        Ok(())
+    }
+
+    /// Compatibility path for signer-driven claiming.
+    pub fn claim_gauntlet_rewards(ctx: Context<ClaimGauntletRewards>, epoch_id: u64) -> Result<()> {
+        require!(
+            ctx.accounts.player_wallet.key() == ctx.accounts.player.key(),
+            GameplayStateError::GauntletScoreMismatch
+        );
+        require!(
+            !ctx.accounts.gauntlet_reward_record.paid,
+            GameplayStateError::GauntletAlreadyClaimed
+        );
+
+        initialize_reward_record_if_needed(
+            &mut ctx.accounts.gauntlet_reward_record,
+            epoch_id,
+            ctx.accounts.player.key(),
+            ctx.bumps.gauntlet_reward_record,
+        )?;
+        apply_pending_defender_points_to_score(
+            &mut ctx.accounts.gauntlet_epoch_pool,
+            &mut ctx.accounts.gauntlet_player_score,
+            ctx.accounts.player.key(),
+            epoch_id,
+            ctx.bumps.gauntlet_player_score,
+        )?;
+
+        if !ctx.accounts.gauntlet_reward_record.settled {
+            require!(
+                ctx.accounts.gauntlet_epoch_pool.finalized,
+                GameplayStateError::GauntletEpochNotFinalized
+            );
+            let final_points = ctx.accounts.gauntlet_player_score.points;
+            let payout_lamports =
+                compute_gauntlet_payout(&ctx.accounts.gauntlet_epoch_pool, final_points)?;
+            ctx.accounts.gauntlet_reward_record.final_points = final_points;
+            ctx.accounts.gauntlet_reward_record.payout_lamports = payout_lamports;
+            ctx.accounts.gauntlet_reward_record.settled = true;
+            ctx.accounts.gauntlet_reward_record.paid = false;
+        }
+
+        transfer_lamports_from_vault(
+            &ctx.accounts.gauntlet_pool_vault.to_account_info(),
+            &ctx.accounts.player_wallet.to_account_info(),
+            ctx.accounts.gauntlet_reward_record.payout_lamports,
+        )?;
+        ctx.accounts.gauntlet_reward_record.paid = true;
         ctx.accounts.gauntlet_player_score.claimed = true;
 
         emit!(GauntletRewardsClaimed {
             epoch_id,
             player: ctx.accounts.player.key(),
-            points: ctx.accounts.gauntlet_player_score.points,
-            payout_lamports: payout,
+            points: ctx.accounts.gauntlet_reward_record.final_points,
+            payout_lamports: ctx.accounts.gauntlet_reward_record.payout_lamports,
         });
         Ok(())
     }
@@ -1199,7 +1634,7 @@ pub mod gameplay_state {
 
         system_program::transfer(
             CpiContext::new(
-                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.system_program.key(),
                 system_program::Transfer {
                     from: ctx.accounts.player.to_account_info(),
                     to: ctx.accounts.duel_vault.to_account_info(),
@@ -1300,7 +1735,7 @@ pub mod gameplay_state {
 
         map_generator::cpi::fill_map_with_seed_authorized(
             CpiContext::new_with_signer(
-                ctx.accounts.map_generator_program.to_account_info(),
+                ctx.accounts.map_generator_program.key(),
                 map_generator::cpi::accounts::FillMapWithSeedAuthorized {
                     generated_map: ctx.accounts.generated_map.to_account_info(),
                     session: ctx.accounts.game_session.to_account_info(),
@@ -1672,7 +2107,7 @@ pub mod gameplay_state {
         // Every entrant pays 0.1 SOL into the pit draft vault.
         system_program::transfer(
             CpiContext::new(
-                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.system_program.key(),
                 system_program::Transfer {
                     from: ctx.accounts.player.to_account_info(),
                     to: ctx.accounts.pit_draft_vault.to_account_info(),
@@ -1763,109 +2198,18 @@ pub mod gameplay_state {
         );
         let randomness = &vrf_state.randomness;
         let nonce = vrf_state.nonce;
-
-        // Build inventories from VRF
-        let pool_a = waiting_profile.active_item_pool;
-        let pool_b = ctx.accounts.player_profile.active_item_pool;
-
-        let waiting_inventory = build_pit_draft_inventory_vrf(
+        resolve_pit_draft_match(
+            ctx.accounts.pit_draft_vault.to_account_info(),
+            ctx.accounts.player.to_account_info(),
+            ctx.accounts.player_profile.active_item_pool,
             waiting_player,
-            pool_a,
-            (randomness, nonce),
-            b"pit_waiting",
+            waiting_profile.active_item_pool,
+            waiting_player_wallet.to_account_info(),
+            company_treasury.to_account_info(),
+            gauntlet_pool_vault.to_account_info(),
+            randomness,
+            nonce,
         )?;
-        let entrant_inventory =
-            build_pit_draft_inventory_vrf(player_key, pool_b, (randomness, nonce), b"pit_entrant")?;
-
-        let waiting_stats =
-            calculate_stats(&waiting_inventory, GAUNTLET_CAMPAIGN_LEVEL, RunMode::Duel);
-        let entrant_stats =
-            calculate_stats(&entrant_inventory, GAUNTLET_CAMPAIGN_LEVEL, RunMode::Duel);
-
-        // Gold derivation from VRF
-        let mut gold_rng =
-            vrf_rng::GameRng::from_vrf(randomness, nonce, vrf_rng::domains::PIT_DRAFT_GOLD);
-        let waiting_start_gold =
-            gold_rng.next_bounded(u64::from(PIT_DRAFT_MAX_START_GOLD) + 1) as u16;
-        let entrant_start_gold =
-            gold_rng.next_bounded(u64::from(PIT_DRAFT_MAX_START_GOLD) + 1) as u16;
-
-        let all_waiting_effects = generate_annotated_combat_effects(&waiting_inventory);
-        let all_entrant_effects = generate_annotated_combat_effects(&entrant_inventory);
-
-        // Build combatant inputs first (borrows effects by ref), then consume
-        // effects via strip (takes ownership) — avoids clone() heap waste.
-        let waiting_combatant = build_full_hp_combatant(&waiting_stats, &all_waiting_effects);
-        let entrant_combatant = build_full_hp_combatant(&entrant_stats, &all_entrant_effects);
-        let waiting_effects = strip_baked_battle_start_stat_effects(all_waiting_effects);
-        let entrant_effects = strip_baked_battle_start_stat_effects(all_entrant_effects);
-
-        let combat_outcome = resolve_pvp_combat_annotated_with_both_gold(
-            waiting_combatant,
-            entrant_combatant,
-            waiting_effects,
-            entrant_effects,
-            waiting_start_gold,
-            entrant_start_gold,
-            pit_draft_final_tie_player_a_wins(randomness, nonce),
-        )?;
-
-        emit!(PitDraftCombatVisual {
-            player_a: waiting_player,
-            player_b: player_key,
-            player_a_tool: waiting_inventory.tool,
-            player_a_gear: waiting_inventory.gear,
-            player_b_tool: entrant_inventory.tool,
-            player_b_gear: entrant_inventory.gear,
-            player_a_won: combat_outcome.player_won,
-            final_player_a_hp: combat_outcome.final_player_hp,
-            final_player_b_hp: combat_outcome.final_enemy_hp,
-            turns_taken: combat_outcome.turns_taken,
-        });
-
-        let total_pot = PIT_DRAFT_ENTRY_LAMPORTS
-            .checked_mul(2)
-            .ok_or(GameplayStateError::ArithmeticOverflow)?;
-        let (company_fee, gauntlet_fee, winner_payout) = compute_pvp_pot_split(total_pot)?;
-
-        let winner_account = if combat_outcome.player_won {
-            waiting_player_wallet.to_account_info()
-        } else {
-            ctx.accounts.player.to_account_info()
-        };
-        let winner = if combat_outcome.player_won {
-            waiting_player
-        } else {
-            player_key
-        };
-
-        transfer_lamports_from_vault(
-            &ctx.accounts.pit_draft_vault.to_account_info(),
-            &winner_account,
-            winner_payout,
-        )?;
-        transfer_lamports_from_vault(
-            &ctx.accounts.pit_draft_vault.to_account_info(),
-            &company_treasury.to_account_info(),
-            company_fee,
-        )?;
-        transfer_lamports_from_vault(
-            &ctx.accounts.pit_draft_vault.to_account_info(),
-            &gauntlet_pool_vault.to_account_info(),
-            gauntlet_fee,
-        )?;
-
-        emit!(PitDraftResolved {
-            player_a: waiting_player,
-            player_b: player_key,
-            winner,
-            entry_lamports: PIT_DRAFT_ENTRY_LAMPORTS,
-            total_pot,
-            winner_payout,
-            company_fee,
-            gauntlet_fee,
-            turns_taken: combat_outcome.turns_taken,
-        });
 
         // Clear queue
         queue.waiting_player = None;
@@ -2138,9 +2482,7 @@ pub mod gameplay_state {
         });
 
         // Duel final week has no boss — mark completed immediately.
-        if game_state.run_mode == RunMode::Duel
-            && game_state.week >= game_state.max_weeks
-        {
+        if game_state.run_mode == RunMode::Duel && game_state.week >= game_state.max_weeks {
             game_state.completed = true;
         } else {
             game_state.boss_fight_ready = true;
@@ -2578,7 +2920,7 @@ pub mod gameplay_state {
                         &game_state.session,
                     )?;
                     let vrf_ref = vrf.as_ref().map(|(r, n)| (r, *n));
-                    let ge_ref = ctx.accounts.gauntlet_echoes.as_deref();
+                    let ge_ref = ctx.accounts.gauntlet_echoes.as_deref().map(|a| &**a);
                     let player_won = resolve_boss_fight(
                         game_state,
                         ctx.accounts.generated_map.seed,
@@ -2715,7 +3057,7 @@ pub mod gameplay_state {
             // Campaign, Duel, and Gauntlet week 3+ boss fights
             let vrf = extract_gameplay_vrf(&ctx.accounts.gameplay_vrf_state, &game_state.session)?;
             let vrf_ref = vrf.as_ref().map(|(r, n)| (r, *n));
-            let ge_ref = ctx.accounts.gauntlet_echoes.as_deref();
+            let ge_ref = ctx.accounts.gauntlet_echoes.as_deref().map(|a| &**a);
             let player_won = resolve_boss_fight(
                 game_state,
                 ctx.accounts.generated_map.seed,
@@ -2802,8 +3144,15 @@ pub mod gameplay_state {
             GameplayStateError::Unauthorized
         );
         let vrf_seeds: &[&[u8]] = &[GameplayVrfState::SEED_PREFIX, session_key.as_ref()];
-        ctx.accounts.delegate_gameplay_vrf_state(
-            &ctx.accounts.player,
+        er_compat::delegate_account(
+            &ctx.accounts.player.to_account_info(),
+            &ctx.accounts.gameplay_vrf_state,
+            &ctx.accounts.owner_program,
+            &ctx.accounts.buffer_gameplay_vrf_state,
+            &ctx.accounts.delegation_record_gameplay_vrf_state,
+            &ctx.accounts.delegation_metadata_gameplay_vrf_state,
+            &ctx.accounts.delegation_program,
+            &ctx.accounts.system_program.to_account_info(),
             vrf_seeds,
             local_delegate_config(validator),
         )?;
@@ -2824,11 +3173,11 @@ pub mod gameplay_state {
         );
 
         let vrf_info = ctx.accounts.gameplay_vrf_state.to_account_info();
-        commit_and_undelegate_accounts(
-            &ctx.accounts.session_signer.to_account_info(),
-            vec![&vrf_info],
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program.to_account_info(),
+        er_compat::commit_and_undelegate(
+            ctx.accounts.session_signer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+            &[vrf_info],
         )?;
         Ok(())
     }
@@ -2850,8 +3199,15 @@ pub mod gameplay_state {
             GameplayStateError::Unauthorized
         );
         let vrf_seeds: &[&[u8]] = &[GameplayVrfState::SEED_PREFIX, seed_key.as_ref()];
-        ctx.accounts.delegate_gameplay_vrf_state(
-            &ctx.accounts.payer,
+        er_compat::delegate_account(
+            &ctx.accounts.payer.to_account_info(),
+            &ctx.accounts.gameplay_vrf_state,
+            &ctx.accounts.owner_program,
+            &ctx.accounts.buffer_gameplay_vrf_state,
+            &ctx.accounts.delegation_record_gameplay_vrf_state,
+            &ctx.accounts.delegation_metadata_gameplay_vrf_state,
+            &ctx.accounts.delegation_program,
+            &ctx.accounts.system_program.to_account_info(),
             vrf_seeds,
             local_delegate_config(validator),
         )?;
@@ -2878,17 +3234,18 @@ pub mod gameplay_state {
         );
 
         let vrf_info = ctx.accounts.gameplay_vrf_state.to_account_info();
-        commit_and_undelegate_accounts(
-            &ctx.accounts.payer.to_account_info(),
-            vec![&vrf_info],
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program.to_account_info(),
+        er_compat::commit_and_undelegate(
+            ctx.accounts.payer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+            &[vrf_info],
         )?;
         Ok(())
     }
 
     /// Request VRF randomness for gameplay (pit draft, gauntlet echo, duel boss).
     /// Increments the nonce to ensure each request produces unique randomness.
+    #[allow(clippy::missing_transmute_annotations)]
     pub fn request_gameplay_vrf(ctx: Context<RequestGameplayVrf>) -> Result<()> {
         let vrf = &mut ctx.accounts.vrf_state;
         require!(
@@ -2905,24 +3262,29 @@ pub mod gameplay_state {
         caller_seed.copy_from_slice(ctx.accounts.session.key().as_ref());
         caller_seed[..8].copy_from_slice(&vrf.nonce.to_le_bytes());
 
-        let ix = create_request_randomness_ix(RequestRandomnessParams {
-            payer: ctx.accounts.payer.key(),
-            oracle_queue: ctx.accounts.oracle_queue.key(),
-            callback_program_id: crate::ID,
-            callback_discriminator: instruction::FulfillGameplayVrf::DISCRIMINATOR.to_vec(),
-            accounts_metas: Some(vec![SerializableAccountMeta {
-                pubkey: ctx.accounts.vrf_state.key(),
-                is_signer: false,
-                is_writable: true,
-            }]),
-            caller_seed,
-            ..Default::default()
-        });
+        // SAFETY: Pubkey layout is identical between versions (32 bytes).
+        let ix = unsafe {
+            create_request_randomness_ix(RequestRandomnessParams {
+                payer: std::mem::transmute(ctx.accounts.payer.key()),
+                oracle_queue: std::mem::transmute(ctx.accounts.oracle_queue.key()),
+                callback_program_id: std::mem::transmute(crate::ID),
+                callback_discriminator: instruction::FulfillGameplayVrf::DISCRIMINATOR.to_vec(),
+                accounts_metas: Some(vec![SerializableAccountMeta {
+                    pubkey: std::mem::transmute(ctx.accounts.vrf_state.key()),
+                    is_signer: false,
+                    is_writable: true,
+                }]),
+                caller_seed,
+                ..Default::default()
+            })
+        };
 
         let (_, identity_bump) =
-            Pubkey::find_program_address(&[ephemeral_vrf_sdk::consts::IDENTITY], &crate::ID);
+            Pubkey::find_program_address(&[er_compat::VRF_IDENTITY_SEED], &crate::ID);
+        // SAFETY: Instruction layout is identical between versions.
+        let ix_new: anchor_lang::solana_program::instruction::Instruction = unsafe { std::mem::transmute(ix) };
         anchor_lang::solana_program::program::invoke_signed(
-            &ix,
+            &ix_new,
             &[
                 ctx.accounts.payer.to_account_info(),
                 ctx.accounts.program_identity.to_account_info(),
@@ -2930,7 +3292,7 @@ pub mod gameplay_state {
                 ctx.accounts.system_program.to_account_info(),
                 ctx.accounts.slot_hashes.to_account_info(),
             ],
-            &[&[ephemeral_vrf_sdk::consts::IDENTITY, &[identity_bump]]],
+            &[&[er_compat::VRF_IDENTITY_SEED, &[identity_bump]]],
         )?;
         Ok(())
     }
@@ -2981,16 +3343,24 @@ pub mod gameplay_state {
     }
 
     /// TEST ONLY: Sets the game phase and moves remaining directly.
-    /// This instruction is intended for testing purposes to avoid
+    /// This instruction is intended for local/e2e testing to avoid
     /// doing hundreds of move transactions to reach a specific phase.
-    ///
-    /// Disabled in production builds.
     pub fn set_phase_for_testing(
-        _ctx: Context<SetPhaseForTesting>,
-        _phase: Phase,
-        _moves_remaining: u8,
+        ctx: Context<SetPhaseForTesting>,
+        phase: Phase,
+        moves_remaining: u8,
     ) -> Result<()> {
-        Err(GameplayStateError::TestOnlyInstructionDisabled.into())
+        #[cfg(not(feature = "test-helpers"))]
+        {
+            let _ = (ctx, phase, moves_remaining);
+            Err(GameplayStateError::TestOnlyInstructionDisabled.into())
+        }
+        #[cfg(feature = "test-helpers")]
+        {
+            ctx.accounts.game_state.phase = phase;
+            ctx.accounts.game_state.moves_remaining = moves_remaining;
+            Ok(())
+        }
     }
 
     /// Close a corrupted/empty GameState account (0-byte data).
@@ -3013,12 +3383,12 @@ pub mod gameplay_state {
     /// be exercised in e2e tests without requiring actual boss kills.
     /// Validates session_signer authority so it cannot be called by a random wallet.
     pub fn test_set_completed(ctx: Context<TestSetCompleted>) -> Result<()> {
-        #[cfg(not(feature = "mock-vrf"))]
+        #[cfg(not(feature = "test-helpers"))]
         {
             let _ = ctx;
-            return Err(GameplayStateError::TestOnlyInstructionDisabled.into());
+            Err(GameplayStateError::TestOnlyInstructionDisabled.into())
         }
-        #[cfg(feature = "mock-vrf")]
+        #[cfg(feature = "test-helpers")]
         {
             ctx.accounts.game_state.completed = true;
             ctx.accounts.game_state.boss_fight_ready = false;
@@ -3035,18 +3405,102 @@ pub mod gameplay_state {
     /// Used in e2e tests to keep the player alive through night enemy encounters
     /// so the boss fight path can be tested.
     pub fn test_set_hp(ctx: Context<TestSetCompleted>, hp: i16) -> Result<()> {
-        #[cfg(not(feature = "mock-vrf"))]
+        #[cfg(not(feature = "test-helpers"))]
         {
             let _ = (ctx, hp);
-            return Err(GameplayStateError::TestOnlyInstructionDisabled.into());
+            Err(GameplayStateError::TestOnlyInstructionDisabled.into())
         }
-        #[cfg(feature = "mock-vrf")]
+        #[cfg(feature = "test-helpers")]
         {
             ctx.accounts.game_state.hp = hp;
             ctx.accounts.game_state.is_dead = false;
             Ok(())
         }
     }
+
+    /// TEST-ONLY: Shortens the active gauntlet epoch duration for local/e2e tests.
+    pub fn set_gauntlet_epoch_duration_for_testing(
+        ctx: Context<SetGauntletEpochDurationForTesting>,
+        duration_seconds: i64,
+    ) -> Result<()> {
+        #[cfg(not(feature = "test-helpers"))]
+        {
+            let _ = (ctx, duration_seconds);
+            Err(GameplayStateError::TestOnlyInstructionDisabled.into())
+        }
+        #[cfg(feature = "test-helpers")]
+        {
+            if duration_seconds <= 0 {
+                return Err(ProgramError::InvalidArgument.into());
+            }
+            ctx.accounts.gauntlet_config.epoch_duration_seconds = duration_seconds;
+            Ok(())
+        }
+    }
+
+    /// TEST-ONLY: Stages pending defender credits without requiring a full echo-defeat setup.
+    pub fn stage_gauntlet_defender_points_for_testing(
+        ctx: Context<StageGauntletDefenderPointsForTesting>,
+        epoch_id: u64,
+        points: u64,
+    ) -> Result<()> {
+        #[cfg(not(feature = "test-helpers"))]
+        {
+            let _ = (ctx, epoch_id, points);
+            Err(GameplayStateError::TestOnlyInstructionDisabled.into())
+        }
+        #[cfg(feature = "test-helpers")]
+        {
+            let epoch_pool = &mut ctx.accounts.gauntlet_epoch_pool;
+            if !epoch_pool.initialized {
+                epoch_pool.epoch_id = epoch_id;
+                epoch_pool.total_pool_lamports = 0;
+                epoch_pool.total_points = 0;
+                epoch_pool.pending_defender_points = Vec::new();
+                epoch_pool.initialized = true;
+                epoch_pool.finalized = false;
+                epoch_pool.bump = ctx.bumps.gauntlet_epoch_pool;
+            }
+
+            require!(
+                epoch_pool.epoch_id == epoch_id,
+                GameplayStateError::GauntletScoreMismatch
+            );
+            add_pending_defender_points(epoch_pool, ctx.accounts.player.key(), points)?;
+            epoch_pool.total_points = epoch_pool
+                .total_points
+                .checked_add(points)
+                .ok_or(GameplayStateError::ArithmeticOverflow)?;
+            Ok(())
+        }
+    }
+
+    /// Processes undelegation (replaces #[ephemeral] macro output).
+    pub fn process_undelegation(ctx: Context<InitializeAfterUndelegation>, account_seeds: Vec<Vec<u8>>) -> Result<()> {
+        er_compat::undelegate_account(
+            &ctx.accounts.base_account,
+            &crate::id(),
+            &ctx.accounts.buffer,
+            &ctx.accounts.payer,
+            &ctx.accounts.system_program,
+            account_seeds,
+        )
+    }
+}
+
+/// Context for undelegation processing (replaces #[ephemeral] macro output).
+#[derive(Accounts)]
+pub struct InitializeAfterUndelegation<'info> {
+    /// CHECK: Account being undelegated
+    #[account(mut)]
+    pub base_account: UncheckedAccount<'info>,
+    /// CHECK: Delegation buffer
+    pub buffer: UncheckedAccount<'info>,
+    /// CHECK: Payer
+    #[account(mut)]
+    pub payer: UncheckedAccount<'info>,
+    /// CHECK: System program
+    pub system_program: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -3056,74 +3510,326 @@ pub struct TestSetCompleted<'info> {
     pub session_signer: Signer<'info>,
 }
 
-#[delegate]
+#[derive(Accounts)]
+pub struct SetGauntletEpochDurationForTesting<'info> {
+    #[account(
+        mut,
+        seeds = [GAUNTLET_CONFIG_SEED],
+        bump = gauntlet_config.bump
+    )]
+    pub gauntlet_config: Account<'info, GauntletConfig>,
+    pub payer: Signer<'info>,
+}
+
+#[derive(Accounts)]
+#[instruction(epoch_id: u64)]
+pub struct StageGauntletDefenderPointsForTesting<'info> {
+    #[account(
+        init_if_needed,
+        payer = payer,
+        space = 8 + GauntletEpochPool::INIT_SPACE,
+        seeds = [GAUNTLET_EPOCH_POOL_SEED, &epoch_id.to_le_bytes()],
+        bump
+    )]
+    pub gauntlet_epoch_pool: Account<'info, GauntletEpochPool>,
+    /// CHECK: Canonical beneficiary wallet for staged defender points.
+    pub player: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
 #[derive(Accounts)]
 pub struct DelegateGameplayAccounts<'info> {
-    #[account(mut, del)]
+    #[account(mut)]
     /// CHECK: PDA is validated in handler.
-    pub game_state: AccountInfo<'info>,
+    pub game_state: UncheckedAccount<'info>,
     /// CHECK: Session PDA owned by session-manager; used only for seed derivation.
     pub game_session: UncheckedAccount<'info>,
     pub player: Signer<'info>,
+    /// CHECK: Buffer for delegation
+    #[account(mut, seeds = [er_compat::DELEGATE_BUFFER_TAG, game_state.key().as_ref()], bump, seeds::program = crate::id())]
+    pub buffer_game_state: UncheckedAccount<'info>,
+    /// CHECK: Delegation record
+    #[account(mut, seeds = [er_compat::DELEGATION_RECORD_TAG, game_state.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_record_game_state: UncheckedAccount<'info>,
+    /// CHECK: Delegation metadata
+    #[account(mut, seeds = [er_compat::DELEGATION_METADATA_TAG, game_state.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_metadata_game_state: UncheckedAccount<'info>,
+    /// CHECK: Owner program
+    #[account(address = crate::id())]
+    pub owner_program: UncheckedAccount<'info>,
+    /// CHECK: Delegation program
+    #[account(address = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
-#[delegate]
 #[derive(Accounts)]
 pub struct DelegateGauntletEchoes<'info> {
-    #[account(mut, del)]
+    #[account(mut)]
     /// CHECK: PDA is validated in handler.
-    pub gauntlet_echoes: AccountInfo<'info>,
+    pub gauntlet_echoes: UncheckedAccount<'info>,
     /// CHECK: Session PDA owned by session-manager; used only for seed derivation.
     pub game_session: UncheckedAccount<'info>,
     pub player: Signer<'info>,
+    /// CHECK: Buffer for delegation
+    #[account(mut, seeds = [er_compat::DELEGATE_BUFFER_TAG, gauntlet_echoes.key().as_ref()], bump, seeds::program = crate::id())]
+    pub buffer_gauntlet_echoes: UncheckedAccount<'info>,
+    /// CHECK: Delegation record
+    #[account(mut, seeds = [er_compat::DELEGATION_RECORD_TAG, gauntlet_echoes.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_record_gauntlet_echoes: UncheckedAccount<'info>,
+    /// CHECK: Delegation metadata
+    #[account(mut, seeds = [er_compat::DELEGATION_METADATA_TAG, gauntlet_echoes.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_metadata_gauntlet_echoes: UncheckedAccount<'info>,
+    /// CHECK: Owner program
+    #[account(address = crate::id())]
+    pub owner_program: UncheckedAccount<'info>,
+    /// CHECK: Delegation program
+    #[account(address = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
-#[commit]
+#[derive(Accounts)]
+#[instruction(epoch_id: u64)]
+pub struct DelegateGauntletGlobalAccounts<'info> {
+    #[account(mut)]
+    /// CHECK: PDA validated in handler.
+    pub gauntlet_config: UncheckedAccount<'info>,
+    #[account(mut)]
+    /// CHECK: PDA validated in handler.
+    pub gauntlet_pool_vault: UncheckedAccount<'info>,
+    #[account(mut)]
+    /// CHECK: PDA validated in handler.
+    pub gauntlet_epoch_pool: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    /// CHECK: Buffer for delegation (gauntlet_config)
+    #[account(mut, seeds = [er_compat::DELEGATE_BUFFER_TAG, gauntlet_config.key().as_ref()], bump, seeds::program = crate::id())]
+    pub buffer_gauntlet_config: UncheckedAccount<'info>,
+    /// CHECK: Delegation record (gauntlet_config)
+    #[account(mut, seeds = [er_compat::DELEGATION_RECORD_TAG, gauntlet_config.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_record_gauntlet_config: UncheckedAccount<'info>,
+    /// CHECK: Delegation metadata (gauntlet_config)
+    #[account(mut, seeds = [er_compat::DELEGATION_METADATA_TAG, gauntlet_config.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_metadata_gauntlet_config: UncheckedAccount<'info>,
+    /// CHECK: Buffer for delegation (gauntlet_pool_vault)
+    #[account(mut, seeds = [er_compat::DELEGATE_BUFFER_TAG, gauntlet_pool_vault.key().as_ref()], bump, seeds::program = crate::id())]
+    pub buffer_gauntlet_pool_vault: UncheckedAccount<'info>,
+    /// CHECK: Delegation record (gauntlet_pool_vault)
+    #[account(mut, seeds = [er_compat::DELEGATION_RECORD_TAG, gauntlet_pool_vault.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_record_gauntlet_pool_vault: UncheckedAccount<'info>,
+    /// CHECK: Delegation metadata (gauntlet_pool_vault)
+    #[account(mut, seeds = [er_compat::DELEGATION_METADATA_TAG, gauntlet_pool_vault.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_metadata_gauntlet_pool_vault: UncheckedAccount<'info>,
+    /// CHECK: Buffer for delegation (gauntlet_epoch_pool)
+    #[account(mut, seeds = [er_compat::DELEGATE_BUFFER_TAG, gauntlet_epoch_pool.key().as_ref()], bump, seeds::program = crate::id())]
+    pub buffer_gauntlet_epoch_pool: UncheckedAccount<'info>,
+    /// CHECK: Delegation record (gauntlet_epoch_pool)
+    #[account(mut, seeds = [er_compat::DELEGATION_RECORD_TAG, gauntlet_epoch_pool.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_record_gauntlet_epoch_pool: UncheckedAccount<'info>,
+    /// CHECK: Delegation metadata (gauntlet_epoch_pool)
+    #[account(mut, seeds = [er_compat::DELEGATION_METADATA_TAG, gauntlet_epoch_pool.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_metadata_gauntlet_epoch_pool: UncheckedAccount<'info>,
+    /// CHECK: Owner program
+    #[account(address = crate::id())]
+    pub owner_program: UncheckedAccount<'info>,
+    /// CHECK: Delegation program
+    #[account(address = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(epoch_id: u64)]
+pub struct DelegateGauntletRewardAccounts<'info> {
+    #[account(mut)]
+    /// CHECK: PDA validated in handler.
+    pub gauntlet_player_score: UncheckedAccount<'info>,
+    #[account(mut)]
+    /// CHECK: PDA validated in handler.
+    pub gauntlet_reward_record: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    /// CHECK: canonical player wallet used only for PDA derivation in the handler.
+    pub player_wallet: UncheckedAccount<'info>,
+    /// CHECK: Buffer for delegation (gauntlet_player_score)
+    #[account(mut, seeds = [er_compat::DELEGATE_BUFFER_TAG, gauntlet_player_score.key().as_ref()], bump, seeds::program = crate::id())]
+    pub buffer_gauntlet_player_score: UncheckedAccount<'info>,
+    /// CHECK: Delegation record (gauntlet_player_score)
+    #[account(mut, seeds = [er_compat::DELEGATION_RECORD_TAG, gauntlet_player_score.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_record_gauntlet_player_score: UncheckedAccount<'info>,
+    /// CHECK: Delegation metadata (gauntlet_player_score)
+    #[account(mut, seeds = [er_compat::DELEGATION_METADATA_TAG, gauntlet_player_score.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_metadata_gauntlet_player_score: UncheckedAccount<'info>,
+    /// CHECK: Buffer for delegation (gauntlet_reward_record)
+    #[account(mut, seeds = [er_compat::DELEGATE_BUFFER_TAG, gauntlet_reward_record.key().as_ref()], bump, seeds::program = crate::id())]
+    pub buffer_gauntlet_reward_record: UncheckedAccount<'info>,
+    /// CHECK: Delegation record (gauntlet_reward_record)
+    #[account(mut, seeds = [er_compat::DELEGATION_RECORD_TAG, gauntlet_reward_record.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_record_gauntlet_reward_record: UncheckedAccount<'info>,
+    /// CHECK: Delegation metadata (gauntlet_reward_record)
+    #[account(mut, seeds = [er_compat::DELEGATION_METADATA_TAG, gauntlet_reward_record.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_metadata_gauntlet_reward_record: UncheckedAccount<'info>,
+    /// CHECK: Owner program
+    #[account(address = crate::id())]
+    pub owner_program: UncheckedAccount<'info>,
+    /// CHECK: Delegation program
+    #[account(address = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(epoch_id: u64, args: ScheduleCrankArgs)]
+pub struct ScheduleGauntletEpochCrank<'info> {
+    /// CHECK: used for CPI to MagicBlock
+    #[account(address = er_compat::MAGIC_PROGRAM_ID)]
+    pub magic_program: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    /// CHECK: task context for scheduled task
+    #[account(mut, seeds = [GAUNTLET_CONFIG_SEED], bump)]
+    pub gauntlet_config: UncheckedAccount<'info>,
+    /// CHECK: fixed task account
+    #[account(mut, seeds = [GAUNTLET_POOL_VAULT_SEED], bump)]
+    pub gauntlet_pool_vault: UncheckedAccount<'info>,
+    /// CHECK: fixed task account
+    #[account(mut, seeds = [GAUNTLET_EPOCH_POOL_SEED, &epoch_id.to_le_bytes()], bump)]
+    pub gauntlet_epoch_pool: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
+#[instruction(epoch_id: u64, args: ScheduleCrankArgs)]
+pub struct ScheduleGauntletPlayerRewardCrank<'info> {
+    /// CHECK: used for CPI to MagicBlock
+    #[account(address = er_compat::MAGIC_PROGRAM_ID)]
+    pub magic_program: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    /// CHECK: task context for scheduled task
+    #[account(mut, seeds = [GAUNTLET_REWARD_RECORD_SEED, &epoch_id.to_le_bytes(), player_wallet.key().as_ref()], bump)]
+    pub gauntlet_reward_record: UncheckedAccount<'info>,
+    /// CHECK: fixed task account
+    #[account(mut, seeds = [GAUNTLET_EPOCH_POOL_SEED, &epoch_id.to_le_bytes()], bump)]
+    pub gauntlet_epoch_pool: UncheckedAccount<'info>,
+    /// CHECK: fixed task account
+    #[account(mut, seeds = [GAUNTLET_PLAYER_SCORE_SEED, &epoch_id.to_le_bytes(), player_wallet.key().as_ref()], bump)]
+    pub gauntlet_player_score: UncheckedAccount<'info>,
+    /// CHECK: canonical player wallet used only for PDA derivation in the schedule path.
+    pub player_wallet: UncheckedAccount<'info>,
+}
+
 #[derive(Accounts)]
 pub struct UndelegateGameplayAccounts<'info> {
     #[account(mut)]
     /// CHECK: PDA is validated and deserialized in handler.
-    pub game_state: AccountInfo<'info>,
+    pub game_state: UncheckedAccount<'info>,
     /// CHECK: Session PDA used only for deterministic PDA validation.
     pub game_session: UncheckedAccount<'info>,
     #[account(mut)]
     pub session_signer: Signer<'info>,
+    /// CHECK: Magic program
+    #[account(address = er_compat::MAGIC_PROGRAM_ID)]
+    pub magic_program: UncheckedAccount<'info>,
+    /// CHECK: Magic context
+    #[account(mut, address = er_compat::MAGIC_CONTEXT_ID)]
+    pub magic_context: UncheckedAccount<'info>,
 }
 
-#[commit]
 #[derive(Accounts)]
 pub struct UndelegateGameplayVrfState<'info> {
     #[account(mut)]
     /// CHECK: PDA is validated in handler.
-    pub gameplay_vrf_state: AccountInfo<'info>,
+    pub gameplay_vrf_state: UncheckedAccount<'info>,
     /// CHECK: Session PDA used only for deterministic PDA validation.
     pub game_session: UncheckedAccount<'info>,
     #[account(mut)]
     pub session_signer: Signer<'info>,
+    /// CHECK: Magic program
+    #[account(address = er_compat::MAGIC_PROGRAM_ID)]
+    pub magic_program: UncheckedAccount<'info>,
+    /// CHECK: Magic context
+    #[account(mut, address = er_compat::MAGIC_CONTEXT_ID)]
+    pub magic_context: UncheckedAccount<'info>,
 }
 
-#[commit]
 #[derive(Accounts)]
 pub struct UndelegateGauntletEchoes<'info> {
     #[account(mut)]
     /// CHECK: PDA is validated in handler.
-    pub gauntlet_echoes: AccountInfo<'info>,
+    pub gauntlet_echoes: UncheckedAccount<'info>,
     /// CHECK: Session PDA used only for deterministic PDA validation.
     pub game_session: UncheckedAccount<'info>,
     #[account(mut)]
     pub session_signer: Signer<'info>,
+    /// CHECK: Magic program
+    #[account(address = er_compat::MAGIC_PROGRAM_ID)]
+    pub magic_program: UncheckedAccount<'info>,
+    /// CHECK: Magic context
+    #[account(mut, address = er_compat::MAGIC_CONTEXT_ID)]
+    pub magic_context: UncheckedAccount<'info>,
 }
 
-#[commit]
+#[derive(Accounts)]
+#[instruction(epoch_id: u64)]
+pub struct UndelegateGauntletGlobalAccounts<'info> {
+    #[account(mut)]
+    /// CHECK: PDA validated in handler.
+    pub gauntlet_config: UncheckedAccount<'info>,
+    #[account(mut)]
+    /// CHECK: PDA validated in handler.
+    pub gauntlet_pool_vault: UncheckedAccount<'info>,
+    #[account(mut)]
+    /// CHECK: PDA validated in handler.
+    pub gauntlet_epoch_pool: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    /// CHECK: Magic program
+    #[account(address = er_compat::MAGIC_PROGRAM_ID)]
+    pub magic_program: UncheckedAccount<'info>,
+    /// CHECK: Magic context
+    #[account(mut, address = er_compat::MAGIC_CONTEXT_ID)]
+    pub magic_context: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
+#[instruction(epoch_id: u64)]
+pub struct UndelegateGauntletRewardAccounts<'info> {
+    #[account(mut)]
+    /// CHECK: PDA validated in handler.
+    pub gauntlet_player_score: UncheckedAccount<'info>,
+    #[account(mut)]
+    /// CHECK: PDA validated in handler.
+    pub gauntlet_reward_record: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    /// CHECK: canonical player wallet used only for PDA derivation in the handler.
+    pub player_wallet: UncheckedAccount<'info>,
+    /// CHECK: Magic program
+    #[account(address = er_compat::MAGIC_PROGRAM_ID)]
+    pub magic_program: UncheckedAccount<'info>,
+    /// CHECK: Magic context
+    #[account(mut, address = er_compat::MAGIC_CONTEXT_ID)]
+    pub magic_context: UncheckedAccount<'info>,
+}
+
 #[derive(Accounts)]
 pub struct UndelegateGameState<'info> {
     #[account(mut)]
     /// CHECK: PDA is validated and deserialized in handler.
-    pub game_state: AccountInfo<'info>,
+    pub game_state: UncheckedAccount<'info>,
     /// CHECK: Session PDA used only for deterministic PDA validation.
     pub game_session: UncheckedAccount<'info>,
     #[account(mut)]
     pub session_signer: Signer<'info>,
+    /// CHECK: Magic program
+    #[account(address = er_compat::MAGIC_PROGRAM_ID)]
+    pub magic_program: UncheckedAccount<'info>,
+    /// CHECK: Magic context
+    #[account(mut, address = er_compat::MAGIC_CONTEXT_ID)]
+    pub magic_context: UncheckedAccount<'info>,
 }
 
 // UndelegateMapEnemies removed — MapEnemies merged into GameState
@@ -3325,16 +4031,113 @@ fn build_pit_draft_inventory_vrf(
         session: Pubkey::default(),
         player,
         tool: Some(tool),
+        tool_relic_asset: None,
         gear,
+        gear_relic_assets: [None; 12],
         gear_slot_capacity: MAX_GEAR_SLOTS,
         bump: 0,
     })
 }
 
+#[inline(never)]
+fn resolve_pit_draft_match<'info>(
+    pit_draft_vault: AccountInfo<'info>,
+    entrant_wallet: AccountInfo<'info>,
+    entrant_pool: [u8; 10],
+    waiting_player: Pubkey,
+    waiting_pool: [u8; 10],
+    waiting_player_wallet: AccountInfo<'info>,
+    company_treasury: AccountInfo<'info>,
+    gauntlet_pool_vault: AccountInfo<'info>,
+    randomness: &[u8; 32],
+    nonce: u64,
+) -> Result<()> {
+    let waiting_inventory = Box::new(build_pit_draft_inventory_vrf(
+        waiting_player,
+        waiting_pool,
+        (randomness, nonce),
+        b"pit_waiting",
+    )?);
+    let entrant_inventory = Box::new(build_pit_draft_inventory_vrf(
+        entrant_wallet.key(),
+        entrant_pool,
+        (randomness, nonce),
+        b"pit_entrant",
+    )?);
+
+    let waiting_stats = calculate_stats(&waiting_inventory, GAUNTLET_CAMPAIGN_LEVEL, RunMode::Duel);
+    let entrant_stats = calculate_stats(&entrant_inventory, GAUNTLET_CAMPAIGN_LEVEL, RunMode::Duel);
+
+    let mut gold_rng =
+        vrf_rng::GameRng::from_vrf(randomness, nonce, vrf_rng::domains::PIT_DRAFT_GOLD);
+    let waiting_start_gold = gold_rng.next_bounded(u64::from(PIT_DRAFT_MAX_START_GOLD) + 1) as u16;
+    let entrant_start_gold = gold_rng.next_bounded(u64::from(PIT_DRAFT_MAX_START_GOLD) + 1) as u16;
+
+    let all_waiting_effects = generate_annotated_combat_effects(&waiting_inventory);
+    let all_entrant_effects = generate_annotated_combat_effects(&entrant_inventory);
+    let waiting_combatant = build_full_hp_combatant(&waiting_stats, &all_waiting_effects);
+    let entrant_combatant = build_full_hp_combatant(&entrant_stats, &all_entrant_effects);
+    let waiting_effects = strip_baked_battle_start_stat_effects(all_waiting_effects);
+    let entrant_effects = strip_baked_battle_start_stat_effects(all_entrant_effects);
+
+    let combat_outcome = resolve_pvp_combat_annotated_with_both_gold(
+        waiting_combatant,
+        entrant_combatant,
+        waiting_effects,
+        entrant_effects,
+        waiting_start_gold,
+        entrant_start_gold,
+        pit_draft_final_tie_player_a_wins(randomness, nonce),
+    )?;
+
+    emit!(PitDraftCombatVisual {
+        player_a: waiting_player,
+        player_b: entrant_wallet.key(),
+        player_a_tool: waiting_inventory.tool,
+        player_a_gear: waiting_inventory.gear,
+        player_b_tool: entrant_inventory.tool,
+        player_b_gear: entrant_inventory.gear,
+        player_a_won: combat_outcome.player_won,
+        final_player_a_hp: combat_outcome.final_player_hp,
+        final_player_b_hp: combat_outcome.final_enemy_hp,
+        turns_taken: combat_outcome.turns_taken,
+    });
+
+    let total_pot = PIT_DRAFT_ENTRY_LAMPORTS
+        .checked_mul(2)
+        .ok_or(GameplayStateError::ArithmeticOverflow)?;
+    let (company_fee, gauntlet_fee, winner_payout) = compute_pvp_pot_split(total_pot)?;
+    if combat_outcome.player_won {
+        transfer_lamports_from_vault(&pit_draft_vault, &waiting_player_wallet, winner_payout)?;
+    } else {
+        transfer_lamports_from_vault(&pit_draft_vault, &entrant_wallet, winner_payout)?;
+    }
+    transfer_lamports_from_vault(&pit_draft_vault, &company_treasury, company_fee)?;
+    transfer_lamports_from_vault(&pit_draft_vault, &gauntlet_pool_vault, gauntlet_fee)?;
+
+    emit!(PitDraftResolved {
+        player_a: waiting_player,
+        player_b: entrant_wallet.key(),
+        winner: if combat_outcome.player_won {
+            waiting_player
+        } else {
+            entrant_wallet.key()
+        },
+        entry_lamports: PIT_DRAFT_ENTRY_LAMPORTS,
+        total_pot,
+        winner_payout,
+        company_fee,
+        gauntlet_fee,
+        turns_taken: combat_outcome.turns_taken,
+    });
+
+    Ok(())
+}
+
 /// Extracts VRF randomness from an optional GameplayVrfState account.
 /// Returns None if account is absent. Validates session match and fulfilled status.
 fn extract_gameplay_vrf(
-    vrf_account: &Option<Account<GameplayVrfState>>,
+    vrf_account: &Option<Box<Account<GameplayVrfState>>>,
     session_key: &Pubkey,
 ) -> Result<Option<([u8; 32], u64)>> {
     let vrf = match vrf_account {
@@ -3356,11 +4159,11 @@ fn pit_draft_final_tie_player_a_wins(randomness: &[u8; 32], nonce: u64) -> bool 
 }
 
 fn duel_final_tie_player_a_wins(seed: u64) -> bool {
-    seed % 2 == 0
+    seed.is_multiple_of(2)
 }
 
 fn gauntlet_final_tie_player_wins(map_seed: u64) -> bool {
-    map_seed % 2 == 0
+    map_seed.is_multiple_of(2)
 }
 
 /// VRF-backed gauntlet echo draw.
@@ -3538,6 +4341,7 @@ fn compute_eliminated_unmatched_distribution(entry_lamports: u64) -> Result<(u64
     Ok((company_total, gauntlet_total))
 }
 
+#[allow(dead_code)]
 fn find_matching_creator_index(queue: &DuelOpenQueue, entrant: Pubkey, seed: u64) -> Option<usize> {
     queue
         .entries
@@ -3550,7 +4354,9 @@ fn snapshot_duel_entry_inventory(entry: &DuelEntry) -> PlayerInventory {
         player: entry.player,
         session: entry.session,
         tool: entry.loadout.tool,
+        tool_relic_asset: None,
         gear: entry.loadout.gear,
+        gear_relic_assets: [None; 12],
         gear_slot_capacity: 12,
         bump: 0,
     }
@@ -3561,7 +4367,9 @@ fn snapshot_creator_inventory(entry: DuelCreatorEntry) -> PlayerInventory {
         player: entry.player,
         session: Pubkey::default(),
         tool: entry.loadout.tool,
+        tool_relic_asset: None,
         gear: entry.loadout.gear,
+        gear_relic_assets: [None; 12],
         gear_slot_capacity: 12,
         bump: 0,
     }
@@ -3775,7 +4583,7 @@ fn resolve_boss_fight<'info>(
     gameplay_authority: &AccountInfo<'info>,
     player_inventory_program: &AccountInfo<'info>,
     gameplay_authority_bump: u8,
-    vrf: Option<(&[u8; 32], u64)>,
+    _vrf: Option<(&[u8; 32], u64)>,
     session_discovery: Option<&AccountInfo<'info>>,
     session: Option<&AccountInfo<'info>>,
     map_generator_program: Option<&AccountInfo<'info>>,
@@ -3908,7 +4716,7 @@ fn resolve_boss_fight<'info>(
                     let echo_idx = (game_state.week as usize).saturating_sub(1);
                     if let Some(Some(echo)) = gauntlet_echoes.and_then(|ge| ge.echoes.get(echo_idx))
                     {
-                        let echo_bytes = echo.try_to_vec().unwrap_or_default();
+                        let echo_bytes = borsh::to_vec(&echo).unwrap_or_default();
                         let mut echo_data = [0u8; 179];
                         let copy_len = echo_bytes.len().min(179);
                         echo_data[..copy_len].copy_from_slice(&echo_bytes[..copy_len]);
@@ -4108,7 +4916,7 @@ fn expand_gear_slots_cpi<'info>(
     let signer_seeds: &[&[&[u8]]] = &[&[GAMEPLAY_AUTHORITY_SEED, &[gameplay_authority_bump]]];
 
     player_inventory::cpi::expand_gear_slots_authorized(CpiContext::new_with_signer(
-        player_inventory_program.clone(),
+        player_inventory_program.key(),
         player_inventory::cpi::accounts::ExpandGearSlotsAuthorized {
             inventory: inventory.clone(),
             gameplay_authority: gameplay_authority.clone(),
@@ -4135,7 +4943,7 @@ fn set_tile_floor_cpi<'info>(
 
     map_generator::cpi::set_tile_floor(
         CpiContext::new_with_signer(
-            map_generator_program.clone(),
+            map_generator_program.key(),
             map_generator::cpi::accounts::SetTileFloor {
                 generated_map: generated_map.clone(),
                 session: session.clone(),
@@ -4163,7 +4971,7 @@ fn reveal_radius_cpi<'info>(
 ) -> Result<()> {
     map_generator::cpi::reveal_radius(
         CpiContext::new(
-            map_generator_program.clone(),
+            map_generator_program.key(),
             map_generator::cpi::accounts::RevealRadius {
                 generated_map: generated_map.clone(),
                 session: session.clone(),
@@ -4255,7 +5063,7 @@ fn update_discovered_enemies_cpi<'info>(
 
     map_generator::cpi::update_discovered_enemies(
         CpiContext::new_with_signer(
-            map_generator_program.clone(),
+            map_generator_program.key(),
             map_generator::cpi::accounts::UpdateDiscoveredEnemies {
                 session_discovery: session_discovery.clone(),
                 session: session.clone(),
@@ -4281,7 +5089,7 @@ fn update_boss_id_cpi<'info>(
 
     map_generator::cpi::update_boss_id(
         CpiContext::new_with_signer(
-            map_generator_program.clone(),
+            map_generator_program.key(),
             map_generator::cpi::accounts::UpdateBossId {
                 session_discovery: session_discovery.clone(),
                 session: session.clone(),
@@ -4308,7 +5116,7 @@ fn update_current_echo_cpi<'info>(
 
     map_generator::cpi::update_current_echo(
         CpiContext::new_with_signer(
-            map_generator_program.clone(),
+            map_generator_program.key(),
             map_generator::cpi::accounts::UpdateCurrentEcho {
                 session_discovery: session_discovery.clone(),
                 session: session.clone(),
@@ -4490,9 +5298,9 @@ fn item_index_by_type(item_type: ItemType, nth: usize) -> Option<usize> {
 
 fn should_resolve_weekly_boss(run_mode: RunMode, _week: u8) -> bool {
     match run_mode {
-        RunMode::Campaign => true,
-        // Duel and Gauntlet: boss/echo resolved via trigger_boss_fight (separate TX)
-        // to avoid CU/heap exhaustion in move_player's Night3 inline path.
+        // All modes: boss resolved via trigger_boss_fight (separate TX)
+        // to avoid heap exhaustion (32KB limit) in move_player's Night3 inline path.
+        RunMode::Campaign => false,
         RunMode::Duel => false,
         RunMode::Gauntlet => false,
     }
@@ -4543,7 +5351,9 @@ fn snapshot_to_inventory(
         session,
         player,
         tool: snapshot.loadout.tool,
+        tool_relic_asset: None,
         gear: snapshot.loadout.gear,
+        gear_relic_assets: [None; 12],
         gear_slot_capacity: MAX_GEAR_SLOTS,
         bump: 0,
     }
@@ -4595,6 +5405,142 @@ fn upsert_player_score(
         .points
         .checked_add(add_points)
         .ok_or(GameplayStateError::ArithmeticOverflow)?;
+    Ok(())
+}
+
+fn initialize_reward_record_if_needed(
+    reward_record: &mut Account<GauntletRewardRecord>,
+    epoch_id: u64,
+    player: Pubkey,
+    bump: u8,
+) -> Result<()> {
+    if reward_record.player == Pubkey::default() {
+        reward_record.epoch_id = epoch_id;
+        reward_record.player = player;
+        reward_record.final_points = 0;
+        reward_record.payout_lamports = 0;
+        reward_record.settled = false;
+        reward_record.paid = false;
+        reward_record.bump = bump;
+    }
+    require!(
+        reward_record.player == player,
+        GameplayStateError::GauntletScoreMismatch
+    );
+    require!(
+        reward_record.epoch_id == epoch_id,
+        GameplayStateError::GauntletScoreMismatch
+    );
+    Ok(())
+}
+
+fn finalize_gauntlet_epoch_core(
+    config: &mut Account<GauntletConfig>,
+    epoch_pool: &mut Account<GauntletEpochPool>,
+    gauntlet_pool_vault: &AccountInfo,
+    epoch_id: u64,
+) -> Result<()> {
+    let clock = Clock::get()?;
+    require!(
+        config.current_epoch_id == epoch_id,
+        GameplayStateError::GauntletScoreMismatch
+    );
+    if clock.unix_timestamp
+        < config
+            .current_epoch_start_ts
+            .checked_add(config.epoch_duration_seconds)
+            .ok_or(GameplayStateError::ArithmeticOverflow)?
+    {
+        return Ok(());
+    }
+
+    require!(
+        epoch_pool.epoch_id == epoch_id,
+        GameplayStateError::GauntletScoreMismatch
+    );
+    epoch_pool.epoch_id = epoch_id;
+    epoch_pool.total_pool_lamports =
+        gauntlet_vault_distributable_lamports(gauntlet_pool_vault)?;
+    if epoch_pool.pending_defender_points.is_empty() {
+        epoch_pool.pending_defender_points = Vec::new();
+    }
+    epoch_pool.finalized = true;
+    config.current_epoch_id = config
+        .current_epoch_id
+        .checked_add(1)
+        .ok_or(GameplayStateError::ArithmeticOverflow)?;
+    config.current_epoch_start_ts = clock.unix_timestamp;
+
+    emit!(GauntletEpochFinalized {
+        epoch_id,
+        total_pool_lamports: epoch_pool.total_pool_lamports,
+        total_points: epoch_pool.total_points,
+    });
+    Ok(())
+}
+
+fn gauntlet_vault_distributable_lamports(gauntlet_pool_vault: &AccountInfo) -> Result<u64> {
+    let vault_rent_reserve =
+        Rent::get()?.minimum_balance(8 + GauntletPoolVault::INIT_SPACE);
+    Ok(gauntlet_pool_vault
+        .lamports()
+        .saturating_sub(vault_rent_reserve))
+}
+
+fn apply_pending_defender_points_to_score(
+    epoch_pool: &mut Account<GauntletEpochPool>,
+    player_score: &mut Account<GauntletPlayerScore>,
+    player: Pubkey,
+    epoch_id: u64,
+    bump: u8,
+) -> Result<u64> {
+    upsert_player_score(player_score, &player, epoch_id, 0, bump)?;
+    let pending_points = take_pending_defender_points(epoch_pool, player);
+    if pending_points > 0 {
+        player_score.points = player_score
+            .points
+            .checked_add(pending_points)
+            .ok_or(GameplayStateError::ArithmeticOverflow)?;
+    }
+    Ok(pending_points)
+}
+
+fn compute_gauntlet_payout(epoch_pool: &GauntletEpochPool, final_points: u64) -> Result<u64> {
+    if epoch_pool.total_points == 0 || final_points == 0 {
+        return Ok(0);
+    }
+    epoch_pool
+        .total_pool_lamports
+        .checked_mul(final_points)
+        .and_then(|v| v.checked_div(epoch_pool.total_points))
+        .ok_or(GameplayStateError::ArithmeticOverflow.into())
+}
+
+fn schedule_magicblock_task<'info>(
+    payer: &AccountInfo<'info>,
+    task_context: &AccountInfo<'info>,
+    extra_accounts: Vec<AccountInfo<'info>>,
+    args: magicblock_magic_program_api::args::ScheduleTaskArgs,
+) -> Result<()> {
+    let ix_data = bincode::serialize(&magicblock_magic_program_api::instruction::MagicBlockInstruction::ScheduleTask(args))
+        .map_err(|_| ProgramError::InvalidArgument)?;
+
+    let mut metas = vec![
+        AccountMeta::new(*payer.key, true),
+        AccountMeta::new(*task_context.key, false),
+    ];
+    for account in &extra_accounts {
+        metas.push(AccountMeta {
+            pubkey: *account.key,
+            is_signer: false,
+            is_writable: account.is_writable,
+        });
+    }
+
+    let schedule_ix = Instruction::new_with_bytes(er_compat::MAGIC_PROGRAM_ID, &ix_data, metas);
+    let mut infos = vec![payer.clone(), task_context.clone()];
+    infos.extend(extra_accounts);
+    invoke_signed(&schedule_ix, &infos, &[])?;
     Ok(())
 }
 
@@ -4655,7 +5601,7 @@ pub struct InitializeGameState<'info> {
 
     /// The linked GameSession PDA (must exist)
     /// CHECK: We only verify this account exists as validation of the session
-    pub game_session: AccountInfo<'info>,
+    pub game_session: UncheckedAccount<'info>,
 
     /// Generated map for seeding enemies
     #[account(
@@ -4666,11 +5612,11 @@ pub struct InitializeGameState<'info> {
     pub generated_map: Box<Account<'info, map_generator::state::GeneratedMap>>,
 
     /// CHECK: Player wallet pubkey stored in game_state.player; does not need to sign.
-    pub player: AccountInfo<'info>,
+    pub player: UncheckedAccount<'info>,
 
     /// CHECK: Session key signer whose pubkey is stored in game_state.session_signer
     /// for authorizing gameplay transactions (move, boss fight).
-    pub session_signer: AccountInfo<'info>,
+    pub session_signer: UncheckedAccount<'info>,
 
     /// Account that pays for the GameState account rent (session_signer in CPI flows).
     #[account(mut)]
@@ -4710,11 +5656,11 @@ pub struct SyncMapEnemies<'info> {
 
     /// CHECK: Validated by POI system during CPI discovery.
     #[account(mut)]
-    pub map_pois: AccountInfo<'info>,
+    pub map_pois: UncheckedAccount<'info>,
 
     /// CHECK: Must be the poi-system program.
     #[account(address = POI_SYSTEM_PROGRAM_ID)]
-    pub poi_system_program: AccountInfo<'info>,
+    pub poi_system_program: UncheckedAccount<'info>,
 
     /// Gameplay authority PDA for signing CPI calls to map-generator
     /// CHECK: This is a PDA derived from gameplay_state program, validated by seeds
@@ -4722,7 +5668,7 @@ pub struct SyncMapEnemies<'info> {
         seeds = [GAMEPLAY_AUTHORITY_SEED],
         bump,
     )]
-    pub gameplay_authority: AccountInfo<'info>,
+    pub gameplay_authority: UncheckedAccount<'info>,
 
     /// Map generator program for CPI (update_boss_id, update_current_echo, update_discovered_enemies)
     pub map_generator_program: Program<'info, map_generator::program::MapGenerator>,
@@ -4733,14 +5679,14 @@ pub struct SyncMapEnemies<'info> {
     pub session_discovery: Option<UncheckedAccount<'info>>,
 
     /// Optional GameplayVrfState for VRF-backed duel boss selection.
-    pub gameplay_vrf_state: Option<Account<'info, GameplayVrfState>>,
+    pub gameplay_vrf_state: Option<Box<Account<'info, GameplayVrfState>>>,
 
     /// Optional GauntletEchoes for echo sync to SessionDiscovery.
     #[account(
         seeds = [GAUNTLET_ECHOES_SEED, session.key().as_ref()],
         bump = gauntlet_echoes.bump,
     )]
-    pub gauntlet_echoes: Option<Account<'info, GauntletEchoes>>,
+    pub gauntlet_echoes: Option<Box<Account<'info, GauntletEchoes>>>,
 }
 
 /// Read-only context for refreshing discovered enemies in SessionDiscovery.
@@ -4777,7 +5723,7 @@ pub struct RefreshDiscoveredEnemies<'info> {
         seeds = [GAMEPLAY_AUTHORITY_SEED],
         bump,
     )]
-    pub gameplay_authority: AccountInfo<'info>,
+    pub gameplay_authority: UncheckedAccount<'info>,
 
     /// Map generator program for CPI (update_discovered_enemies).
     pub map_generator_program: Program<'info, map_generator::program::MapGenerator>,
@@ -4827,7 +5773,7 @@ pub struct RefreshDiscoveredEnemiesAuthorized<'info> {
         seeds = [GAMEPLAY_AUTHORITY_SEED],
         bump,
     )]
-    pub gameplay_authority: AccountInfo<'info>,
+    pub gameplay_authority: UncheckedAccount<'info>,
 
     /// Map generator program for CPI (update_discovered_enemies).
     pub map_generator_program: Program<'info, map_generator::program::MapGenerator>,
@@ -4899,28 +5845,54 @@ pub struct InitializeDuels<'info> {
     pub system_program: Program<'info, System>,
 }
 
-#[delegate]
 #[derive(Accounts)]
 pub struct DelegateDuelEntry<'info> {
-    /// CHECK: Validated in handler as DuelEntry PDA. Must be AccountInfo to avoid
-    /// Anchor serialization crash after delegation changes the owner.
-    #[account(mut, del)]
-    pub duel_entry: AccountInfo<'info>,
-
+    /// CHECK: Validated in handler as DuelEntry PDA.
+    #[account(mut)]
+    pub duel_entry: UncheckedAccount<'info>,
     #[account(mut)]
     pub player: Signer<'info>,
+    /// CHECK: Buffer for delegation
+    #[account(mut, seeds = [er_compat::DELEGATE_BUFFER_TAG, duel_entry.key().as_ref()], bump, seeds::program = crate::id())]
+    pub buffer_duel_entry: UncheckedAccount<'info>,
+    /// CHECK: Delegation record
+    #[account(mut, seeds = [er_compat::DELEGATION_RECORD_TAG, duel_entry.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_record_duel_entry: UncheckedAccount<'info>,
+    /// CHECK: Delegation metadata
+    #[account(mut, seeds = [er_compat::DELEGATION_METADATA_TAG, duel_entry.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_metadata_duel_entry: UncheckedAccount<'info>,
+    /// CHECK: Owner program
+    #[account(address = crate::id())]
+    pub owner_program: UncheckedAccount<'info>,
+    /// CHECK: Delegation program
+    #[account(address = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
-#[delegate]
 #[derive(Accounts)]
 pub struct DelegateDuelErQueue<'info> {
-    /// CHECK: Validated in handler as DuelErQueue PDA. Must be AccountInfo to avoid
-    /// Anchor serialization crash after delegation changes the owner.
-    #[account(mut, del)]
-    pub duel_er_queue: AccountInfo<'info>,
-
+    /// CHECK: Validated in handler as DuelErQueue PDA.
+    #[account(mut)]
+    pub duel_er_queue: UncheckedAccount<'info>,
     #[account(mut)]
     pub admin: Signer<'info>,
+    /// CHECK: Buffer for delegation
+    #[account(mut, seeds = [er_compat::DELEGATE_BUFFER_TAG, duel_er_queue.key().as_ref()], bump, seeds::program = crate::id())]
+    pub buffer_duel_er_queue: UncheckedAccount<'info>,
+    /// CHECK: Delegation record
+    #[account(mut, seeds = [er_compat::DELEGATION_RECORD_TAG, duel_er_queue.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_record_duel_er_queue: UncheckedAccount<'info>,
+    /// CHECK: Delegation metadata
+    #[account(mut, seeds = [er_compat::DELEGATION_METADATA_TAG, duel_er_queue.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_metadata_duel_er_queue: UncheckedAccount<'info>,
+    /// CHECK: Owner program
+    #[account(address = crate::id())]
+    pub owner_program: UncheckedAccount<'info>,
+    /// CHECK: Delegation program
+    #[account(address = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
@@ -5071,7 +6043,7 @@ pub struct EnterGauntlet<'info> {
         seeds = [GAUNTLET_EPOCH_POOL_SEED, &epoch_id.to_le_bytes()],
         bump
     )]
-    pub gauntlet_epoch_pool: Account<'info, GauntletEpochPool>,
+    pub gauntlet_epoch_pool: Box<Account<'info, GauntletEpochPool>>,
 
     #[account(
         init_if_needed,
@@ -5080,7 +6052,16 @@ pub struct EnterGauntlet<'info> {
         seeds = [GAUNTLET_PLAYER_SCORE_SEED, &epoch_id.to_le_bytes(), player.key().as_ref()],
         bump
     )]
-    pub gauntlet_player_score: Account<'info, GauntletPlayerScore>,
+    pub gauntlet_player_score: Box<Account<'info, GauntletPlayerScore>>,
+
+    #[account(
+        init_if_needed,
+        payer = player,
+        space = 8 + GauntletRewardRecord::INIT_SPACE,
+        seeds = [GAUNTLET_REWARD_RECORD_SEED, &epoch_id.to_le_bytes(), player.key().as_ref()],
+        bump
+    )]
+    pub gauntlet_reward_record: Box<Account<'info, GauntletRewardRecord>>,
 
     #[account(
         init,
@@ -5089,7 +6070,7 @@ pub struct EnterGauntlet<'info> {
         seeds = [GAUNTLET_ECHOES_SEED, game_state.session.as_ref()],
         bump
     )]
-    pub gauntlet_echoes: Account<'info, GauntletEchoes>,
+    pub gauntlet_echoes: Box<Account<'info, GauntletEchoes>>,
 
     pub system_program: Program<'info, System>,
 }
@@ -5113,13 +6094,41 @@ pub struct RedrawGauntletEchoes<'info> {
     pub gauntlet_echoes: Account<'info, GauntletEchoes>,
 
     /// GameplayVrfState with fulfilled randomness (required).
-    pub gameplay_vrf_state: Option<Account<'info, GameplayVrfState>>,
+    pub gameplay_vrf_state: Option<Box<Account<'info, GameplayVrfState>>>,
     // Week pools 1-5 passed as remaining_accounts.
 }
 
 #[derive(Accounts)]
 #[instruction(epoch_id: u64)]
 pub struct FinalizeGauntletEpoch<'info> {
+    #[account(
+        mut,
+        seeds = [GAUNTLET_CONFIG_SEED],
+        bump = gauntlet_config.bump
+    )]
+    pub gauntlet_config: Account<'info, GauntletConfig>,
+    #[account(
+        mut,
+        seeds = [GAUNTLET_POOL_VAULT_SEED],
+        bump = gauntlet_pool_vault.bump
+    )]
+    pub gauntlet_pool_vault: Account<'info, GauntletPoolVault>,
+    #[account(
+        init_if_needed,
+        payer = payer,
+        space = 8 + GauntletEpochPool::INIT_SPACE,
+        seeds = [GAUNTLET_EPOCH_POOL_SEED, &epoch_id.to_le_bytes()],
+        bump
+    )]
+    pub gauntlet_epoch_pool: Account<'info, GauntletEpochPool>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(epoch_id: u64)]
+pub struct CrankFinalizeGauntletEpoch<'info> {
     #[account(
         mut,
         seeds = [GAUNTLET_CONFIG_SEED],
@@ -5142,6 +6151,62 @@ pub struct FinalizeGauntletEpoch<'info> {
 
 #[derive(Accounts)]
 #[instruction(epoch_id: u64)]
+pub struct SettleGauntletDefenderPoints<'info> {
+    #[account(
+        mut,
+        seeds = [GAUNTLET_EPOCH_POOL_SEED, &epoch_id.to_le_bytes()],
+        bump = gauntlet_epoch_pool.bump
+    )]
+    pub gauntlet_epoch_pool: Account<'info, GauntletEpochPool>,
+    #[account(
+        init_if_needed,
+        payer = payer,
+        space = 8 + GauntletPlayerScore::INIT_SPACE,
+        seeds = [GAUNTLET_PLAYER_SCORE_SEED, &epoch_id.to_le_bytes(), player.key().as_ref()],
+        bump
+    )]
+    pub gauntlet_player_score: Account<'info, GauntletPlayerScore>,
+    /// CHECK: Canonical beneficiary wallet; no signature required.
+    pub player: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(epoch_id: u64)]
+pub struct SettleGauntletRewardForPlayer<'info> {
+    #[account(
+        mut,
+        seeds = [GAUNTLET_EPOCH_POOL_SEED, &epoch_id.to_le_bytes()],
+        bump = gauntlet_epoch_pool.bump
+    )]
+    pub gauntlet_epoch_pool: Account<'info, GauntletEpochPool>,
+    #[account(
+        init_if_needed,
+        payer = payer,
+        space = 8 + GauntletPlayerScore::INIT_SPACE,
+        seeds = [GAUNTLET_PLAYER_SCORE_SEED, &epoch_id.to_le_bytes(), player.key().as_ref()],
+        bump
+    )]
+    pub gauntlet_player_score: Account<'info, GauntletPlayerScore>,
+    #[account(
+        init_if_needed,
+        payer = payer,
+        space = 8 + GauntletRewardRecord::INIT_SPACE,
+        seeds = [GAUNTLET_REWARD_RECORD_SEED, &epoch_id.to_le_bytes(), player.key().as_ref()],
+        bump
+    )]
+    pub gauntlet_reward_record: Account<'info, GauntletRewardRecord>,
+    /// CHECK: Canonical beneficiary wallet; no signature required.
+    pub player: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(epoch_id: u64)]
 pub struct ClaimGauntletRewards<'info> {
     #[account(
         mut,
@@ -5158,6 +6223,42 @@ pub struct ClaimGauntletRewards<'info> {
     )]
     pub gauntlet_player_score: Account<'info, GauntletPlayerScore>,
     #[account(
+        init_if_needed,
+        payer = player,
+        space = 8 + GauntletRewardRecord::INIT_SPACE,
+        seeds = [GAUNTLET_REWARD_RECORD_SEED, &epoch_id.to_le_bytes(), player.key().as_ref()],
+        bump
+    )]
+    pub gauntlet_reward_record: Account<'info, GauntletRewardRecord>,
+    #[account(
+        mut,
+        seeds = [GAUNTLET_POOL_VAULT_SEED],
+        bump = gauntlet_pool_vault.bump
+    )]
+    pub gauntlet_pool_vault: Account<'info, GauntletPoolVault>,
+    #[account(mut, address = player.key() @ GameplayStateError::GauntletScoreMismatch)]
+    pub player_wallet: SystemAccount<'info>,
+    #[account(mut)]
+    pub player: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(epoch_id: u64)]
+pub struct PayoutGauntletReward<'info> {
+    #[account(
+        mut,
+        seeds = [GAUNTLET_REWARD_RECORD_SEED, &epoch_id.to_le_bytes(), player_wallet.key().as_ref()],
+        bump = gauntlet_reward_record.bump
+    )]
+    pub gauntlet_reward_record: Account<'info, GauntletRewardRecord>,
+    #[account(
+        mut,
+        seeds = [GAUNTLET_PLAYER_SCORE_SEED, &epoch_id.to_le_bytes(), player_wallet.key().as_ref()],
+        bump = gauntlet_player_score.bump
+    )]
+    pub gauntlet_player_score: Account<'info, GauntletPlayerScore>,
+    #[account(
         mut,
         seeds = [GAUNTLET_POOL_VAULT_SEED],
         bump = gauntlet_pool_vault.bump
@@ -5165,9 +6266,29 @@ pub struct ClaimGauntletRewards<'info> {
     pub gauntlet_pool_vault: Account<'info, GauntletPoolVault>,
     #[account(mut)]
     pub player_wallet: SystemAccount<'info>,
-    #[account(mut)]
-    pub player: Signer<'info>,
-    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(epoch_id: u64)]
+pub struct CrankProcessGauntletPlayerRewards<'info> {
+    #[account(
+        mut,
+        seeds = [GAUNTLET_EPOCH_POOL_SEED, &epoch_id.to_le_bytes()],
+        bump = gauntlet_epoch_pool.bump
+    )]
+    pub gauntlet_epoch_pool: Account<'info, GauntletEpochPool>,
+    #[account(
+        mut,
+        seeds = [GAUNTLET_PLAYER_SCORE_SEED, &epoch_id.to_le_bytes(), gauntlet_reward_record.player.as_ref()],
+        bump = gauntlet_player_score.bump
+    )]
+    pub gauntlet_player_score: Account<'info, GauntletPlayerScore>,
+    #[account(
+        mut,
+        seeds = [GAUNTLET_REWARD_RECORD_SEED, &epoch_id.to_le_bytes(), gauntlet_reward_record.player.as_ref()],
+        bump = gauntlet_reward_record.bump
+    )]
+    pub gauntlet_reward_record: Account<'info, GauntletRewardRecord>,
 }
 
 #[derive(Accounts)]
@@ -5180,7 +6301,7 @@ pub struct SettleGauntletSession<'info> {
     pub game_state: Box<Account<'info, GameState>>,
 
     /// CHECK: Player wallet — validated by has_one on game_state. Not required to sign.
-    pub player: AccountInfo<'info>,
+    pub player: UncheckedAccount<'info>,
 
     #[account(
         constraint = game_state.session_signer == session_signer.key() @ GameplayStateError::Unauthorized
@@ -5192,55 +6313,55 @@ pub struct SettleGauntletSession<'info> {
         seeds = [GAUNTLET_EPOCH_POOL_SEED, &epoch_id.to_le_bytes()],
         bump = gauntlet_epoch_pool.bump
     )]
-    pub gauntlet_epoch_pool: Account<'info, GauntletEpochPool>,
+    pub gauntlet_epoch_pool: Box<Account<'info, GauntletEpochPool>>,
 
     #[account(
         mut,
         seeds = [GAUNTLET_PLAYER_SCORE_SEED, &epoch_id.to_le_bytes(), player.key().as_ref()],
         bump = gauntlet_player_score.bump
     )]
-    pub gauntlet_player_score: Account<'info, GauntletPlayerScore>,
+    pub gauntlet_player_score: Box<Account<'info, GauntletPlayerScore>>,
 
     #[account(
         seeds = [b"inventory", game_state.session.as_ref()],
         bump = inventory.bump,
         seeds::program = player_inventory::ID,
     )]
-    pub inventory: Account<'info, PlayerInventory>,
+    pub inventory: Box<Account<'info, PlayerInventory>>,
 
     #[account(
         mut,
         seeds = [GAUNTLET_WEEK_POOL_SEED, &[1]],
         bump = gauntlet_week1.bump
     )]
-    pub gauntlet_week1: Account<'info, GauntletWeekPool>,
+    pub gauntlet_week1: Box<Account<'info, GauntletWeekPool>>,
     #[account(
         mut,
         seeds = [GAUNTLET_WEEK_POOL_SEED, &[2]],
         bump = gauntlet_week2.bump
     )]
-    pub gauntlet_week2: Account<'info, GauntletWeekPool>,
+    pub gauntlet_week2: Box<Account<'info, GauntletWeekPool>>,
     #[account(
         mut,
         seeds = [GAUNTLET_WEEK_POOL_SEED, &[3]],
         bump = gauntlet_week3.bump
     )]
-    pub gauntlet_week3: Account<'info, GauntletWeekPool>,
+    pub gauntlet_week3: Box<Account<'info, GauntletWeekPool>>,
     #[account(
         mut,
         seeds = [GAUNTLET_WEEK_POOL_SEED, &[4]],
         bump = gauntlet_week4.bump
     )]
-    pub gauntlet_week4: Account<'info, GauntletWeekPool>,
+    pub gauntlet_week4: Box<Account<'info, GauntletWeekPool>>,
     #[account(
         mut,
         seeds = [GAUNTLET_WEEK_POOL_SEED, &[5]],
         bump = gauntlet_week5.bump
     )]
-    pub gauntlet_week5: Account<'info, GauntletWeekPool>,
+    pub gauntlet_week5: Box<Account<'info, GauntletWeekPool>>,
 
     /// Optional GameplayVrfState for VRF-backed reservoir sampling.
-    pub gameplay_vrf_state: Option<Account<'info, GameplayVrfState>>,
+    pub gameplay_vrf_state: Option<Box<Account<'info, GameplayVrfState>>>,
 }
 
 #[derive(Accounts)]
@@ -5325,7 +6446,7 @@ pub struct GenerateDuelMap<'info> {
         bump,
         seeds::program = map_generator::ID,
     )]
-    pub generated_map: AccountInfo<'info>,
+    pub generated_map: UncheckedAccount<'info>,
 
     /// Optional MapVrfState for creator path (VRF seed derivation, read-only).
     /// Not delegated on localnet — must not be writable.
@@ -5342,7 +6463,7 @@ pub struct GenerateDuelMap<'info> {
         seeds = [GAMEPLAY_AUTHORITY_SEED],
         bump,
     )]
-    pub gameplay_authority: AccountInfo<'info>,
+    pub gameplay_authority: UncheckedAccount<'info>,
 
     pub map_generator_program: Program<'info, map_generator::program::MapGenerator>,
 
@@ -5355,7 +6476,7 @@ pub struct GenerateDuelMap<'info> {
     #[account(
         constraint = game_state.session == game_session.key() @ GameplayStateError::InvalidSession,
     )]
-    pub game_session: AccountInfo<'info>,
+    pub game_session: UncheckedAccount<'info>,
 
     pub player: Signer<'info>,
 }
@@ -5379,7 +6500,7 @@ pub struct SettleDuelPayout<'info> {
 
     /// CHECK: Player wallet — validated against duel_entry.player.
     #[account(mut)]
-    pub player: AccountInfo<'info>,
+    pub player: UncheckedAccount<'info>,
 
     pub session_signer: Signer<'info>,
 
@@ -5434,7 +6555,7 @@ pub struct ResetDuelEntry<'info> {
 
     /// CHECK: Player wallet. Validated by duel_entry.player constraint.
     #[account(mut)]
-    pub player: AccountInfo<'info>,
+    pub player: UncheckedAccount<'info>,
 
     pub session_signer: Signer<'info>,
 
@@ -5511,11 +6632,11 @@ pub struct EnterPitDraft<'info> {
 
     /// CHECK: Waiting player's wallet for payout (required when matching).
     #[account(mut)]
-    pub waiting_player_wallet: Option<AccountInfo<'info>>,
+    pub waiting_player_wallet: Option<UncheckedAccount<'info>>,
 
     /// CHECK: Company treasury for fee (required when matching).
     #[account(mut)]
-    pub company_treasury: Option<AccountInfo<'info>>,
+    pub company_treasury: Option<UncheckedAccount<'info>>,
 
     /// Gauntlet pool vault for fee (required when matching).
     #[account(mut)]
@@ -5571,7 +6692,7 @@ pub struct CloseGameStateViaSessionSigner<'info> {
     pub game_state: Account<'info, GameState>,
 
     /// CHECK: Player wallet pubkey (used for validation only, not receiving rent).
-    pub player: AccountInfo<'info>,
+    pub player: UncheckedAccount<'info>,
 
     /// Session key signer authorizes closure and receives the rent refund.
     #[account(mut)]
@@ -5600,7 +6721,7 @@ pub struct CloseGauntletEchoes<'info> {
 
     /// CHECK: Player wallet pubkey (used for validation only, not receiving rent).
     #[account(address = game_state.player @ GameplayStateError::Unauthorized)]
-    pub player: AccountInfo<'info>,
+    pub player: UncheckedAccount<'info>,
 
     /// Session key signer authorizes closure and receives the rent refund.
     #[account(mut)]
@@ -5622,7 +6743,7 @@ pub struct CloseEmptyGameState<'info> {
     /// Receives the lamports from the closed account.
     #[account(mut)]
     /// CHECK: Any destination is fine since the account is corrupted/empty.
-    pub destination: AccountInfo<'info>,
+    pub destination: UncheckedAccount<'info>,
 
     pub payer: Signer<'info>,
 }
@@ -5653,7 +6774,7 @@ pub struct CloseOrphanedGauntletEchoes<'info> {
     /// Receives the lamports from the closed account.
     #[account(mut)]
     /// CHECK: Any destination is fine since the session is dead.
-    pub destination: AccountInfo<'info>,
+    pub destination: UncheckedAccount<'info>,
 
     pub payer: Signer<'info>,
 }
@@ -5721,13 +6842,13 @@ pub struct SkipToDay<'info> {
         seeds = [GAMEPLAY_AUTHORITY_SEED],
         bump,
     )]
-    pub gameplay_authority: AccountInfo<'info>,
+    pub gameplay_authority: UncheckedAccount<'info>,
 
     /// Player inventory program for CPI (expand gear slots on boss victory)
     pub player_inventory_program: Program<'info, player_inventory::program::PlayerInventory>,
 
     /// Optional GameplayVrfState for VRF-backed duel boss selection in skip_to_day.
-    pub gameplay_vrf_state: Option<Account<'info, GameplayVrfState>>,
+    pub gameplay_vrf_state: Option<Box<Account<'info, GameplayVrfState>>>,
 
     /// Optional GauntletEchoes for gauntlet echo resolution in skip_to_day.
     #[account(
@@ -5735,7 +6856,7 @@ pub struct SkipToDay<'info> {
         seeds = [GAUNTLET_ECHOES_SEED, game_state.session.as_ref()],
         bump = gauntlet_echoes.bump,
     )]
-    pub gauntlet_echoes: Option<Account<'info, GauntletEchoes>>,
+    pub gauntlet_echoes: Option<Box<Account<'info, GauntletEchoes>>>,
 }
 
 /// Context for adding HP bonus when equipping +HP gear, authorized by player-inventory CPI.
@@ -5814,7 +6935,7 @@ pub struct Move<'info> {
         constraint = game_state.session == game_session.key() @ GameplayStateError::InvalidSession
     )]
     /// CHECK: Validated by game_state.session match.
-    pub game_session: AccountInfo<'info>,
+    pub game_session: UncheckedAccount<'info>,
 
     #[account(
         mut,
@@ -5838,7 +6959,7 @@ pub struct Move<'info> {
         seeds = [GAMEPLAY_AUTHORITY_SEED],
         bump,
     )]
-    pub gameplay_authority: AccountInfo<'info>,
+    pub gameplay_authority: UncheckedAccount<'info>,
 
     /// Player inventory program for CPI (expand gear slots on boss victory)
     pub player_inventory_program: Program<'info, player_inventory::program::PlayerInventory>,
@@ -5848,11 +6969,11 @@ pub struct Move<'info> {
 
     /// CHECK: Validated by POI system during CPI discovery.
     #[account(mut)]
-    pub map_pois: AccountInfo<'info>,
+    pub map_pois: UncheckedAccount<'info>,
 
     /// CHECK: Must be the poi-system program.
     #[account(address = POI_SYSTEM_PROGRAM_ID)]
-    pub poi_system_program: AccountInfo<'info>,
+    pub poi_system_program: UncheckedAccount<'info>,
 
     /// Optional SessionDiscovery for fog-of-war dual-write.
     /// CHECK: Passed through to map-generator CPI; validated there.
@@ -5860,7 +6981,7 @@ pub struct Move<'info> {
     pub session_discovery: Option<UncheckedAccount<'info>>,
 
     /// Optional GameplayVrfState for VRF-backed duel boss selection during movement.
-    pub gameplay_vrf_state: Option<Account<'info, GameplayVrfState>>,
+    pub gameplay_vrf_state: Option<Box<Account<'info, GameplayVrfState>>>,
 
     /// Optional GauntletEchoes for gauntlet echo resolution.
     #[account(
@@ -5868,7 +6989,7 @@ pub struct Move<'info> {
         seeds = [GAUNTLET_ECHOES_SEED, game_state.session.as_ref()],
         bump = gauntlet_echoes.bump,
     )]
-    pub gauntlet_echoes: Option<Account<'info, GauntletEchoes>>,
+    pub gauntlet_echoes: Option<Box<Account<'info, GauntletEchoes>>>,
 
     pub player: Signer<'info>,
 }
@@ -5886,7 +7007,7 @@ pub struct TriggerBossFight<'info> {
         constraint = game_state.session == game_session.key() @ GameplayStateError::InvalidSession
     )]
     /// CHECK: Validated by game_state.session match.
-    pub game_session: AccountInfo<'info>,
+    pub game_session: UncheckedAccount<'info>,
 
     #[account(
         seeds = [map_generator::state::GeneratedMap::SEED_PREFIX, game_state.session.as_ref()],
@@ -5909,13 +7030,13 @@ pub struct TriggerBossFight<'info> {
         seeds = [GAMEPLAY_AUTHORITY_SEED],
         bump,
     )]
-    pub gameplay_authority: AccountInfo<'info>,
+    pub gameplay_authority: UncheckedAccount<'info>,
 
     /// Player inventory program for CPI (expand gear slots on boss victory)
     pub player_inventory_program: Program<'info, player_inventory::program::PlayerInventory>,
 
     /// Optional GameplayVrfState for VRF-backed duel boss selection.
-    pub gameplay_vrf_state: Option<Account<'info, GameplayVrfState>>,
+    pub gameplay_vrf_state: Option<Box<Account<'info, GameplayVrfState>>>,
 
     /// Optional SessionDiscovery for boss ID update at week transition.
     /// CHECK: Passed through to map-generator CPI; validated there.
@@ -5926,7 +7047,7 @@ pub struct TriggerBossFight<'info> {
     pub map_generator_program: Option<Program<'info, map_generator::program::MapGenerator>>,
 
     /// Optional GauntletEchoes for gauntlet echo resolution.
-    pub gauntlet_echoes: Option<Account<'info, GauntletEchoes>>,
+    pub gauntlet_echoes: Option<Box<Account<'info, GauntletEchoes>>>,
 
     pub player: Signer<'info>,
 }
@@ -5959,7 +7080,7 @@ pub struct SyncDiscoveryBoss<'info> {
         constraint = game_state.session == game_session.key() @ GameplayStateError::InvalidSession
     )]
     /// CHECK: Validated by game_state.session match.
-    pub game_session: AccountInfo<'info>,
+    pub game_session: UncheckedAccount<'info>,
 
     /// Gameplay authority PDA for signing CPI calls to map_generator
     /// CHECK: PDA derived from gameplay_state program, validated by seeds
@@ -5967,7 +7088,7 @@ pub struct SyncDiscoveryBoss<'info> {
         seeds = [GAMEPLAY_AUTHORITY_SEED],
         bump,
     )]
-    pub gameplay_authority: AccountInfo<'info>,
+    pub gameplay_authority: UncheckedAccount<'info>,
 
     /// SessionDiscovery to update the boss ID.
     /// CHECK: Passed through to map-generator CPI; validated there.
@@ -6017,15 +7138,30 @@ pub struct InitGameplayVrfState<'info> {
     pub system_program: Program<'info, System>,
 }
 
-#[delegate]
 #[derive(Accounts)]
 pub struct DelegateGameplayVrfState<'info> {
-    #[account(mut, del)]
+    #[account(mut)]
     /// CHECK: PDA is validated via explicit seed check in handler.
-    pub gameplay_vrf_state: AccountInfo<'info>,
+    pub gameplay_vrf_state: UncheckedAccount<'info>,
     /// CHECK: Session PDA owned by session-manager; used only for seed derivation.
     pub game_session: UncheckedAccount<'info>,
     pub player: Signer<'info>,
+    /// CHECK: Buffer for delegation
+    #[account(mut, seeds = [er_compat::DELEGATE_BUFFER_TAG, gameplay_vrf_state.key().as_ref()], bump, seeds::program = crate::id())]
+    pub buffer_gameplay_vrf_state: UncheckedAccount<'info>,
+    /// CHECK: Delegation record
+    #[account(mut, seeds = [er_compat::DELEGATION_RECORD_TAG, gameplay_vrf_state.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_record_gameplay_vrf_state: UncheckedAccount<'info>,
+    /// CHECK: Delegation metadata
+    #[account(mut, seeds = [er_compat::DELEGATION_METADATA_TAG, gameplay_vrf_state.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_metadata_gameplay_vrf_state: UncheckedAccount<'info>,
+    /// CHECK: Owner program
+    #[account(address = crate::id())]
+    pub owner_program: UncheckedAccount<'info>,
+    /// CHECK: Delegation program
+    #[account(address = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
 /// Pre-creates GameplayVrfState on base chain for pit draft VRF.
@@ -6051,27 +7187,47 @@ pub struct InitPitDraftVrfState<'info> {
     pub system_program: Program<'info, System>,
 }
 
-#[delegate]
 #[derive(Accounts)]
 pub struct DelegatePitDraftVrfState<'info> {
-    #[account(mut, del)]
+    #[account(mut)]
     /// CHECK: PDA validated via seed check in handler.
-    pub gameplay_vrf_state: AccountInfo<'info>,
+    pub gameplay_vrf_state: UncheckedAccount<'info>,
     /// CHECK: Seed key used for PDA derivation (player_a pubkey).
     pub seed_key: UncheckedAccount<'info>,
     pub payer: Signer<'info>,
+    /// CHECK: Buffer for delegation
+    #[account(mut, seeds = [er_compat::DELEGATE_BUFFER_TAG, gameplay_vrf_state.key().as_ref()], bump, seeds::program = crate::id())]
+    pub buffer_gameplay_vrf_state: UncheckedAccount<'info>,
+    /// CHECK: Delegation record
+    #[account(mut, seeds = [er_compat::DELEGATION_RECORD_TAG, gameplay_vrf_state.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_record_gameplay_vrf_state: UncheckedAccount<'info>,
+    /// CHECK: Delegation metadata
+    #[account(mut, seeds = [er_compat::DELEGATION_METADATA_TAG, gameplay_vrf_state.key().as_ref()], bump, seeds::program = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_metadata_gameplay_vrf_state: UncheckedAccount<'info>,
+    /// CHECK: Owner program
+    #[account(address = crate::id())]
+    pub owner_program: UncheckedAccount<'info>,
+    /// CHECK: Delegation program
+    #[account(address = er_compat::DELEGATION_PROGRAM_ID)]
+    pub delegation_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
-#[commit]
 #[derive(Accounts)]
 pub struct UndelegatePitDraftVrfState<'info> {
     #[account(mut)]
     /// CHECK: PDA validated and deserialized in handler.
-    pub gameplay_vrf_state: AccountInfo<'info>,
+    pub gameplay_vrf_state: UncheckedAccount<'info>,
     /// CHECK: Seed key used for deterministic PDA validation.
     pub seed_key: UncheckedAccount<'info>,
     #[account(mut)]
     pub payer: Signer<'info>,
+    /// CHECK: Magic program
+    #[account(address = er_compat::MAGIC_PROGRAM_ID)]
+    pub magic_program: UncheckedAccount<'info>,
+    /// CHECK: Magic context
+    #[account(mut, address = er_compat::MAGIC_CONTEXT_ID)]
+    pub magic_context: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -6092,19 +7248,20 @@ pub struct RequestGameplayVrf<'info> {
     pub vrf_state: Account<'info, GameplayVrfState>,
 
     /// CHECK: Program identity PDA used as callback signer.
-    #[account(seeds = [ephemeral_vrf_sdk::consts::IDENTITY], bump)]
+    #[account(seeds = [er_compat::VRF_IDENTITY_SEED], bump)]
     pub program_identity: UncheckedAccount<'info>,
 
-    /// CHECK: Oracle queue account selected by the caller.
-    #[account(mut)]
+    /// CHECK: Oracle queue account — must be owned by the VRF program.
+    #[account(mut, owner = er_compat::VRF_PROGRAM_ID)]
     pub oracle_queue: UncheckedAccount<'info>,
 
     /// CHECK: Slot hashes sysvar for VRF request validation.
-    #[account(address = anchor_lang::solana_program::sysvar::slot_hashes::ID)]
+    /// CHECK: SlotHashes sysvar
+    #[account(address = er_compat::SLOT_HASHES_ID)]
     pub slot_hashes: UncheckedAccount<'info>,
 
     /// CHECK: VRF program for CPI invocation.
-    #[account(address = ephemeral_vrf_sdk::consts::VRF_PROGRAM_ID)]
+    #[account(address = er_compat::VRF_PROGRAM_ID)]
     pub vrf_program: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
@@ -6116,7 +7273,7 @@ pub struct FulfillGameplayVrf<'info> {
     /// Under `mock-vrf`: any signer accepted.
     #[cfg_attr(
         not(feature = "mock-vrf"),
-        account(address = ephemeral_vrf_sdk::consts::VRF_PROGRAM_IDENTITY)
+        account(address = er_compat::VRF_PROGRAM_IDENTITY)
     )]
     pub vrf_program_identity: Signer<'info>,
 
@@ -6146,7 +7303,7 @@ pub struct CloseGameplayVrfState<'info> {
     pub game_state: Account<'info, GameState>,
 
     /// CHECK: Validated against game_state.player in instruction body.
-    pub player: AccountInfo<'info>,
+    pub player: UncheckedAccount<'info>,
 
     /// Session key signer authorizes closure and receives the rent refund.
     #[account(mut)]
@@ -6271,9 +7428,9 @@ pub struct PlayerDefeated {
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DeathCause {
     /// Killed by a field enemy
-    Enemy = 0,
+    Enemy,
     /// Killed by a boss
-    Boss = 1,
+    Boss,
 }
 
 /// Emitted when a level is completed (Week 3 boss defeated)
@@ -6334,10 +7491,10 @@ pub struct PitDraftCombatVisual {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DuelResolution {
-    CompletedCombat = 0,
-    OpponentEliminated = 1,
-    UnmatchedEliminated = 2,
-    BothEliminated = 3,
+    CompletedCombat,
+    OpponentEliminated,
+    UnmatchedEliminated,
+    BothEliminated,
 }
 
 #[event]
@@ -6440,6 +7597,14 @@ pub struct GauntletEpochFinalized {
 
 #[event]
 pub struct GauntletRewardsClaimed {
+    pub epoch_id: u64,
+    pub player: Pubkey,
+    pub points: u64,
+    pub payout_lamports: u64,
+}
+
+#[event]
+pub struct GauntletRewardSettled {
     pub epoch_id: u64,
     pub player: Pubkey,
     pub points: u64,
@@ -6745,10 +7910,11 @@ mod hp_logic_tests {
     }
 
     #[test]
-    fn test_should_resolve_weekly_boss_campaign_all_weeks() {
-        assert!(should_resolve_weekly_boss(RunMode::Campaign, 1));
-        assert!(should_resolve_weekly_boss(RunMode::Campaign, 2));
-        assert!(should_resolve_weekly_boss(RunMode::Campaign, 3));
+    fn test_should_resolve_weekly_boss_campaign_never_inline() {
+        // Campaign boss resolved via separate trigger_boss_fight TX (heap limit)
+        assert!(!should_resolve_weekly_boss(RunMode::Campaign, 1));
+        assert!(!should_resolve_weekly_boss(RunMode::Campaign, 2));
+        assert!(!should_resolve_weekly_boss(RunMode::Campaign, 3));
     }
 
     #[test]
@@ -6975,5 +8141,37 @@ mod duel_flow_tests {
             company_total > gauntlet_total,
             "Company should get slightly more than gauntlet"
         );
+    }
+
+    #[test]
+    fn test_compute_gauntlet_payout_uses_floor_division() {
+        let epoch_pool = GauntletEpochPool {
+            epoch_id: 7,
+            total_pool_lamports: 10,
+            total_points: 6,
+            pending_defender_points: Vec::new(),
+            initialized: true,
+            finalized: true,
+            bump: 255,
+        };
+
+        let payout = compute_gauntlet_payout(&epoch_pool, 4).unwrap();
+        assert_eq!(payout, 6);
+    }
+
+    #[test]
+    fn test_compute_gauntlet_payout_zero_when_player_has_no_points() {
+        let epoch_pool = GauntletEpochPool {
+            epoch_id: 9,
+            total_pool_lamports: 123,
+            total_points: 10,
+            pending_defender_points: Vec::new(),
+            initialized: true,
+            finalized: true,
+            bump: 1,
+        };
+
+        let payout = compute_gauntlet_payout(&epoch_pool, 0).unwrap();
+        assert_eq!(payout, 0);
     }
 }

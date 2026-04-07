@@ -567,6 +567,21 @@ impl GauntletPlayerScore {
     pub const INIT_SPACE: usize = 8 + 32 + 8 + 1 + 1;
 }
 
+#[account]
+pub struct GauntletRewardRecord {
+    pub epoch_id: u64,
+    pub player: Pubkey,
+    pub final_points: u64,
+    pub payout_lamports: u64,
+    pub settled: bool,
+    pub paid: bool,
+    pub bump: u8,
+}
+
+impl GauntletRewardRecord {
+    pub const INIT_SPACE: usize = 8 + 32 + 8 + 8 + 1 + 1 + 1;
+}
+
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct GauntletPendingPoints {
     pub player: Pubkey,
@@ -628,8 +643,7 @@ mod tests {
             initialized: true,
             bump: 255,
         };
-        let serialized_len = queue
-            .try_to_vec()
+        let serialized_len = borsh::to_vec(&queue)
             .expect("duel open queue should serialize")
             .len();
 
@@ -662,8 +676,7 @@ mod tests {
             initialized: true,
             bump: 255,
         };
-        let serialized_len = pool
-            .try_to_vec()
+        let serialized_len = borsh::to_vec(&pool)
             .expect("gauntlet week pool should serialize")
             .len();
 
@@ -694,8 +707,7 @@ mod tests {
             finalized: true,
             bump: 255,
         };
-        let serialized_len = epoch_pool
-            .try_to_vec()
+        let serialized_len = borsh::to_vec(&epoch_pool)
             .expect("gauntlet epoch pool should serialize")
             .len();
 
@@ -705,6 +717,30 @@ mod tests {
             "GauntletEpochPool INIT_SPACE mismatch: serialized={}, init_space={}",
             serialized_len,
             GauntletEpochPool::INIT_SPACE
+        );
+    }
+
+    #[test]
+    fn gauntlet_reward_record_init_space_matches_max_serialized_size() {
+        let reward_record = GauntletRewardRecord {
+            epoch_id: u64::MAX,
+            player: Pubkey::new_from_array([0x44; 32]),
+            final_points: u64::MAX - 1,
+            payout_lamports: u64::MAX - 2,
+            settled: true,
+            paid: true,
+            bump: 255,
+        };
+        let serialized_len = borsh::to_vec(&reward_record)
+            .expect("gauntlet reward record should serialize")
+            .len();
+
+        assert_eq!(
+            serialized_len,
+            GauntletRewardRecord::INIT_SPACE,
+            "GauntletRewardRecord INIT_SPACE mismatch: serialized={}, init_space={}",
+            serialized_len,
+            GauntletRewardRecord::INIT_SPACE
         );
     }
 
@@ -720,8 +756,7 @@ mod tests {
             echoes: [Some(echo); 5],
             bump: 255,
         };
-        let serialized_len = ge
-            .try_to_vec()
+        let serialized_len = borsh::to_vec(&ge)
             .expect("gauntlet echoes should serialize")
             .len();
 

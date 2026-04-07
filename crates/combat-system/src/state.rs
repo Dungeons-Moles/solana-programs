@@ -10,12 +10,12 @@ pub const STATUS_REFLECTION: u8 = 4;
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace)]
 #[repr(u8)]
 pub enum CombatSourceKind {
-    Tool = 0,
-    Gear = 1,
-    Itemset = 2,
-    Enemy = 3,
-    Boss = 4,
-    Status = 5,
+    Tool,
+    Gear,
+    Itemset,
+    Enemy,
+    Boss,
+    Status,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace)]
@@ -34,56 +34,58 @@ pub struct CombatContribution {
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace)]
 #[repr(u8)]
 pub enum StatusType {
-    Chill = 0,
-    Shrapnel = 1,
-    Rust = 2,
-    Bleed = 3,
-    Reflection = 4,
+    Chill,
+    Shrapnel,
+    Rust,
+    Bleed,
+    Reflection,
 }
 
-/// Conditions that must be met for an effect to fire
+/// Conditions that must be met for an effect to fire.
+/// IMPORTANT: Variant order determines borsh discriminant (0, 1, 2, ...).
+/// Do NOT reorder existing variants — append new ones at the end.
 #[derive(
     AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace, Default,
 )]
 #[repr(u8)]
 pub enum Condition {
-    /// No additional condition required
+    /// No additional condition required (discriminant 0)
     #[default]
-    None = 0,
-    /// Enemy must have the specified status effect
-    EnemyHasStatus(StatusType) = 1,
-    /// Enemy must have armor > 0
-    EnemyHasArmor = 2,
-    /// Enemy must have armor <= 0
-    EnemyHasNoArmor = 9,
-    /// Owner's DIG must be greater than enemy's DIG
-    DigGreaterThanEnemyDig = 3,
-    /// Owner's SPD must be greater than enemy's SPD
-    SpdGreaterThanEnemySpd = 4,
-    /// Owner must be Wounded (HP < 50% max)
-    OwnerWounded = 5,
-    /// Owner must be Exposed (ARM <= 0)
-    OwnerExposed = 6,
-    /// Enemy must be Wounded (HP < 50% max)
-    EnemyWounded = 7,
-    /// Owner must have armor > 0
-    OwnerHasArmor = 8,
-    /// Owner must have armor >= value
-    OwnerArmorAtLeast(u8) = 10,
-    /// Owner must have the specified status effect
-    OwnerHasStatus(StatusType) = 11,
-    /// Enemy must have at least N stacks of the specified status
-    EnemyHasStatusAtLeast(StatusType, u8) = 12,
-    /// Enemy must have no armor and at least N stacks of the specified status
-    EnemyHasNoArmorAndStatusAtLeast(StatusType, u8) = 13,
-    /// Enemy has the specified status OR has no armor (disjunctive)
-    EnemyHasStatusOrNoArmor(StatusType) = 14,
-    /// Owner must have at least N gold
-    OwnerGoldAtLeast(u16) = 15,
-    /// Enemy must have at least N gold
-    EnemyGoldAtLeast(u16) = 16,
-    /// Owner's DIG must be greater than enemy's Armor
-    OwnerDigGreaterThanEnemyArmor = 17,
+    None,
+    /// Enemy must have the specified status effect (1)
+    EnemyHasStatus(StatusType),
+    /// Enemy must have armor > 0 (2)
+    EnemyHasArmor,
+    /// Owner's DIG must be greater than enemy's DIG (3)
+    DigGreaterThanEnemyDig,
+    /// Owner's SPD must be greater than enemy's SPD (4)
+    SpdGreaterThanEnemySpd,
+    /// Owner must be Wounded (HP < 50% max) (5)
+    OwnerWounded,
+    /// Owner must be Exposed (ARM <= 0) (6)
+    OwnerExposed,
+    /// Enemy must be Wounded (HP < 50% max) (7)
+    EnemyWounded,
+    /// Owner must have armor > 0 (8)
+    OwnerHasArmor,
+    /// Enemy must have armor <= 0 (9)
+    EnemyHasNoArmor,
+    /// Owner must have armor >= value (10)
+    OwnerArmorAtLeast(u8),
+    /// Owner must have the specified status effect (11)
+    OwnerHasStatus(StatusType),
+    /// Enemy must have at least N stacks of the specified status (12)
+    EnemyHasStatusAtLeast(StatusType, u8),
+    /// Enemy must have no armor and at least N stacks of the specified status (13)
+    EnemyHasNoArmorAndStatusAtLeast(StatusType, u8),
+    /// Enemy has the specified status OR has no armor (disjunctive) (14)
+    EnemyHasStatusOrNoArmor(StatusType),
+    /// Owner must have at least N gold (15)
+    OwnerGoldAtLeast(u16),
+    /// Enemy must have at least N gold (16)
+    EnemyGoldAtLeast(u16),
+    /// Owner's DIG must be greater than enemy's Armor (17)
+    OwnerDigGreaterThanEnemyArmor,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default, InitSpace)]
@@ -181,6 +183,8 @@ pub enum EffectType {
     ApplyShrapnel,
     ApplyRust,
     ApplyBleed,
+    /// Apply a status that rotates by turn: 1=Chill, 2=Rust, 3=Bleed, repeat.
+    ApplyRotatingDebuff,
     RemoveArmor,
     RemoveOwnArmor,
     GainStrikes,

@@ -1,5 +1,5 @@
-import * as anchor from "@coral-xyz/anchor";
-import { Program } from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
+import { Program } from "@anchor-lang/core";
 import { GameplayState } from "../../target/types/gameplay_state";
 import { MapGenerator } from "../../target/types/map_generator";
 import { SessionManager } from "../../target/types/session_manager";
@@ -156,6 +156,18 @@ describe("gameplay-state", () => {
     epochBytes.writeBigUInt64LE(BigInt(epochId.toString()));
     return anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("gauntlet_player_score"), epochBytes, player.toBuffer()],
+      gameplayProgram.programId,
+    );
+  };
+
+  const getGauntletRewardRecordPDA = (
+    epochId: anchor.BN,
+    player: anchor.web3.PublicKey,
+  ) => {
+    const epochBytes = Buffer.alloc(8);
+    epochBytes.writeBigUInt64LE(BigInt(epochId.toString()));
+    return anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("gauntlet_reward_record"), epochBytes, player.toBuffer()],
       gameplayProgram.programId,
     );
   };
@@ -1726,11 +1738,26 @@ describe("gameplay-state", () => {
     });
 
     describe("gauntlet", () => {
+      it("initializes gauntlet with a 14 day epoch duration", async () => {
+        await ensureGauntletExists();
+
+        const config = await gameplayProgram.account.gauntletConfig.fetch(
+          gauntletConfigPDA,
+        );
+        expect(Number(config.epochDurationSeconds)).to.equal(
+          14 * 24 * 60 * 60,
+        );
+      });
+
       it("enforces canonical epoch pool account in finalize_gauntlet_epoch", async () => {
         await ensureGauntletExists();
         const player = await setupUserWithGameState();
         const [epoch0PoolPDA] = getGauntletEpochPoolPDA(new anchor.BN(0));
         const [playerScorePDA] = getGauntletPlayerScorePDA(
+          new anchor.BN(0),
+          player.user.publicKey,
+        );
+        const [rewardRecordPDA] = getGauntletRewardRecordPDA(
           new anchor.BN(0),
           player.user.publicKey,
         );
@@ -1744,6 +1771,7 @@ describe("gameplay-state", () => {
             gauntletPoolVault: gauntletPoolVaultPDA,
             companyTreasury,
             systemProgram: SystemProgram.programId,
+            gauntletRewardRecord: rewardRecordPDA,
           } as any)
           .remainingAccounts([
             { pubkey: gauntletWeek1PDA, isSigner: false, isWritable: false },
@@ -1805,6 +1833,8 @@ describe("gameplay-state", () => {
               gauntletConfig: gauntletConfigPDA,
               gauntletPoolVault: gauntletPoolVaultPDA,
               gauntletEpochPool: epoch0PoolPDA,
+              payer: provider.wallet.publicKey,
+              systemProgram: SystemProgram.programId,
             } as any)
             .rpc();
           expect.fail("Expected finalize_gauntlet_epoch to enforce epoch PDA");
@@ -1833,6 +1863,10 @@ describe("gameplay-state", () => {
           new anchor.BN(0),
           player.user.publicKey,
         );
+        const [rewardRecordPDA] = getGauntletRewardRecordPDA(
+          new anchor.BN(0),
+          player.user.publicKey,
+        );
         const [gameplayAuthorityPDA] = getGameplayAuthorityPDA();
 
         const companyBefore = await provider.connection.getBalance(
@@ -1851,6 +1885,7 @@ describe("gameplay-state", () => {
             gauntletPoolVault: gauntletPoolVaultPDA,
             companyTreasury,
             systemProgram: SystemProgram.programId,
+            gauntletRewardRecord: rewardRecordPDA,
           } as any)
           .remainingAccounts([
             { pubkey: gauntletWeek1PDA, isSigner: false, isWritable: false },
@@ -1917,6 +1952,10 @@ describe("gameplay-state", () => {
         );
         expect(gs.runMode).to.exist;
         expect(gs.gauntletSettled).to.equal(true);
+
+        const rewardRecordAccount =
+          await provider.connection.getAccountInfo(rewardRecordPDA);
+        expect(rewardRecordAccount).to.equal(null);
 
         await cleanup(
           player.user,

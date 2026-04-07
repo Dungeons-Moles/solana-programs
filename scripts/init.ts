@@ -1,5 +1,5 @@
-import * as anchor from "@coral-xyz/anchor";
-import { Program } from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
+import { Program } from "@anchor-lang/core";
 import idlSessionManager from "../target/idl/session_manager.json";
 import idlMapGenerator from "../target/idl/map_generator.json";
 import idlGameplayState from "../target/idl/gameplay_state.json";

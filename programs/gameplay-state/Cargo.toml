@@ -16,14 +16,18 @@ no-idl = []
 no-log-ix-name = []
 idl-build = ["anchor-lang/idl-build"]
 mock-vrf = ["vrf-rng/mock-vrf"]
+test-helpers = []
 
 [dev-dependencies]
 sha2 = "0.10"
 
 [dependencies]
-anchor-lang = { version = "0.32.0", features = ["init-if-needed"] }
-ephemeral-rollups-sdk = { version = "0.7.3", features = ["anchor", "disable-realloc"] }
+anchor-lang = { version = "1.0.0", features = ["init-if-needed"] }
+bincode = "1.3"
+ephemeral-rollups-sdk = { version = "0.10.4", features = ["anchor", "disable-realloc"] }
 ephemeral-vrf-sdk = { version = "0.2.3", features = ["anchor"] }
+er-compat = { path = "../../crates/er-compat" }
+magicblock-magic-program-api = { version = "0.8.5", default-features = false }
 combat-system = { path = "../../crates/combat-system" }
 map-generator = { path = "../map-generator", features = ["cpi"] }
 field-enemies = { path = "../../crates/field-enemies" }

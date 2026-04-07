@@ -20,10 +20,11 @@ idl-build = ["anchor-lang/idl-build"]
 sha2 = "0.10"
 
 [dependencies]
-anchor-lang = { version = "0.32.0", features = ["init-if-needed"] }
+anchor-lang = { version = "1.0.0", features = ["init-if-needed"] }
 gameplay-state = { path = "../gameplay-state", features = ["cpi"] }
 map-generator = { path = "../map-generator", features = ["cpi"] }
 player-inventory = { path = "../player-inventory", features = ["cpi"] }
 # NOTE: poi-system dependency removed to avoid cyclic dependency
-ephemeral-rollups-sdk = { version = "0.7.3", features = ["anchor", "disable-realloc"] }
+ephemeral-rollups-sdk = { version = "0.10.4", features = ["anchor", "disable-realloc"] }
+er-compat = { path = "../../crates/er-compat" }
 vrf-rng = { path = "../../crates/vrf-rng" }

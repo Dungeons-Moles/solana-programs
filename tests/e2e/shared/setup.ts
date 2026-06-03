@@ -54,7 +54,13 @@ export function createProvider(
   rpcUrl: string,
   wallet: anchor.Wallet
 ): anchor.AnchorProvider {
-  const connection = new Connection(rpcUrl, "confirmed");
+  const wsEndpoint = process.env.ANCHOR_PROVIDER_WS;
+  const connection = new Connection(
+    rpcUrl,
+    wsEndpoint
+      ? { commitment: "confirmed", wsEndpoint }
+      : "confirmed"
+  );
   return new anchor.AnchorProvider(connection, wallet, {
     commitment: "confirmed",
     preflightCommitment: "confirmed",
@@ -81,7 +87,10 @@ export async function airdropAndConfirm(
 
 // ── UMI Context ─────────────────────────────────────────────────────────────
 export function createUmiContext(rpcUrl: string, walletKeypair: Keypair) {
-  const umi = createUmi(rpcUrl);
+  const wsEndpoint = process.env.ANCHOR_PROVIDER_WS;
+  const umi = wsEndpoint
+    ? createUmi(new Connection(rpcUrl, { commitment: "confirmed", wsEndpoint }))
+    : createUmi(rpcUrl);
   const umiKeypair = fromWeb3JsKeypair(walletKeypair);
   const signer = createSignerFromKeypair(umi, umiKeypair);
   umi.use(keypairIdentity(signer));

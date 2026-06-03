@@ -40,6 +40,48 @@ pub const GAMEPLAY_AUTHORITY_SEED: &[u8] = b"gameplay_authority";
 pub const SESSION_MANAGER_RUNMODE_AUTHORITY_SEED: &[u8] = b"session_manager_authority";
 pub const GAUNTLET_GLOBAL_CRANK_TASK_ID_SEED: &[u8] = b"gauntlet_global_crank_task";
 pub const GAUNTLET_PLAYER_CRANK_TASK_ID_SEED: &[u8] = b"gauntlet_player_crank_task";
+pub const PLAYER_PROFILE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
+    0xe5, 0x5c, 0xb8, 0xa0, 0xc0, 0xde, 0x56, 0xac, 0x2e, 0xc2, 0xd5, 0xd3, 0xc9, 0x2d, 0x21, 0xb2,
+    0x46, 0x6d, 0xa1, 0x4e, 0xef, 0x0f, 0x74, 0xd1, 0x24, 0x1a, 0x99, 0x3e, 0xe5, 0x87, 0x67, 0xa2,
+]);
+const PLAYER_PROFILE_DISCRIMINATOR: [u8; 8] = [82, 226, 99, 87, 164, 130, 181, 80];
+const QUASAR_PLAYER_PROFILE_LEN: usize = 145;
+const ITEM_BITMASK_SIZE: usize = 10;
+
+#[derive(Clone, Copy)]
+struct QuasarPlayerProfile {
+    owner: Pubkey,
+    active_item_pool: [u8; ITEM_BITMASK_SIZE],
+}
+
+fn decode_quasar_player_profile(account_info: &AccountInfo<'_>) -> Result<QuasarPlayerProfile> {
+    require_keys_eq!(
+        *account_info.owner,
+        PLAYER_PROFILE_PROGRAM_ID,
+        GameplayStateError::Unauthorized
+    );
+
+    let data = account_info.try_borrow_data()?;
+    require!(
+        data.len() >= QUASAR_PLAYER_PROFILE_LEN,
+        GameplayStateError::Unauthorized
+    );
+    require!(
+        &data[..8] == PLAYER_PROFILE_DISCRIMINATOR.as_slice(),
+        GameplayStateError::Unauthorized
+    );
+
+    let mut owner_bytes = [0u8; 32];
+    owner_bytes.copy_from_slice(&data[8..40]);
+
+    let mut active_item_pool = [0u8; ITEM_BITMASK_SIZE];
+    active_item_pool.copy_from_slice(&data[68..78]);
+
+    Ok(QuasarPlayerProfile {
+        owner: Pubkey::new_from_array(owner_bytes),
+        active_item_pool,
+    })
+}
 use movement::{
     calculate_move_cost, chebyshev_distance, compute_visible_enemies, get_boss_for_combat,
     get_boss_id, get_duel_boss_for_combat_from_seed, get_duel_boss_id_from_seed, is_adjacent,
@@ -49,7 +91,6 @@ use movement::{
 use player_inventory::effects::{generate_annotated_combat_effects, generate_combat_effects};
 use player_inventory::items::ITEMS;
 use player_inventory::state::{ItemInstance, ItemType, PlayerInventory, Tier, ToolOilModification};
-use player_profile::state::PlayerProfile;
 use state::{
     DuelCreatorEntry, DuelEntry, DuelErQueue, DuelLoadoutSnapshot, DuelOpenQueue, DuelQueue,
     DuelRunOutcome, DuelVault, GameState, GameplayVrfState, GauntletConfig, GauntletDefenderCredit,
@@ -2098,6 +2139,14 @@ pub mod gameplay_state {
         let queue = &mut ctx.accounts.pit_draft_queue;
         let player_key = ctx.accounts.player.key();
         let player_profile_key = ctx.accounts.player_profile.key();
+        let player_profile =
+            decode_quasar_player_profile(&ctx.accounts.player_profile.to_account_info())?;
+
+        require_keys_eq!(
+            player_profile.owner,
+            player_key,
+            GameplayStateError::Unauthorized
+        );
 
         require!(
             queue.waiting_player != Some(player_key),
@@ -2135,7 +2184,7 @@ pub mod gameplay_state {
         let waiting_player = queue
             .waiting_player
             .ok_or(GameplayStateError::PitDraftInvalidWaitingState)?;
-        let _waiting_profile_key = queue
+        let waiting_profile_key = queue
             .waiting_profile
             .ok_or(GameplayStateError::PitDraftInvalidWaitingState)?;
 
@@ -2150,6 +2199,25 @@ pub mod gameplay_state {
             .waiting_profile
             .as_ref()
             .ok_or(GameplayStateError::PitDraftMissingWaitingAccounts)?;
+
+        require_keys_eq!(
+            waiting_profile.key(),
+            waiting_profile_key,
+            GameplayStateError::PitDraftWaitingAccountMismatch
+        );
+
+        let (expected_waiting_profile_key, _) = Pubkey::find_program_address(
+            &[b"player", waiting_player.as_ref()],
+            &PLAYER_PROFILE_PROGRAM_ID,
+        );
+        require_keys_eq!(
+            waiting_profile.key(),
+            expected_waiting_profile_key,
+            GameplayStateError::PitDraftWaitingAccountMismatch
+        );
+
+        let waiting_profile =
+            decode_quasar_player_profile(&waiting_profile.to_account_info())?;
 
         require!(
             waiting_profile.owner == waiting_player,
@@ -2201,7 +2269,7 @@ pub mod gameplay_state {
         resolve_pit_draft_match(
             ctx.accounts.pit_draft_vault.to_account_info(),
             ctx.accounts.player.to_account_info(),
-            ctx.accounts.player_profile.active_item_pool,
+            player_profile.active_item_pool,
             waiting_player,
             waiting_profile.active_item_pool,
             waiting_player_wallet.to_account_info(),
@@ -6623,12 +6691,15 @@ pub struct EnterPitDraft<'info> {
     pub player: Signer<'info>,
 
     #[account(
-        constraint = player_profile.owner == player.key() @ GameplayStateError::Unauthorized,
+        seeds = [b"player", player.key().as_ref()],
+        bump,
+        seeds::program = PLAYER_PROFILE_PROGRAM_ID,
+        owner = PLAYER_PROFILE_PROGRAM_ID,
     )]
-    pub player_profile: Account<'info, PlayerProfile>,
+    pub player_profile: UncheckedAccount<'info>,
 
     /// Waiting player's profile (required when matching, None when just queuing).
-    pub waiting_profile: Option<Account<'info, PlayerProfile>>,
+    pub waiting_profile: Option<UncheckedAccount<'info>>,
 
     /// CHECK: Waiting player's wallet for payout (required when matching).
     #[account(mut)]

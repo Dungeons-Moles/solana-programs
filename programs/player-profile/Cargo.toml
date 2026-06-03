@@ -10,11 +10,16 @@ name = "player_profile"
 
 [features]
 default = []
+alloc = []
+client = []
 cpi = ["no-entrypoint"]
+debug = []
 no-entrypoint = []
 no-idl = []
 no-log-ix-name = []
-idl-build = ["anchor-lang/idl-build"]
+idl-build = ["quasar-lang/idl-build"]
 
 [dependencies]
-anchor-lang = { version = "1.0.0", features = ["init-if-needed"] }
+quasar-lang = { git = "https://github.com/blueshift-gg/quasar" }
+solana-program-error = "3.0.0"
+zeropod = "0.3.3"

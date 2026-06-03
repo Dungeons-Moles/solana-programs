@@ -43,8 +43,8 @@ pub const SESSION_MANAGER_PROGRAM_ID: [u8; 32] = [
 ];
 
 /// Session Manager program ID as Pubkey for use in Anchor account owner constraints.
-pub const SESSION_MANAGER_PROGRAM_PUBKEY: anchor_lang::prelude::Pubkey =
-    anchor_lang::prelude::Pubkey::new_from_array(SESSION_MANAGER_PROGRAM_ID);
+pub const SESSION_MANAGER_PROGRAM_ADDRESS: quasar_lang::prelude::Address =
+    quasar_lang::prelude::Address::new_from_array(SESSION_MANAGER_PROGRAM_ID);
 
 /// Seed for session-manager authority PDA that signs authorized CPIs.
 pub const SESSION_MANAGER_AUTHORITY_SEED: &[u8] = b"session_manager_authority";
@@ -81,8 +81,8 @@ pub const GAMEPLAY_STATE_PROGRAM_ID: [u8; 32] = [
 ];
 
 /// Gameplay-state program ID as Pubkey for use in Anchor account owner constraints.
-pub const GAMEPLAY_STATE_PROGRAM_PUBKEY: anchor_lang::prelude::Pubkey =
-    anchor_lang::prelude::Pubkey::new_from_array(GAMEPLAY_STATE_PROGRAM_ID);
+pub const GAMEPLAY_STATE_PROGRAM_ADDRESS: quasar_lang::prelude::Address =
+    quasar_lang::prelude::Address::new_from_array(GAMEPLAY_STATE_PROGRAM_ID);
 
 /// Anchor discriminator for `PitDraftQueue` account: sha256("account:PitDraftQueue")[..8].
 pub const PIT_DRAFT_QUEUE_DISCRIMINATOR: [u8; 8] =
@@ -95,9 +95,9 @@ pub const GAUNTLET_POOL_VAULT_SEED: &[u8] = b"gauntlet_pool_vault";
 pub const PIT_DRAFT_QUEUE_SEED: &[u8] = b"pit_draft_queue";
 
 /// Metaplex Core program ID for NFT skin asset validation (CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d)
-pub const MPL_CORE_PROGRAM_ID: anchor_lang::prelude::Pubkey =
-    anchor_lang::pubkey!("CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d");
+pub const MPL_CORE_PROGRAM_ID: quasar_lang::prelude::Address =
+    quasar_lang::prelude::address!("CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d");
 
 /// NFT marketplace program ID used to validate marketplace-authorized relic ownership CPIs.
-pub const NFT_MARKETPLACE_PROGRAM_PUBKEY: anchor_lang::prelude::Pubkey =
-    anchor_lang::pubkey!("GLKxBpZ8hc7qzvD9VHAVsJEjHSu2JVp1HaPrGH4fpTci");
+pub const NFT_MARKETPLACE_PROGRAM_ADDRESS: quasar_lang::prelude::Address =
+    quasar_lang::prelude::address!("GLKxBpZ8hc7qzvD9VHAVsJEjHSu2JVp1HaPrGH4fpTci");

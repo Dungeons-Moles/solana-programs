@@ -1948,14 +1948,10 @@ impl anchor_lang::Id for PlayerProfileRef {
     }
 }
 
-/// PlayerProfile account - mirrors the structure from player-profile program.
-/// IMPORTANT: The account name MUST be "PlayerProfile" (not PlayerProfileAccount)
-/// to generate the correct Anchor discriminator (sha256("account:PlayerProfile")[..8]).
-/// We use AnchorDeserialize manually since we can't use #[account] with a custom owner.
-#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+/// PlayerProfile account decoded from the Quasar zero-copy player-profile bytes.
+#[derive(Clone)]
 pub struct PlayerProfile {
     pub owner: Pubkey,
-    pub name: String,
     pub total_runs: u32,
     pub highest_level_unlocked: u8,
     pub available_runs: u32,
@@ -1963,27 +1959,71 @@ pub struct PlayerProfile {
     pub bump: u8,
     pub unlocked_items: [u8; 10],
     pub active_item_pool: [u8; 10],
+    pub equipped_skin: Option<Pubkey>,
+    pub gauntlet_boosters: u8,
+    pub name_len: u8,
+    pub name: [u8; 32],
 }
 
 impl PlayerProfile {
-    /// Anchor discriminator for "PlayerProfile" account
-    /// sha256("account:PlayerProfile")[..8]
     pub const DISCRIMINATOR: [u8; 8] = [82, 226, 99, 87, 164, 130, 181, 80];
+    pub const LEN: usize = 145;
+
+    fn decode(buf: &[u8]) -> anchor_lang::Result<Self> {
+        require!(
+            buf.len() >= Self::LEN,
+            anchor_lang::error::ErrorCode::AccountDidNotDeserialize
+        );
+        require!(
+            &buf[..8] == Self::DISCRIMINATOR.as_slice(),
+            anchor_lang::error::ErrorCode::AccountDiscriminatorMismatch
+        );
+
+        let name_len = buf[112];
+        require!(
+            name_len <= 32,
+            anchor_lang::error::ErrorCode::AccountDidNotDeserialize
+        );
+
+        let mut unlocked_items = [0u8; 10];
+        unlocked_items.copy_from_slice(&buf[58..68]);
+
+        let mut active_item_pool = [0u8; 10];
+        active_item_pool.copy_from_slice(&buf[68..78]);
+
+        let equipped_skin = match buf[78] {
+            0 => None,
+            1 => Some(read_quasar_pubkey(buf, 79)?),
+            _ => return Err(anchor_lang::error::ErrorCode::AccountDidNotDeserialize.into()),
+        };
+
+        let mut name = [0u8; 32];
+        name.copy_from_slice(&buf[113..145]);
+
+        Ok(Self {
+            owner: read_quasar_pubkey(buf, 8)?,
+            total_runs: read_quasar_u32(buf, 40)?,
+            highest_level_unlocked: buf[44],
+            available_runs: read_quasar_u32(buf, 45)?,
+            created_at: read_quasar_i64(buf, 49)?,
+            bump: buf[57],
+            unlocked_items,
+            active_item_pool,
+            equipped_skin,
+            gauntlet_boosters: buf[111],
+            name_len,
+            name,
+        })
+    }
 }
 
 impl anchor_lang::AccountDeserialize for PlayerProfile {
+    fn try_deserialize(buf: &mut &[u8]) -> anchor_lang::Result<Self> {
+        Self::try_deserialize_unchecked(buf)
+    }
+
     fn try_deserialize_unchecked(buf: &mut &[u8]) -> anchor_lang::Result<Self> {
-        // Skip discriminator
-        if buf.len() < 8 {
-            return Err(anchor_lang::error::ErrorCode::AccountDiscriminatorNotFound.into());
-        }
-        let discriminator = &buf[..8];
-        if discriminator != Self::DISCRIMINATOR {
-            return Err(anchor_lang::error::ErrorCode::AccountDiscriminatorMismatch.into());
-        }
-        *buf = &buf[8..];
-        Self::deserialize(buf)
-            .map_err(|_| anchor_lang::error::ErrorCode::AccountDidNotDeserialize.into())
+        Self::decode(*buf)
     }
 }
 
@@ -1995,11 +2035,66 @@ impl anchor_lang::Owner for PlayerProfile {
     }
 }
 
+#[cfg(feature = "idl-build")]
+impl anchor_lang::IdlBuild for PlayerProfile {}
+
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, Default)]
 pub struct PlayerRelicEntry {
     pub item_id: [u8; 8],
     pub owned_count: u16,
     pub in_active_pool: bool,
+}
+
+const MAX_PLAYER_RELICS: usize = 32;
+const PLAYER_RELIC_ENTRY_SIZE: usize = 11;
+
+fn read_quasar_pubkey(buf: &[u8], offset: usize) -> anchor_lang::Result<Pubkey> {
+    let end = offset
+        .checked_add(32)
+        .ok_or(anchor_lang::error::ErrorCode::AccountDidNotDeserialize)?;
+    require!(
+        buf.len() >= end,
+        anchor_lang::error::ErrorCode::AccountDidNotDeserialize
+    );
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(&buf[offset..end]);
+    Ok(Pubkey::new_from_array(bytes))
+}
+
+fn read_quasar_u32(buf: &[u8], offset: usize) -> anchor_lang::Result<u32> {
+    let end = offset
+        .checked_add(4)
+        .ok_or(anchor_lang::error::ErrorCode::AccountDidNotDeserialize)?;
+    require!(
+        buf.len() >= end,
+        anchor_lang::error::ErrorCode::AccountDidNotDeserialize
+    );
+    Ok(u32::from_le_bytes([
+        buf[offset],
+        buf[offset + 1],
+        buf[offset + 2],
+        buf[offset + 3],
+    ]))
+}
+
+fn read_quasar_i64(buf: &[u8], offset: usize) -> anchor_lang::Result<i64> {
+    let end = offset
+        .checked_add(8)
+        .ok_or(anchor_lang::error::ErrorCode::AccountDidNotDeserialize)?;
+    require!(
+        buf.len() >= end,
+        anchor_lang::error::ErrorCode::AccountDidNotDeserialize
+    );
+    Ok(i64::from_le_bytes([
+        buf[offset],
+        buf[offset + 1],
+        buf[offset + 2],
+        buf[offset + 3],
+        buf[offset + 4],
+        buf[offset + 5],
+        buf[offset + 6],
+        buf[offset + 7],
+    ]))
 }
 
 #[derive(Clone)]
@@ -2011,30 +2106,59 @@ impl anchor_lang::Id for PlayerRelicPoolRef {
     }
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+#[derive(Clone)]
 pub struct PlayerRelicPool {
     pub owner: Pubkey,
     pub count: u8,
-    pub relics: Vec<PlayerRelicEntry>,
     pub bump: u8,
+    pub relics: [PlayerRelicEntry; MAX_PLAYER_RELICS],
 }
 
 impl PlayerRelicPool {
     pub const DISCRIMINATOR: [u8; 8] = [1, 105, 67, 203, 111, 254, 159, 128];
+    pub const LEN: usize = 42 + (MAX_PLAYER_RELICS * PLAYER_RELIC_ENTRY_SIZE);
+
+    fn decode(buf: &[u8]) -> anchor_lang::Result<Self> {
+        require!(
+            buf.len() >= Self::LEN,
+            anchor_lang::error::ErrorCode::AccountDidNotDeserialize
+        );
+        require!(
+            &buf[..8] == Self::DISCRIMINATOR.as_slice(),
+            anchor_lang::error::ErrorCode::AccountDiscriminatorMismatch
+        );
+
+        let count = buf[40].min(MAX_PLAYER_RELICS as u8);
+        let mut relics = [PlayerRelicEntry::default(); MAX_PLAYER_RELICS];
+        let mut index = 0usize;
+        while index < MAX_PLAYER_RELICS {
+            let offset = 42 + (index * PLAYER_RELIC_ENTRY_SIZE);
+            let mut item_id = [0u8; 8];
+            item_id.copy_from_slice(&buf[offset..offset + 8]);
+            relics[index] = PlayerRelicEntry {
+                item_id,
+                owned_count: u16::from_le_bytes([buf[offset + 8], buf[offset + 9]]),
+                in_active_pool: buf[offset + 10] != 0,
+            };
+            index += 1;
+        }
+
+        Ok(Self {
+            owner: read_quasar_pubkey(buf, 8)?,
+            count,
+            bump: buf[41],
+            relics,
+        })
+    }
 }
 
 impl anchor_lang::AccountDeserialize for PlayerRelicPool {
+    fn try_deserialize(buf: &mut &[u8]) -> anchor_lang::Result<Self> {
+        Self::try_deserialize_unchecked(buf)
+    }
+
     fn try_deserialize_unchecked(buf: &mut &[u8]) -> anchor_lang::Result<Self> {
-        if buf.len() < 8 {
-            return Err(anchor_lang::error::ErrorCode::AccountDiscriminatorNotFound.into());
-        }
-        let discriminator = &buf[..8];
-        if discriminator != Self::DISCRIMINATOR {
-            return Err(anchor_lang::error::ErrorCode::AccountDiscriminatorMismatch.into());
-        }
-        *buf = &buf[8..];
-        Self::deserialize(buf)
-            .map_err(|_| anchor_lang::error::ErrorCode::AccountDidNotDeserialize.into())
+        Self::decode(*buf)
     }
 }
 
@@ -2045,6 +2169,9 @@ impl anchor_lang::Owner for PlayerRelicPool {
         PLAYER_PROFILE_PROGRAM_ID
     }
 }
+
+#[cfg(feature = "idl-build")]
+impl anchor_lang::IdlBuild for PlayerRelicPool {}
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 struct RelicAssetAccount {
@@ -2134,12 +2261,19 @@ fn collect_owned_relic_item_ids(
     Ok(owned_item_ids)
 }
 
-fn session_relic_snapshot(pool: Option<&Account<'_, PlayerRelicPool>>) -> (u8, [SessionRelicEntry; MAX_SESSION_RELICS]) {
+fn session_relic_snapshot(
+    pool: Option<&Account<'_, PlayerRelicPool>>,
+) -> (u8, [SessionRelicEntry; MAX_SESSION_RELICS]) {
     let mut relics = [SessionRelicEntry::default(); MAX_SESSION_RELICS];
     let mut count = 0usize;
 
     if let Some(pool) = pool {
-        for entry in pool.relics.iter().filter(|entry| entry.in_active_pool) {
+        for entry in pool
+            .relics
+            .iter()
+            .take(pool.count as usize)
+            .filter(|entry| entry.in_active_pool)
+        {
             if count >= MAX_SESSION_RELICS {
                 break;
             }
@@ -3474,7 +3608,7 @@ fn consume_run_cpi<'info>(
         PLAYER_PROFILE_PROGRAM_ID,
         &CONSUME_RUN_DISCRIMINATOR,
         &[],
-        &[(player_profile, true, false), (owner, false, true)],
+        &[(owner, false, true), (player_profile, true, false)],
     )
 }
 
@@ -3492,7 +3626,7 @@ fn sync_relic_ownership_cpi<'info>(
         PLAYER_PROFILE_PROGRAM_ID,
         &SYNC_RELIC_OWNERSHIP_DISCRIMINATOR,
         &extra,
-        &[(player_relic_pool, true, false), (owner, false, true)],
+        &[(owner, false, true), (player_relic_pool, true, false)],
     )
 }
 

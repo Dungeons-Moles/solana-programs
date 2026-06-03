@@ -1,153 +1,125 @@
-use anchor_lang::prelude::*;
+use quasar_lang::prelude::*;
 
-/// Marketplace configuration (singleton)
-/// PDA: [b"marketplace_config"]
-#[account]
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, QuasarSerialize)]
+pub enum QuestType {
+    Daily = 0,
+    Weekly = 1,
+    Seasonal = 2,
+}
+
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, QuasarSerialize)]
+pub enum ObjectiveType {
+    WinBattles = 0,
+    CompleteLevels = 1,
+    PlayPvpMatches = 2,
+    DefeatBosses = 3,
+    CollectGold = 4,
+}
+
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, QuasarSerialize)]
+pub enum RewardType {
+    GauntletBooster = 0,
+    Skin = 1,
+    NftItem = 2,
+}
+
+#[account(
+    discriminator = [169, 22, 247, 131, 182, 200, 81, 124],
+    fixed_capacity,
+    set_inner
+)]
+#[seeds(b"marketplace_config")]
 pub struct MarketplaceConfig {
-    /// Admin authority
-    pub authority: Pubkey,
-    /// Skins collection address (Metaplex Core)
-    pub skins_collection: Pubkey,
-    /// Items collection address (Metaplex Core)
-    pub items_collection: Pubkey,
-    /// Company treasury for fee collection
-    pub company_treasury: Pubkey,
-    /// Gauntlet pool vault for fee collection
-    pub gauntlet_pool: Pubkey,
-    /// Company fee in basis points (e.g., 300 = 3%)
+    pub authority: Address,
+    pub skins_collection: Address,
+    pub items_collection: Address,
+    pub company_treasury: Address,
+    pub gauntlet_pool: Address,
     pub company_fee_bps: u16,
-    /// Gauntlet pool fee in basis points (e.g., 200 = 2%)
     pub gauntlet_fee_bps: u16,
-    /// PDA bump
     pub bump: u8,
 }
 
 impl MarketplaceConfig {
     pub const SEED_PREFIX: &'static [u8] = b"marketplace_config";
-    /// 32*5 + 2*2 + 1 = 165
-    pub const INIT_SPACE: usize = 32 + 32 + 32 + 32 + 32 + 2 + 2 + 1;
 }
 
-/// NFT listing for sale
-/// PDA: [b"listing", asset.key()]
-#[account]
+#[account(
+    discriminator = [218, 32, 50, 73, 43, 134, 26, 58],
+    fixed_capacity,
+    set_inner
+)]
+#[seeds(b"listing", asset: Address)]
 pub struct Listing {
-    /// Seller wallet
-    pub seller: Pubkey,
-    /// Metaplex Core asset address
-    pub asset: Pubkey,
-    /// Collection the asset belongs to
-    pub collection: Pubkey,
-    /// Sale price in lamports
+    pub seller: Address,
+    pub asset: Address,
+    pub collection: Address,
     pub price_lamports: u64,
-    /// When the listing was created
     pub created_at: i64,
-    /// PDA bump
     pub bump: u8,
 }
 
 impl Listing {
     pub const SEED_PREFIX: &'static [u8] = b"listing";
-    /// 32*3 + 8 + 8 + 1 = 113
-    pub const INIT_SPACE: usize = 32 + 32 + 32 + 8 + 8 + 1;
 }
 
-/// Asset-backed relic metadata for gameplay registration.
-/// PDA: [b"relic_asset", asset.key()]
-#[account]
+#[account(
+    discriminator = [222, 160, 151, 133, 226, 88, 154, 91],
+    fixed_capacity,
+    set_inner
+)]
+#[seeds(b"relic_asset", asset: Address)]
 pub struct RelicAsset {
-    pub asset: Pubkey,
+    pub asset: Address,
     pub item_id: [u8; 8],
     pub bump: u8,
 }
 
 impl RelicAsset {
     pub const SEED_PREFIX: &'static [u8] = b"relic_asset";
-    pub const INIT_SPACE: usize = 32 + 8 + 1;
 }
 
-// ============================================================================
-// Quest System State
-// ============================================================================
-
-/// Quest type (daily, weekly, seasonal)
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
-pub enum QuestType {
-    Daily,
-    Weekly,
-    Seasonal,
-}
-
-/// Objective type for quests
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ObjectiveType {
-    WinBattles,
-    CompleteLevels,
-    PlayPvpMatches,
-    DefeatBosses,
-    CollectGold,
-}
-
-/// Reward type for quest completion
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
-pub enum RewardType {
-    GauntletBooster,
-    Skin,
-    NftItem,
-}
-
-/// Quest template
-/// PDA: [b"quest_def", &quest_id.to_le_bytes()]
-#[account]
+#[account(
+    discriminator = [106, 90, 250, 119, 170, 124, 111, 19],
+    fixed_capacity,
+    set_inner
+)]
+#[seeds(b"quest_def", quest_id: u16)]
 pub struct QuestDefinition {
-    /// Unique quest identifier
     pub quest_id: u16,
-    /// Daily, Weekly, or Seasonal
     pub quest_type: QuestType,
-    /// What the player must do
     pub objective_type: ObjectiveType,
-    /// How many times the objective must be completed
     pub objective_count: u16,
-    /// What reward is given
     pub reward_type: RewardType,
-    /// Encoded reward parameters (skin_id, item_id, booster count, etc.)
     pub reward_data: [u8; 32],
-    /// Season number (0 = permanent, 1+ = seasonal)
     pub season: u8,
-    /// Whether quest is currently active
     pub active: bool,
-    /// PDA bump
     pub bump: u8,
 }
 
 impl QuestDefinition {
     pub const SEED_PREFIX: &'static [u8] = b"quest_def";
-    /// 2 + 1 + 1 + 2 + 1 + 32 + 1 + 1 + 1 = 42
-    pub const INIT_SPACE: usize = 2 + 1 + 1 + 2 + 1 + 32 + 1 + 1 + 1;
 }
 
-/// Player quest progress
-/// PDA: [b"quest_progress", player.key(), &quest_id.to_le_bytes()]
-#[account]
+#[account(
+    discriminator = [77, 66, 99, 169, 234, 177, 58, 162],
+    fixed_capacity,
+    set_inner
+)]
+#[seeds(b"quest_progress", player: Address, quest_id: u16)]
 pub struct QuestProgress {
-    /// Player wallet
-    pub player: Pubkey,
-    /// Quest ID reference
+    pub player: Address,
     pub quest_id: u16,
-    /// Current progress towards objective
     pub progress: u16,
-    /// Whether objective is completed
     pub completed: bool,
-    /// Whether reward has been claimed
     pub claimed: bool,
-    /// Last reset timestamp (for daily/weekly quests)
     pub last_reset: i64,
-    /// PDA bump
     pub bump: u8,
 }
 
 impl QuestProgress {
     pub const SEED_PREFIX: &'static [u8] = b"quest_progress";
-    /// 32 + 2 + 2 + 1 + 1 + 8 + 1 = 47
-    pub const INIT_SPACE: usize = 32 + 2 + 2 + 1 + 1 + 8 + 1;
 }

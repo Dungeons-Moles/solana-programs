@@ -4,7 +4,7 @@
 //! and `active_item_pool` in PlayerProfile.
 
 use crate::constants::{ITEM_BITMASK_SIZE, TOTAL_ITEMS};
-use anchor_lang::prelude::*;
+use quasar_lang::prelude::Address;
 
 /// Number of currently unlockable item indices.
 const UNLOCKABLE_ITEMS: u8 = 80;
@@ -133,7 +133,7 @@ pub fn is_subset(pool: [u8; ITEM_BITMASK_SIZE], unlocked: [u8; ITEM_BITMASK_SIZE
 /// `Some(index)` of a randomly selected locked item, or `None` if all items are unlocked
 pub fn select_random_locked_item(
     unlocked_items: [u8; ITEM_BITMASK_SIZE],
-    player: &Pubkey,
+    player: &Address,
     level: u8,
     randomness: &[u8; 32],
 ) -> Option<u8> {
@@ -170,6 +170,10 @@ pub fn select_random_locked_item(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_address(byte: u8) -> Address {
+        Address::new_from_array([byte; 32])
+    }
 
     #[test]
     fn test_is_bit_set_returns_correct_values() {
@@ -296,7 +300,7 @@ mod tests {
     #[test]
     fn test_select_random_locked_item_returns_locked_item() {
         let unlocked = STARTER_ITEMS_BITMASK; // 40 specific items set
-        let player = Pubkey::new_unique();
+        let player = test_address(1);
         let level = 5u8;
         let randomness = [42u8; 32];
 
@@ -326,7 +330,7 @@ mod tests {
             set_bit(&mut all_unlocked, i);
             i = i.saturating_add(1);
         }
-        let player = Pubkey::new_unique();
+        let player = test_address(2);
         let level = 5u8;
         let randomness = [0u8; 32];
 
@@ -337,7 +341,7 @@ mod tests {
     #[test]
     fn test_select_random_locked_item_is_deterministic() {
         let unlocked = STARTER_ITEMS_BITMASK;
-        let player = Pubkey::new_unique();
+        let player = test_address(3);
         let level = 5u8;
         let randomness = [99u8; 32];
 
@@ -350,7 +354,7 @@ mod tests {
     #[test]
     fn test_select_random_locked_item_varies_with_different_seeds() {
         let unlocked = STARTER_ITEMS_BITMASK;
-        let player = Pubkey::new_unique();
+        let player = test_address(4);
 
         // Different randomness should (usually) produce different results
         let rand1 = [1u8; 32];

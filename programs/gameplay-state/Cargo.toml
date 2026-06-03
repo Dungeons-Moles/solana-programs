@@ -33,5 +33,4 @@ map-generator = { path = "../map-generator", features = ["cpi"] }
 field-enemies = { path = "../../crates/field-enemies" }
 boss-system = { path = "../../crates/boss-system" }
 player-inventory = { path = "../player-inventory", features = ["cpi"] }
-player-profile = { path = "../player-profile", features = ["cpi"] }
 vrf-rng = { path = "../../crates/vrf-rng", features = ["anchor"] }

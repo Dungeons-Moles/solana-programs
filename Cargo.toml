@@ -11,7 +11,8 @@ members = [
     "crates/vrf-rng",
     "programs/poi-system",
     "programs/nft-marketplace",
-    "crates/er-compat"
+    "crates/er-compat",
+    "programs/quasar-vrf-probe"
 ]
 resolver = "2"
 

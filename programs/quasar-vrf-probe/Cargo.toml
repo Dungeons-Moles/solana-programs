@@ -1,0 +1,29 @@
+[package]
+name = "quasar-vrf-probe"
+version = "0.1.0"
+description = "Throwaway Quasar VRF probe for MagicBlock Pinocchio adapter validation"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "quasar_vrf_probe"
+
+[features]
+default = []
+alloc = []
+client = []
+cpi = ["no-entrypoint"]
+debug = []
+local-vrf-queue = []
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["quasar-lang/idl-build"]
+
+[dependencies]
+er-compat = { path = "../../crates/er-compat", default-features = false, features = ["quasar-vrf"] }
+pinocchio = { version = "0.10", default-features = false }
+quasar-lang = { git = "https://github.com/blueshift-gg/quasar" }
+solana-program-error = "3.0.0"
+zeropod = "0.3.3"
